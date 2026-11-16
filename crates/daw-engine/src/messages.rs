@@ -5,7 +5,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 
-use daw_dsp::Instrument;
+use daw_dsp::effects::Effect;
+use daw_dsp::{Instrument, InstrumentSettings};
 use daw_model::Ticks;
 
 use crate::program::Program;
@@ -18,6 +19,16 @@ pub(crate) enum Command {
     Instrument {
         slot: usize,
         instrument: Option<Box<dyn Instrument>>,
+    },
+    /// New settings for the instrument in a slot (it keeps playing).
+    InstrumentSettings {
+        slot: usize,
+        settings: Box<InstrumentSettings>,
+    },
+    /// Puts an effect into the effect table (or empties the entry).
+    Effect {
+        index: usize,
+        effect: Option<Box<Effect>>,
     },
     Play,
     Stop,
@@ -110,6 +121,16 @@ pub(crate) enum Garbage {
         reason = "held only so it is dropped on the interface thread"
     )]
     Instrument(Box<dyn Instrument>),
+    #[allow(
+        dead_code,
+        reason = "held only so it is dropped on the interface thread"
+    )]
+    Settings(Box<InstrumentSettings>),
+    #[allow(
+        dead_code,
+        reason = "held only so it is dropped on the interface thread"
+    )]
+    Effect(Box<Effect>),
 }
 
 /// Recording states, as stored in [`Shared::recording`].
@@ -130,6 +151,9 @@ pub(crate) struct Shared {
     pub peak: AtomicU32,
     /// The instrument slot that MIDI keyboards play ([`NO_TARGET`] for none).
     pub live_target: AtomicUsize,
+    /// Peak output level of each slot's track in the last block (after its
+    /// effects, volume and pan), as f32 bits.
+    pub meters: Box<[AtomicU32]>,
 }
 
 impl Shared {
@@ -142,6 +166,9 @@ impl Shared {
             load: AtomicU32::new(0),
             peak: AtomicU32::new(0),
             live_target: AtomicUsize::new(NO_TARGET),
+            meters: (0..crate::processor::MAX_SLOTS)
+                .map(|_| AtomicU32::new(0))
+                .collect(),
         })
     }
 

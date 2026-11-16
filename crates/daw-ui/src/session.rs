@@ -308,6 +308,8 @@ impl Session {
                 name: String::new(),
                 length: Ticks::WHOLE,
                 notes: Vec::new(),
+                track: None,
+                step: daw_model::default_step(),
             })
         })
     }
@@ -388,7 +390,11 @@ impl Session {
     }
 
     fn sync_engine(&mut self) {
-        self.engine.sync(self.doc.project(), self.doc.revision());
+        self.engine.sync(
+            self.doc.project(),
+            self.doc.revision(),
+            daw_engine::PlaybackScope::Song,
+        );
         self.engine.set_live_target(Some(self.track));
     }
 

@@ -10,11 +10,13 @@ mod program;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use daw_model::{Instrument as InstrumentSpec, Project, Ticks, TrackId};
+use daw_dsp::effects::Effect as EffectInstance;
+use daw_model::{EffectId, EffectKind, Instrument as InstrumentSpec, Project, Ticks, TrackId};
 
 pub use library::SoundLibrary;
 pub use messages::EngineEvent;
-pub use processor::{EngineProcessor, MAX_SLOTS};
+pub use processor::{EngineProcessor, MAX_EFFECTS, MAX_SLOTS};
+pub use program::PlaybackScope;
 
 use messages::{Command, LiveNote, NO_TARGET, Outgoing, RECORD_ACTIVE, RECORD_COUNT_IN, Shared};
 
@@ -104,7 +106,9 @@ pub struct Engine {
     library: SoundLibrary,
     /// Which track and instrument each slot holds.
     slots: Vec<Option<(TrackId, InstrumentSpec)>>,
-    compiled_revision: Option<u64>,
+    /// Which effect (and of which kind) each effect table entry holds.
+    effects: Vec<Option<(EffectId, EffectKind)>>,
+    compiled: Option<(u64, PlaybackScope)>,
     problems: Vec<String>,
     midi: Arc<MidiSender>,
 }
@@ -132,7 +136,8 @@ impl Engine {
             shared,
             library,
             slots: vec![None; MAX_SLOTS],
-            compiled_revision: None,
+            effects: vec![None; MAX_EFFECTS],
+            compiled: None,
             problems: Vec::new(),
             midi: Arc::new(MidiSender {
                 producer: Mutex::new(live_tx),
@@ -152,14 +157,20 @@ impl Engine {
         let _ = self.commands.push(command);
     }
 
+    /// The sounds the engine plays from (clone it to render offline).
+    pub fn library(&self) -> &SoundLibrary {
+        &self.library
+    }
+
     /// Brings the engine up to date with the project: builds instruments
-    /// for new tracks, drops those of deleted tracks, and installs a freshly
-    /// compiled program. Cheap when `revision` has not changed.
-    pub fn sync(&mut self, project: &Project, revision: u64) {
-        if self.compiled_revision == Some(revision) {
+    /// for new tracks, drops those of deleted tracks, creates and removes
+    /// effects, and installs a freshly compiled program for what `scope`
+    /// plays. Cheap when neither `revision` nor `scope` has changed.
+    pub fn sync(&mut self, project: &Project, revision: u64, scope: PlaybackScope) {
+        if self.compiled == Some((revision, scope)) {
             return;
         }
-        self.compiled_revision = Some(revision);
+        self.compiled = Some((revision, scope));
 
         // Free slots whose track is gone.
         for slot in 0..MAX_SLOTS {
@@ -187,6 +198,21 @@ impl Engine {
             if up_to_date {
                 continue;
             }
+            // Same sound source, other settings (a drum pad's tune, say):
+            // the playing instrument takes them without being rebuilt.
+            if let Some(slot) = current
+                && self.slots[slot]
+                    .as_ref()
+                    .is_some_and(|(_, spec)| spec.same_source(&track.instrument))
+                && let Some(settings) = library::instrument_settings(&track.instrument)
+            {
+                self.slots[slot] = Some((track.id, track.instrument.clone()));
+                self.send(Command::InstrumentSettings {
+                    slot,
+                    settings: Box::new(settings),
+                });
+                continue;
+            }
             let Some(slot) = current.or_else(|| self.slots.iter().position(Option::is_none)) else {
                 self.problems
                     .push(format!("too many tracks: at most {MAX_SLOTS} can play"));
@@ -205,18 +231,73 @@ impl Engine {
             });
         }
 
+        self.sync_effects(project);
+
+        let view = program::scoped(project, scope);
         let slots = &self.slots;
-        let program = program::compile(project, |id| {
-            slots
-                .iter()
-                .position(|s| s.as_ref().is_some_and(|(t, _)| *t == id))
-        });
+        let effects = &self.effects;
+        let program = program::compile(
+            &view,
+            |id| {
+                slots
+                    .iter()
+                    .position(|s| s.as_ref().is_some_and(|(t, _)| *t == id))
+            },
+            |id| {
+                effects
+                    .iter()
+                    .position(|e| e.as_ref().is_some_and(|(e, _)| *e == id))
+            },
+        );
         self.send(Command::Program(Box::new(program)));
+    }
+
+    /// Creates the effects new in the project and removes the ones gone
+    /// from it. (Their settings travel with the program.)
+    fn sync_effects(&mut self, project: &Project) {
+        let all: Vec<(EffectId, &EffectKind)> = project
+            .tracks
+            .iter()
+            .flat_map(|t| t.effects.iter())
+            .chain(project.master.effects.iter())
+            .map(|e| (e.id, &e.kind))
+            .collect();
+        for index in 0..MAX_EFFECTS {
+            let gone = self.effects[index].as_ref().is_some_and(|(id, kind)| {
+                !all.iter()
+                    .any(|(other, other_kind)| other == id && kind.same_kind(other_kind))
+            });
+            if gone {
+                self.effects[index] = None;
+                self.send(Command::Effect {
+                    index,
+                    effect: None,
+                });
+            }
+        }
+        let bpm = project.tempo.initial_bpm();
+        for (id, kind) in all {
+            if self.effects.iter().flatten().any(|(e, _)| *e == id) {
+                continue;
+            }
+            let Some(index) = self.effects.iter().position(Option::is_none) else {
+                self.problems
+                    .push(format!("too many effects: at most {MAX_EFFECTS} can run"));
+                break;
+            };
+            let params = program::effect_params(kind, bpm);
+            let instance = EffectInstance::new(&params, self.config.sample_rate);
+            self.effects[index] = Some((id, kind.clone()));
+            self.send(Command::Effect {
+                index,
+                effect: Some(Box::new(instance)),
+            });
+        }
     }
 
     /// Forces the next [`Engine::sync`] to rebuild, even at the same revision.
     pub fn invalidate(&mut self) {
-        self.compiled_revision = None;
+        self.compiled = None;
     }
 
     fn slot_of(&self, track: TrackId) -> Option<usize> {
@@ -346,6 +427,65 @@ impl Engine {
     pub fn peak(&self) -> f32 {
         Shared::load_f32(&self.shared.peak)
     }
+
+    /// The loudest sample of a track's output in the last block, after its
+    /// effects, volume and pan.
+    pub fn track_peak(&self, track: TrackId) -> f32 {
+        self.slot_of(track)
+            .map_or(0.0, |slot| Shared::load_f32(&self.shared.meters[slot]))
+    }
+}
+
+/// Renders a project offline, block by block, through exactly the same
+/// processing as live playback (for exporting).
+pub struct OfflineRender {
+    engine: Engine,
+    processor: EngineProcessor,
+    buffer: Vec<f32>,
+    frames: u64,
+}
+
+impl OfflineRender {
+    /// Prepares to play the whole song from the start.
+    pub fn new(project: &Project, library: SoundLibrary, config: EngineConfig) -> Self {
+        let (mut engine, processor) = Engine::new(config, library);
+        engine.set_metronome(false, false, 0.0);
+        engine.sync(project, 0, PlaybackScope::Song);
+        engine.play();
+        Self {
+            engine,
+            processor,
+            buffer: vec![0.0; config.max_block * 2],
+            frames: 0,
+        }
+    }
+
+    /// Problems met while preparing the instruments (a missing sound).
+    pub fn take_problems(&mut self) -> Vec<String> {
+        self.engine.take_problems()
+    }
+
+    /// Renders the next `left.len()` frames (both slices the same length).
+    pub fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
+        let block = self.buffer.len() / 2;
+        let mut done = 0;
+        while done < left.len() {
+            let n = block.min(left.len() - done);
+            self.processor.process(&mut self.buffer[..n * 2], 2);
+            for (i, frame) in self.buffer[..n * 2].as_chunks::<2>().0.iter().enumerate() {
+                left[done + i] = frame[0];
+                right[done + i] = frame[1];
+            }
+            done += n;
+            self.engine.poll();
+        }
+        self.frames += left.len() as u64;
+    }
+
+    /// Frames rendered so far.
+    pub fn frames(&self) -> u64 {
+        self.frames
+    }
 }
 
 /// Renders a project offline, through exactly the same processing as live
@@ -357,29 +497,22 @@ pub fn render_offline(
     config: EngineConfig,
     seconds: f64,
 ) -> (Vec<f32>, Vec<f32>) {
-    let (mut engine, mut processor) = Engine::new(config, library);
-    engine.sync(project, 0);
-    engine.play();
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         reason = "a positive duration"
     )]
     let frames = (seconds * f64::from(config.sample_rate)).ceil() as usize;
-    let block = 256.min(config.max_block);
-    let mut left = Vec::with_capacity(frames);
-    let mut right = Vec::with_capacity(frames);
-    let mut buffer = vec![0.0_f32; block * 2];
-    let mut done = 0;
-    while done < frames {
-        let n = block.min(frames - done);
-        processor.process(&mut buffer[..n * 2], 2);
-        for frame in buffer[..n * 2].as_chunks::<2>().0 {
-            left.push(frame[0]);
-            right.push(frame[1]);
-        }
-        done += n;
-        engine.poll();
-    }
+    let mut render = OfflineRender::new(
+        project,
+        library,
+        EngineConfig {
+            max_block: 256.min(config.max_block),
+            ..config
+        },
+    );
+    let mut left = vec![0.0; frames];
+    let mut right = vec![0.0; frames];
+    render.render(&mut left, &mut right);
     (left, right)
 }

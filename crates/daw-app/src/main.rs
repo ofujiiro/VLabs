@@ -27,6 +27,9 @@ static ALLOCATOR: daw_rt::RtCheckedAllocator = daw_rt::RtCheckedAllocator;
 /// The bundled piano (CC0, see THIRD_PARTY.md).
 static PIANO: &[u8] = include_bytes!("../../../assets/sounds/piano.sf2");
 
+/// The bundled acoustic drum kit (CC0, see THIRD_PARTY.md).
+static ACOUSTIC_KIT: &[u8] = include_bytes!("../../../assets/drums/acoustic.kit");
+
 /// The sample rate everything runs at.
 const SAMPLE_RATE: u32 = 48_000;
 
@@ -61,6 +64,7 @@ fn main() {
 
     let mut library = SoundLibrary::new();
     library.register_builtin(daw_model::BUILTIN_PIANO, PIANO);
+    library.register_kit(daw_model::ACOUSTIC_KIT, ACOUSTIC_KIT);
     let config = EngineConfig {
         sample_rate: SAMPLE_RATE,
         max_block: 1024,

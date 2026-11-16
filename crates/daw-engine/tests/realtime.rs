@@ -13,7 +13,7 @@
 )]
 
 use daw_dsp::sf2_writer::sine_test_font;
-use daw_engine::{Engine, EngineConfig, EngineEvent, RecordState, SoundLibrary};
+use daw_engine::{Engine, EngineConfig, EngineEvent, PlaybackScope, RecordState, SoundLibrary};
 use daw_model::{BUILTIN_PIANO, DEFAULT_VELOCITY, Document, Note, NoteId, Project, Region, Ticks};
 
 #[global_allocator]
@@ -82,7 +82,7 @@ fn processing_never_allocates() {
             )
         });
     }
-    engine.sync(document.project(), document.revision());
+    engine.sync(document.project(), document.revision(), PlaybackScope::Song);
     engine.set_metronome(true, true, 0.5);
     engine.play();
     let mut events = Vec::new();
@@ -101,7 +101,7 @@ fn processing_never_allocates() {
                 .collect();
             p.update_notes(pattern, &ids, |n| n.key = 60 + (round % 12) as u8);
         });
-        engine.sync(document.project(), document.revision());
+        engine.sync(document.project(), document.revision(), PlaybackScope::Song);
         // Live notes too.
         engine.note_on(track, 72, 0.9);
         run(&mut processor, &mut engine, 2, &mut events);
@@ -123,7 +123,7 @@ fn recording_with_a_count_in_places_notes_where_they_were_played() {
     let mut project = Project::starter("P", "T");
     project.loop_region = None;
     let (track, _) = project.first_pattern().unwrap();
-    engine.sync(&project, 1);
+    engine.sync(&project, 1, PlaybackScope::Song);
     let mut events = Vec::new();
     run(&mut processor, &mut engine, 2, &mut events);
 
@@ -188,7 +188,7 @@ fn a_note_held_across_the_loop_end_is_split() {
     let mut project = Project::starter("P", "T");
     project.loop_region = Region::new(Ticks::ZERO, Ticks::QUARTER * 2); // one second
     let (track, _) = project.first_pattern().unwrap();
-    engine.sync(&project, 1);
+    engine.sync(&project, 1, PlaybackScope::Song);
     let mut events = Vec::new();
     engine.record(track, 0);
     run(&mut processor, &mut engine, 2, &mut events);
@@ -226,7 +226,7 @@ fn the_metronome_clicks_on_every_beat() {
     let (mut engine, mut processor) = engine();
     let mut project = Project::starter("P", "T");
     project.loop_region = None;
-    engine.sync(&project, 1);
+    engine.sync(&project, 1, PlaybackScope::Song);
     engine.set_metronome(true, true, 0.5);
     engine.play();
     let mut events = Vec::new();
@@ -258,7 +258,7 @@ fn stop_returns_to_where_playback_started_then_to_the_start() {
     let (mut engine, mut processor) = engine();
     let mut project = Project::starter("P", "T");
     project.loop_region = None;
-    engine.sync(&project, 1);
+    engine.sync(&project, 1, PlaybackScope::Song);
     let mut events = Vec::new();
     engine.locate(Ticks::QUARTER * 4);
     engine.play();
@@ -278,7 +278,7 @@ fn midi_keyboard_notes_play_the_live_track_only_when_one_is_chosen() {
     let (mut engine, mut processor) = engine();
     let project = Project::starter("P", "T");
     let (track, _) = project.first_pattern().unwrap();
-    engine.sync(&project, 1);
+    engine.sync(&project, 1, PlaybackScope::Song);
     let midi = engine.midi_sender();
     let mut events = Vec::new();
     run(&mut processor, &mut engine, 2, &mut events);
@@ -307,7 +307,7 @@ fn the_sustain_pedal_holds_notes_and_lengthens_recorded_ones() {
     let mut project = Project::starter("P", "T");
     project.loop_region = None;
     let (track, _) = project.first_pattern().unwrap();
-    engine.sync(&project, 1);
+    engine.sync(&project, 1, PlaybackScope::Song);
     engine.set_live_target(Some(track));
     engine.set_metronome(false, false, 0.0); // Only the note is measured.
     let midi = engine.midi_sender();

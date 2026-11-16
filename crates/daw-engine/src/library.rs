@@ -5,13 +5,18 @@
 
 use std::collections::HashMap;
 
-use daw_dsp::{Instrument, SineSynth, SoundFontBank, SoundFontPlayer};
-use daw_model::{Instrument as InstrumentSpec, SoundSource};
+use daw_dsp::drums::{DrumKit, DrumSampler, PadParams, PadTable};
+use daw_dsp::{Instrument, InstrumentSettings, SineSynth, SoundFontBank, SoundFontPlayer};
+use daw_model::{ELECTRONIC_KIT, Instrument as InstrumentSpec, PadSetting, SoundSource};
 
-/// Loads and caches sounds, and builds ready-to-play instruments.
+/// Loads and caches sounds, and builds ready-to-play instruments. Cheap to
+/// clone (loaded sounds are shared), so offline rendering can have its own.
+#[derive(Clone)]
 pub struct SoundLibrary {
     builtin: HashMap<String, &'static [u8]>,
     loaded: HashMap<SoundSource, Result<SoundFontBank, String>>,
+    kits: HashMap<String, &'static [u8]>,
+    loaded_kits: HashMap<(String, u32), Result<DrumKit, String>>,
     soundfont_reverb: Option<f32>,
 }
 
@@ -27,8 +32,38 @@ impl SoundLibrary {
         Self {
             builtin: HashMap::new(),
             loaded: HashMap::new(),
+            kits: HashMap::new(),
+            loaded_kits: HashMap::new(),
             soundfont_reverb: None,
         }
+    }
+
+    /// Makes a bundled recorded drum kit available under `name`.
+    pub fn register_kit(&mut self, name: &str, bundle: &'static [u8]) {
+        self.kits.insert(name.to_owned(), bundle);
+        self.loaded_kits.retain(|(kit, _), _| kit != name);
+    }
+
+    /// A drum kit, loading it the first time. The electronic kit is
+    /// synthesised; recorded kits borrow the sounds they lack from it.
+    pub fn kit(&mut self, name: &str, sample_rate: u32) -> Result<DrumKit, String> {
+        let key = (name.to_owned(), sample_rate);
+        if let Some(result) = self.loaded_kits.get(&key) {
+            return result.clone();
+        }
+        let electronic = || DrumKit::electronic(sample_rate);
+        let result = if name == ELECTRONIC_KIT {
+            Ok(electronic())
+        } else {
+            match self.kits.get(name) {
+                Some(bundle) => {
+                    DrumKit::from_bundle(bundle).map(|kit| kit.completed_with(&electronic()))
+                }
+                None => Err(format!("the bundled drum kit \"{name}\" is missing")),
+            }
+        };
+        self.loaded_kits.insert(key, result.clone());
+        result
     }
 
     /// Overrides the reverb amount of every SoundFont instrument built from
@@ -89,6 +124,46 @@ impl SoundLibrary {
                     Err(problem) => (Box::new(SineSynth::new(sample_rate)), Some(problem)),
                 }
             }
+            InstrumentSpec::Drums { kit, pads } => match self.kit(kit, sample_rate) {
+                Ok(kit) => {
+                    let mut sampler = DrumSampler::new(kit, sample_rate);
+                    sampler.set_pads(&pad_table(pads));
+                    (Box::new(sampler), None)
+                }
+                Err(problem) => {
+                    // The electronic kit always exists: play that instead.
+                    let mut sampler =
+                        DrumSampler::new(DrumKit::electronic(sample_rate), sample_rate);
+                    sampler.set_pads(&pad_table(pads));
+                    (Box::new(sampler), Some(problem))
+                }
+            },
         }
     }
+}
+
+/// The settings a playing instrument takes from its project description,
+/// if it has any.
+pub(crate) fn instrument_settings(spec: &InstrumentSpec) -> Option<InstrumentSettings> {
+    match spec {
+        InstrumentSpec::Drums { pads, .. } => {
+            Some(InstrumentSettings::Drums(Box::new(pad_table(pads))))
+        }
+        InstrumentSpec::SoundFont { .. } => None,
+    }
+}
+
+/// Every pad's settings, indexed by the pad's key.
+fn pad_table(pads: &[PadSetting]) -> PadTable {
+    let mut table = [PadParams::default(); 128];
+    for pad in pads {
+        table[usize::from(pad.key & 0x7F)] = PadParams {
+            gain_db: pad.gain_db,
+            pan: pad.pan,
+            tune: pad.tune,
+            length: pad.length,
+            muted: pad.muted,
+        };
+    }
+    table
 }

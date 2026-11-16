@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
+use daw_dsp::effects::Effect;
 use daw_dsp::{Click, Instrument};
 use daw_model::{Region, Ticks};
 
@@ -23,6 +24,9 @@ use crate::program::Program;
 
 /// How many instrument slots (tracks) the engine can play.
 pub const MAX_SLOTS: usize = 256;
+
+/// How many effects the engine can run at once, over all chains.
+pub const MAX_EFFECTS: usize = 1024;
 
 /// Events handled per instrument per stretch of audio; more are applied at
 /// the end of the stretch (never reached in practice).
@@ -111,7 +115,14 @@ pub struct EngineProcessor {
     scratch_right: Vec<f32>,
     mix_left: Vec<f32>,
     mix_right: Vec<f32>,
+    /// The metronome, kept apart so the master effects never touch it.
+    click_left: Vec<f32>,
+    click_right: Vec<f32>,
     events: Vec<Scheduled>,
+    /// Every effect, by its table entry (chains refer to entries).
+    effects: Vec<Option<Box<Effect>>>,
+    /// The loudest output of each slot's track in this block.
+    meter_peaks: Vec<f32>,
     /// Garbage that could not be sent yet because the queue was full.
     pending: Option<Garbage>,
 }
@@ -149,7 +160,11 @@ impl EngineProcessor {
             scratch_right: vec![0.0; max_block],
             mix_left: vec![0.0; max_block],
             mix_right: vec![0.0; max_block],
+            click_left: vec![0.0; max_block],
+            click_right: vec![0.0; max_block],
             events: vec![NO_EVENT; MAX_EVENTS],
+            effects: (0..MAX_EFFECTS).map(|_| None).collect(),
+            meter_peaks: vec![0.0; MAX_SLOTS],
             pending: None,
         }
     }
@@ -170,7 +185,14 @@ impl EngineProcessor {
             let n = (frames - done).min(self.max_block);
             self.mix_left[..n].fill(0.0);
             self.mix_right[..n].fill(0.0);
+            self.click_left[..n].fill(0.0);
+            self.click_right[..n].fill(0.0);
             self.run(n);
+            self.master(n);
+            for i in 0..n {
+                self.mix_left[i] += self.click_left[i];
+                self.mix_right[i] += self.click_right[i];
+            }
             for i in 0..n {
                 let left = self.mix_left[i].clamp(-1.0, 1.0);
                 let right = self.mix_right[i].clamp(-1.0, 1.0);
@@ -196,6 +218,10 @@ impl EngineProcessor {
             .store(self.position.floor() as i64, Ordering::Relaxed);
         self.shared.playing.store(self.playing, Ordering::Relaxed);
         Shared::store_f32(&self.shared.peak, peak);
+        for (meter, peak) in self.shared.meters.iter().zip(self.meter_peaks.iter_mut()) {
+            Shared::store_f32(meter, *peak);
+            *peak = 0.0;
+        }
         #[allow(
             clippy::cast_precision_loss,
             clippy::cast_possible_truncation,
@@ -318,6 +344,20 @@ impl EngineProcessor {
                     let old = std::mem::replace(&mut self.instruments[slot], instrument);
                     if let Some(old) = old {
                         self.discard(Garbage::Instrument(old));
+                    }
+                }
+            }
+            Command::InstrumentSettings { slot, settings } => {
+                if let Some(Some(instrument)) = self.instruments.get_mut(slot) {
+                    instrument.apply_settings(&settings);
+                }
+                self.discard(Garbage::Settings(settings));
+            }
+            Command::Effect { index, effect } => {
+                if index < MAX_EFFECTS {
+                    let old = std::mem::replace(&mut self.effects[index], effect);
+                    if let Some(old) = old {
+                        self.discard(Garbage::Effect(old));
                     }
                 }
             }
@@ -520,6 +560,17 @@ impl EngineProcessor {
                 }
             }
         }
+        // New settings for every effect in the program's chains.
+        for effect in program
+            .tracks
+            .iter()
+            .flat_map(|t| t.effects.iter())
+            .chain(program.master_effects.iter())
+        {
+            if let Some(Some(instance)) = self.effects.get_mut(effect.index) {
+                instance.set_params(&effect.params);
+            }
+        }
         let tracks = program.tracks.len();
         if let Some(old) = self.program.replace(program) {
             self.discard(Garbage::Program(old));
@@ -582,16 +633,16 @@ impl EngineProcessor {
             let at = (((click_at - position) / ticks_per_frame).round() as usize)
                 .min(len.saturating_sub(1));
             self.click.add_to(
-                &mut self.mix_left[offset + cursor..offset + at],
-                &mut self.mix_right[offset + cursor..offset + at],
+                &mut self.click_left[offset + cursor..offset + at],
+                &mut self.click_right[offset + cursor..offset + at],
             );
             cursor = at;
             self.click.trigger((click_at / bar).fract() < 1e-9);
             click_at += beat;
         }
         self.click.add_to(
-            &mut self.mix_left[offset + cursor..offset + len],
-            &mut self.mix_right[offset + cursor..offset + len],
+            &mut self.click_left[offset + cursor..offset + len],
+            &mut self.click_right[offset + cursor..offset + len],
         );
         self.render(offset, len, None);
 
@@ -681,6 +732,27 @@ impl EngineProcessor {
         self.reset_cursors();
     }
 
+    /// The master bus over the mix: its gain, then its effect chain. The
+    /// gain comes first so a limiter at the end of the chain always has the
+    /// last word, however far the master volume is turned up.
+    fn master(&mut self, n: usize) {
+        let Some(program) = &self.program else {
+            return;
+        };
+        let (left, right) = (&mut self.mix_left[..n], &mut self.mix_right[..n]);
+        let gain = program.master_gain;
+        if (gain - 1.0).abs() > f32::EPSILON {
+            for sample in left.iter_mut().chain(right.iter_mut()) {
+                *sample *= gain;
+            }
+        }
+        for effect in program.master_effects.iter().filter(|e| e.enabled) {
+            if let Some(Some(instance)) = self.effects.get_mut(effect.index) {
+                instance.process(left, right);
+            }
+        }
+    }
+
     /// Renders every instrument for `len` frames at `offset` into the mix,
     /// playing the song between the two tick positions if given.
     fn render(&mut self, offset: usize, len: usize, song: Option<(f64, f64)>) {
@@ -699,17 +771,24 @@ impl EngineProcessor {
                 (Some((from, to)), Some(index)) => self.schedule(index, from, to, len),
                 _ => 0,
             };
-            let (gain_left, gain_right) = match (&self.program, track_index) {
-                (Some(program), Some(index)) => (
-                    program.tracks[index].gain_left,
-                    program.tracks[index].gain_right,
-                ),
-                _ => (1.0, 1.0),
+            let (gain_left, gain_right, has_effects) = match (&self.program, track_index) {
+                (Some(program), Some(index)) => {
+                    let track = &program.tracks[index];
+                    (
+                        track.gain_left,
+                        track.gain_right,
+                        track.effects.iter().any(|e| e.enabled),
+                    )
+                }
+                _ => (1.0, 1.0, false),
             };
             let Some(instrument) = self.instruments[slot].as_mut() else {
                 continue;
             };
-            if count == 0 && !instrument.is_sounding() {
+            let sounding = count > 0 || instrument.is_sounding();
+            // A track with effects keeps running them: their tails (reverb,
+            // echoes) go on after the instrument falls silent.
+            if !sounding && !has_effects {
                 continue;
             }
             let events = &mut self.events[..count];
@@ -730,12 +809,28 @@ impl EngineProcessor {
                 }
             }
             if cursor < len {
-                instrument.render(&mut left[cursor..], &mut right[cursor..]);
+                if sounding {
+                    instrument.render(&mut left[cursor..], &mut right[cursor..]);
+                } else {
+                    left[cursor..].fill(0.0);
+                    right[cursor..].fill(0.0);
+                }
             }
+            if has_effects && let (Some(program), Some(index)) = (&self.program, track_index) {
+                for effect in program.tracks[index].effects.iter().filter(|e| e.enabled) {
+                    if let Some(Some(instance)) = self.effects.get_mut(effect.index) {
+                        instance.process(left, right);
+                    }
+                }
+            }
+            let mut peak = self.meter_peaks[slot];
             for i in 0..len {
-                self.mix_left[offset + i] += left[i] * gain_left;
-                self.mix_right[offset + i] += right[i] * gain_right;
+                let (l, r) = (left[i] * gain_left, right[i] * gain_right);
+                peak = peak.max(l.abs()).max(r.abs());
+                self.mix_left[offset + i] += l;
+                self.mix_right[offset + i] += r;
             }
+            self.meter_peaks[slot] = peak;
         }
         if let Some((from, to)) = song {
             let metronome = match self.recording {
@@ -746,14 +841,14 @@ impl EngineProcessor {
                 self.metronome(offset, len, from, to);
             } else {
                 self.click.add_to(
-                    &mut self.mix_left[offset..offset + len],
-                    &mut self.mix_right[offset..offset + len],
+                    &mut self.click_left[offset..offset + len],
+                    &mut self.click_right[offset..offset + len],
                 );
             }
         } else {
             self.click.add_to(
-                &mut self.mix_left[offset..offset + len],
-                &mut self.mix_right[offset..offset + len],
+                &mut self.click_left[offset..offset + len],
+                &mut self.click_right[offset..offset + len],
             );
         }
     }
@@ -879,8 +974,8 @@ impl EngineProcessor {
                 .max(0.0) as usize)
                 .min(len.saturating_sub(1));
             self.click.add_to(
-                &mut self.mix_left[offset + cursor..offset + at],
-                &mut self.mix_right[offset + cursor..offset + at],
+                &mut self.click_left[offset + cursor..offset + at],
+                &mut self.click_right[offset + cursor..offset + at],
             );
             cursor = at;
             let accent = beat_index % i64::from(position.signature.numerator) == 0;
@@ -889,8 +984,8 @@ impl EngineProcessor {
             beat_at += beat_length;
         }
         self.click.add_to(
-            &mut self.mix_left[offset + cursor..offset + len],
-            &mut self.mix_right[offset + cursor..offset + len],
+            &mut self.click_left[offset + cursor..offset + len],
+            &mut self.click_right[offset + cursor..offset + len],
         );
     }
 }

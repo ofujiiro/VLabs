@@ -45,10 +45,13 @@ fn note(start: Ticks, length: Ticks, key: u8) -> Note {
     }
 }
 
-/// A project at 120 BPM (a quarter note is half a second), no loop.
+/// A project at 120 BPM (a quarter note is half a second), no loop, and no
+/// master limiter (its look-ahead would delay everything by 1.5 ms; it has
+/// tests of its own).
 fn project_with(notes: &[Note]) -> Project {
     let mut project = Project::starter("P", "T");
     project.loop_region = None;
+    project.master.effects.clear();
     let (_, pattern) = project.first_pattern().unwrap();
     project.add_notes(pattern, notes);
     project

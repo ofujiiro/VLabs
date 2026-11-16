@@ -3,17 +3,23 @@
 #![doc = include_str!("../README.md")]
 
 mod document;
+mod mixer;
 mod project;
 mod quantize;
 mod song;
 mod time;
 
 pub use document::{Document, HISTORY_LIMIT};
+pub use mixer::{
+    ChainPlace, CompressorSettings, DelaySettings, DelayTime, Effect, EffectKind, EqSettings,
+    LimiterSettings, MasterBus, ReverbSettings,
+};
 pub use project::Project;
 pub use quantize::quantize_starts;
 pub use song::{
-    BUILTIN_PIANO, ChannelStrip, Clip, ClipContent, ClipId, DEFAULT_VELOCITY, Instrument, MAX_KEY,
-    Note, NoteId, Pattern, PatternId, SoundSource, Track, TrackId,
+    ACOUSTIC_KIT, BUILTIN_PIANO, ChannelStrip, Clip, ClipContent, ClipId, DEFAULT_VELOCITY,
+    ELECTRONIC_KIT, EffectId, Instrument, MAX_KEY, Note, NoteId, PadSetting, Pattern, PatternId,
+    SoundSource, Track, TrackId, default_step,
 };
 pub use time::{
     BarPosition, MeterChange, MeterMap, Region, TEMPO_RANGE, TICKS_PER_QUARTER, TICKS_PER_WHOLE,

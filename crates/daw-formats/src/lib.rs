@@ -4,6 +4,7 @@
 
 mod atomic;
 mod native;
+pub mod wav;
 
 pub use atomic::write_atomically;
 pub use native::{

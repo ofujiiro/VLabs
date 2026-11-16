@@ -18,7 +18,7 @@ use crate::atomic::write_atomically;
 /// The version of the file format this program writes. Every version ever
 /// released keeps sample files in `tests/data`, and a test proves they still
 /// open.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// The name of the song description inside the container.
 const PROJECT_ENTRY: &str = "project.json";
@@ -160,8 +160,12 @@ fn migrate(value: Value, from: u32) -> Result<Value, FileError> {
             "format version 0 does not exist".to_owned(),
         ));
     }
-    // Each future format change adds a step here: `2 => migrate_1_to_2(value)`.
-    // Version 1 is the first, so there is nothing to do yet.
+    // Version 2 added drum kits, effect chains, the master bus and the
+    // owner track of each pattern. Every new field has a default, and
+    // owners are filled in by `repair`, so version 1 needs no rewriting;
+    // the version number changed so that older copies of the program
+    // refuse files whose new parts they would silently drop.
+    // Each future format change adds a step here: `3 => migrate_2_to_3(value)`.
     Ok(value)
 }
 
@@ -170,6 +174,23 @@ fn migrate(value: Value, from: u32) -> Result<Value, FileError> {
 fn repair(project: &mut Project) {
     for pattern in &mut project.patterns {
         std::sync::Arc::make_mut(pattern).sort_notes();
+    }
+    // A pattern without an owner belongs to the track that plays it.
+    let owners: Vec<(daw_model::PatternId, daw_model::TrackId)> = project
+        .tracks
+        .iter()
+        .flat_map(|t| {
+            t.clips
+                .iter()
+                .filter_map(move |c| c.pattern().map(|p| (p, t.id)))
+        })
+        .collect();
+    for pattern in &mut project.patterns {
+        if pattern.track.is_none()
+            && let Some((_, track)) = owners.iter().find(|(p, _)| *p == pattern.id)
+        {
+            std::sync::Arc::make_mut(pattern).track = Some(*track);
+        }
     }
     project.repair_id_counter();
 }
@@ -243,7 +264,7 @@ mod tests {
             .unwrap()
             .read_to_string(&mut text)
             .unwrap();
-        assert!(text.contains("\"format_version\": 1"));
+        assert!(text.contains(&format!("\"format_version\": {FORMAT_VERSION}")));
         assert!(text.contains("\"title\": \"Test song\""));
         assert!(text.contains('\n'), "pretty-printed");
         assert!(!text.contains("pitch_offset"), "zero offsets are left out");

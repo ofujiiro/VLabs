@@ -39,6 +39,10 @@ id_type!(
     /// Identifies a clip on a track.
     ClipId
 );
+id_type!(
+    /// Identifies an effect in a chain.
+    EffectId
+);
 
 /// The highest MIDI key.
 pub const MAX_KEY: u8 = 127;
@@ -93,6 +97,18 @@ pub struct Pattern {
     pub length: Ticks,
     /// The notes, sorted by start, then key.
     pub notes: Vec<Note>,
+    /// The track whose instrument plays it (patterns are placed on their
+    /// own track's timeline).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track: Option<TrackId>,
+    /// The step sequencer's step length for this pattern.
+    #[serde(default = "default_step")]
+    pub step: Ticks,
+}
+
+/// The step length of a new pattern: a sixteenth note.
+pub fn default_step() -> Ticks {
+    Ticks::note_value(1, 16)
 }
 
 impl Pattern {
@@ -125,7 +141,7 @@ pub enum SoundSource {
 }
 
 /// What makes the sound of an instrument track.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum Instrument {
     /// A SoundFont (.sf2) player.
@@ -137,6 +153,14 @@ pub enum Instrument {
         /// The preset's program number.
         program: u8,
     },
+    /// The drum sampler with a bundled kit.
+    Drums {
+        /// Which kit, by name ([`ACOUSTIC_KIT`] or [`ELECTRONIC_KIT`]).
+        kit: String,
+        /// Pads whose settings differ from the defaults.
+        #[serde(default)]
+        pads: Vec<PadSetting>,
+    },
 }
 
 impl Instrument {
@@ -146,6 +170,96 @@ impl Instrument {
             source: SoundSource::Builtin(BUILTIN_PIANO.to_owned()),
             bank: 0,
             program: 0,
+        }
+    }
+
+    /// A drum sampler with a bundled kit.
+    pub fn drums(kit: &str) -> Self {
+        Self::Drums {
+            kit: kit.to_owned(),
+            pads: Vec::new(),
+        }
+    }
+
+    /// Whether this is a drum kit.
+    pub fn is_drums(&self) -> bool {
+        matches!(self, Self::Drums { .. })
+    }
+
+    /// Whether two instruments make their sound from the same source, so
+    /// only settings differ (they can change while sound plays).
+    pub fn same_source(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Drums { kit: a, .. }, Self::Drums { kit: b, .. }) => a == b,
+            _ => self == other,
+        }
+    }
+
+    /// The settings of the pad on `key` (the defaults if never changed).
+    pub fn pad(&self, key: u8) -> PadSetting {
+        match self {
+            Self::Drums { pads, .. } => pads
+                .iter()
+                .find(|p| p.key == key)
+                .copied()
+                .unwrap_or_else(|| PadSetting::new(key)),
+            Self::SoundFont { .. } => PadSetting::new(key),
+        }
+    }
+
+    /// Changes a pad's settings (drum kits only).
+    pub fn set_pad(&mut self, setting: PadSetting) {
+        if let Self::Drums { pads, .. } = self {
+            pads.retain(|p| p.key != setting.key);
+            if setting != PadSetting::new(setting.key) {
+                pads.push(setting);
+                pads.sort_by_key(|p| p.key);
+            }
+        }
+    }
+}
+
+/// The name of the bundled acoustic drum kit.
+pub const ACOUSTIC_KIT: &str = "acoustic";
+/// The name of the bundled electronic drum kit.
+pub const ELECTRONIC_KIT: &str = "electronic";
+
+/// The settings of one drum pad.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PadSetting {
+    /// The pad's key.
+    pub key: u8,
+    /// Volume change, in dB.
+    #[serde(default)]
+    pub gain_db: f32,
+    /// Position, from -1 (left) to 1 (right).
+    #[serde(default)]
+    pub pan: f32,
+    /// Pitch change, in semitones.
+    #[serde(default)]
+    pub tune: f32,
+    /// How much of the sound plays, from 0.05 to 1.
+    #[serde(default = "full_length")]
+    pub length: f32,
+    /// Silenced.
+    #[serde(default)]
+    pub muted: bool,
+}
+
+fn full_length() -> f32 {
+    1.0
+}
+
+impl PadSetting {
+    /// The default settings of a pad.
+    pub fn new(key: u8) -> Self {
+        Self {
+            key,
+            gain_db: 0.0,
+            pan: 0.0,
+            tune: 0.0,
+            length: 1.0,
+            muted: false,
         }
     }
 }
@@ -208,6 +322,13 @@ impl Clip {
     pub fn end(&self) -> Ticks {
         self.start + self.length
     }
+
+    /// The pattern the clip plays.
+    pub fn pattern(&self) -> Option<PatternId> {
+        match self.content {
+            ClipContent::Pattern { pattern, .. } => Some(pattern),
+        }
+    }
 }
 
 /// A track: an instrument with its clips and its channel strip.
@@ -223,4 +344,7 @@ pub struct Track {
     pub clips: Vec<Clip>,
     /// Volume, pan, mute, solo.
     pub strip: ChannelStrip,
+    /// The effect chain, in order.
+    #[serde(default)]
+    pub effects: Vec<crate::mixer::Effect>,
 }
