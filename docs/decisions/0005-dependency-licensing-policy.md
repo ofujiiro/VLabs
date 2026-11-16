@@ -23,17 +23,34 @@ requires CC0 for bundled sounds, and asks for `cargo-deny` to enforce it.
   `epaint_default_fonts` (egui's bundled fonts, under the OFL and Ubuntu font
   licences).
 
-### The one exception
+### The one exception: Unicode data tables
 
-**`unicode-ident` may carry the Unicode-3.0 licence.** This crate holds the
-Unicode tables that Rust's macro tooling (`proc-macro2`, used by `serde`,
-`thiserror` and most of the ecosystem) needs to recognise identifiers. Its
-code is MIT or Apache-2.0; only the data tables are under the Unicode licence,
-a short permissive licence (OSI-approved) whose only condition is keeping the
-copyright notice. It places no restriction on relicensing or on commercial
-use. Avoiding it would mean avoiding most of the Rust ecosystem. The owner
-should confirm they are comfortable with this exception; nothing else needs
-it.
+**Crates that embed the Unicode Character Database may carry the
+Unicode-3.0 licence.** Two do:
+
+- `unicode-ident`, which Rust's macro tooling (`proc-macro2`, used by
+  `serde`, `thiserror` and most of the ecosystem) needs to recognise
+  identifiers;
+- `unicode-properties`, which egui's text layout needs.
+
+Their code is MIT or Apache-2.0; only the data tables are under the Unicode
+licence, a short permissive licence (OSI-approved) whose only condition is
+keeping the copyright notice. It places no restriction on relicensing or on
+commercial use. Avoiding it would mean avoiding most of the Rust ecosystem.
+Each crate is listed by name in `deny.toml`; no other licence is excepted.
+The owner should confirm they are comfortable with this exception.
+
+### Checked per system
+
+`cargo xtask deny` checks the Linux and the Windows dependency graphs
+separately. A single combined run merges the features chosen for each system
+and reports crates that are never built for that system.
+
+This matters for egui's **system clipboard**: on Windows it uses
+`clipboard-win`, licensed under the Boost Software License (BSL-1.0), which
+is permissive but not on the list. The clipboard feature is therefore
+switched on for Linux only, and VLabs will implement the small Windows
+clipboard itself (phase 1).
 
 ### Crates considered and rejected for their licence
 
@@ -46,6 +63,7 @@ it.
 | `triple_buffer` | MPL-2.0 | `rtrb` and our own lock-free code |
 | `audio_thread_priority` (cpal's `realtime` feature) | MPL-2.0 | Feature left off; we raise the audio thread's priority ourselves |
 | egui's default fonts | OFL-1.1, Ubuntu Font Licence | The Go fonts (BSD-3-Clause), see decision 0008 |
+| `clipboard-win` (egui's clipboard on Windows) | BSL-1.0 | Clipboard feature on Linux only; our own Windows clipboard |
 
 ## How to add a dependency
 

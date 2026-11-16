@@ -19,7 +19,7 @@ memory. "Planned" means checked and chosen, but not yet in `Cargo.toml`.
 | `x11rb` | 0.14.0 | MIT OR Apache-2.0 | 2026-11-16 | Creating the X11 windows that hold plugin editors on Linux, including under XWayland. |
 | `windows-sys` | 0.61.2 | MIT OR Apache-2.0 | 2026-11-16 | Win32 windows for plugin editors on Windows. |
 | `libloading` | 0.9.1 | ISC | 2026-11-16 | Loading VST3 plugin libraries. |
-| `egui`, `eframe` | 0.37.0 | MIT OR Apache-2.0 | 2026-11-16 | The interface, as decided in the brief. Used with the wgpu renderer and without the default fonts. |
+| `egui`, `eframe` | 0.37.0 | MIT OR Apache-2.0 | 2026-11-16 | The interface, as decided in the brief (released October 2026). Used with the wgpu renderer (wgpu 30), AccessKit for accessibility, X11 and Wayland; without the default fonts, the system fonts, or (on Windows) the clipboard feature. |
 
 ## Planned (checked, adopted when the phase needs them)
 
