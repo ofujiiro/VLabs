@@ -3,6 +3,7 @@
 #![doc = include_str!("../README.md")]
 
 mod click;
+pub mod effects;
 mod instrument;
 pub mod sf2_writer;
 mod sine;

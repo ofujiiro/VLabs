@@ -12,3 +12,6 @@ workspace = true
 
 [dependencies]
 rustysynth.workspace = true
+
+[dev-dependencies]
+daw-rt.workspace = true

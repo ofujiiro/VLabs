@@ -3,9 +3,10 @@
 The phases come from the project brief. Each ends with a build the owner can
 run and a checklist of things to try. Status is updated at every milestone.
 
-**Now:** phase 1 (first sound) is built and waiting for the owner's
-hands-on check (checklist below). Phase 0 is complete: all three risk spikes
-passed on Windows and Linux (decision 0009).
+**Now:** phase 2 (making a beat). Phase 1 is complete and the owner
+confirmed the milestone build works on Linux (the Windows build is still to
+be tried by hand). Phase 0 is complete: all three risk spikes passed on
+Windows and Linux (decision 0009).
 
 ## Phase 0 — Foundations and risk spikes
 
@@ -41,7 +42,8 @@ passed on Windows and Linux (decision 0009).
 - [x] Our own shortcut scheme, rebindable, shown in tooltips and menus, never
       clashing with note keys
 - [x] Autosave and crash recovery, settings remembered (decision 0013)
-- [ ] The owner's hands-on check of the milestone build
+- [x] The owner's hands-on check of the milestone build on Linux (Windows
+      still to be tried)
 
 ### Phase 1 milestone: things to try
 
