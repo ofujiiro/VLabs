@@ -20,18 +20,47 @@ e687b22d748d54f9fa10dbae599d08ae31f0b305f8bea52fb2d3639c1565ae78  Go-Medium.ttf
 8bc66a0154bbf69cd24e5bde41a12ec9495c8a242c5def2255e4a164900f1ed7  Go-Mono.ttf
 ```
 
-### Sounds
+### Sounds — `assets/sounds/`
 
-None yet. Planned (decision 0008):
+#### `piano.sf2` — the bundled piano
 
-- **Piano:** a compact SoundFont built from the **Osiris Piano** by Versilian
-  Studios and Karoryfer Samples, CC0 1.0 (`github.com/sfzinstruments/Osiris_Piano`).
-- **Drum kit:** from **Virtuosity Drums** (Versilian Studios and Karoryfer
-  Samples) or **Big Rusty Drums** (Karoryfer Samples), both CC0 1.0
+| | |
+| --- | --- |
+| Source | **Osiris Piano** by Versilian Studios and Karoryfer Samples, `github.com/sfzinstruments/Osiris_Piano`, tag v0.925 (commit `18c6afccb60cff458edbf7c394571783e074e1e9`) |
+| Licence | **CC0 1.0** (public domain dedication); the processed SoundFont is also CC0. See `assets/sounds/LICENSE-piano.txt`. |
+| Built by | `tools/make-piano` (`cargo run --release -p make-piano -- build <Osiris_Piano folder> assets/sounds/piano.sf2`) |
+| SHA-256 | `19610bf65cb2d57838431fcc65d1ff46e2a7f23f6e0ebd6c57592fc56033b7d4` |
+
+Processing, in order:
+
+1. Samples from the "UC" set (dampers working, low-noise versions), microphone
+   position B, both velocity layers (soft 1–63, loud 64–127), every sampled key
+   with the library's own key ranges and release times.
+2. Each microphone pair is spaced, so summing its two channels cancels part of
+   the sound on many notes (measured by `make-piano analyze`); each note uses
+   its louder channel, giving a mono sample.
+3. The 10 to 30 ms of key and hammer mechanism noise before each strike is
+   trimmed (the original instrument offers a control for this), so notes speak
+   at once.
+4. Levels are evened out across the keyboard within each velocity layer (each
+   note pulled towards the median of its neighbours, at most 6 dB), then all
+   samples share one normalisation (the loudest note peaks at -1 dBFS).
+5. Notes up to E6 keep 1.0 to 2.2 s of their recording, then a loop of about
+   a quarter second, chosen where the waveform lines up best, levelled and
+   crossfaded. The SoundFont's envelope continues each note's own measured
+   decay rate from there. The undamped top notes (F6 up) keep 2 s of natural
+   recording with a short fade, unlooped.
+6. 48 kHz, 16-bit, one preset ("Piano", bank 0, program 0).
+
+`make-piano verify` checks every key of the result: immediate onset, no level
+jump above 6 dB between neighbouring keys, no click, and loops that do not
+pulse by more than 3 dB while clearly audible. All 88 keys pass.
+
+#### Planned
+
+- **Drum kit** (phase 2): from **Virtuosity Drums** (Versilian Studios and
+  Karoryfer Samples) or **Big Rusty Drums** (Karoryfer Samples), both CC0 1.0
   (`github.com/sfzinstruments`).
-
-Each will be listed here with the exact source revision and the processing
-applied.
 
 ## Outside code (Rust crates)
 

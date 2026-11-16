@@ -71,7 +71,7 @@ fn crates_depend_only_on_lower_layers() {
 #[test]
 fn every_source_file_starts_with_the_licence_identifier() {
     let mut files = Vec::new();
-    for folder in ["crates", "spikes", "xtask"] {
+    for folder in ["crates", "spikes", "tools", "xtask"] {
         rust_files(&workspace_root().join(folder), &mut files);
     }
     assert!(!files.is_empty(), "found no Rust source files to check");
@@ -96,7 +96,7 @@ fn product_identity_is_written_only_in_daw_ident() {
         daw_ident::APPLICATION_ID,
     ];
     let mut files = Vec::new();
-    for folder in ["crates", "spikes", "xtask"] {
+    for folder in ["crates", "spikes", "tools", "xtask"] {
         rust_files(&workspace_root().join(folder), &mut files);
     }
     let home = workspace_root().join("crates").join("daw-ident");

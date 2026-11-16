@@ -4,9 +4,9 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/*", "spikes/*", "xtask"]
+members = ["crates/*", "spikes/*", "tools/*", "xtask"]
 # Plain `cargo build`, `cargo test` and `cargo run` act on the product crates.
-# Spikes and the developer tool (xtask) are built only when asked for by name;
+# Spikes, tools and the developer tool (xtask) are built only when asked for by name;
 # `cargo xtask ci` covers everything.
 default-members = ["crates/*"]
 
@@ -33,6 +33,7 @@ daw-rt = { path = "crates/daw-rt" }
 # adopted; see docs/decisions/0006-adopted-crates.md.
 clack-extensions = "0.2.0"
 clack-host = "0.2.0"
+claxon = "0.4.3"
 cpal = "0.18.2"
 # The interface. Default features are off: no OFL-licensed default fonts, no
 # system fonts; VLabs ships its own (decision 0008). The system clipboard

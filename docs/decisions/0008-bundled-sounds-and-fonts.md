@@ -15,13 +15,25 @@ Ubuntu font licences, which are outside the permissive list (decision 0005).
 ### Piano
 
 The **Osiris Piano** by Versilian Studios and Karoryfer Samples, a sampled
-grand piano released under **CC0 1.0** (the licence file is in its
-repository, `github.com/sfzinstruments/Osiris_Piano`, tag v0.925). The
-original is 900 MB of multi-microphone samples, far too large to bundle. A
-small tool in this repository (phase 1) builds a compact SoundFont from it:
-one microphone position, two velocity layers, samples trimmed with a natural
-fade, stored at 16-bit. The target is under 20 MB. The source and every
-processing step are recorded in `THIRD_PARTY.md`.
+piano released under **CC0 1.0** (the licence file is in its repository,
+`github.com/sfzinstruments/Osiris_Piano`, tag v0.925). The original is 900 MB
+of multi-microphone samples, far too large to bundle. `tools/make-piano`
+builds a 19 MB SoundFont from it; the steps and the automated checks are in
+`THIRD_PARTY.md`. Notable choices, made by measurement since nobody on the
+development side can listen:
+
+- **Mono, one microphone, the louder channel per note.** All three
+  microphone positions are spaced pairs: summing a pair's channels cancelled
+  up to 86% of the energy on some notes, and mixing microphones cancelled
+  further. A single channel cannot cancel anything. Stereo would double the
+  size; a gentle pan from bass to treble gives some width back.
+- **The pre-strike mechanism noise is trimmed**, otherwise every note
+  started 20 to 30 ms late.
+- **Looped tails continue each note's own decay rate**, measured from the
+  recording, so held notes fade like the real instrument rather than at one
+  fixed speed.
+- The undamped top notes are not looped: they fade naturally within two
+  seconds, and their beating strings did not loop cleanly.
 
 The FreePats CC0 pianos were also suitable, but their website is not
 reachable from the development environment; Osiris is also the better

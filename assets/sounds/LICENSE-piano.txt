@@ -1,0 +1,13 @@
+piano.sf2 — the bundled piano
+
+Built from the Osiris Piano by Versilian Studios and Karoryfer Samples,
+https://github.com/sfzinstruments/Osiris_Piano (tag v0.925, commit
+18c6afccb60cff458edbf7c394571783e074e1e9).
+
+The Osiris Piano is dedicated to the public domain under the Creative
+Commons CC0 1.0 Universal public domain dedication:
+https://creativecommons.org/publicdomain/zero/1.0/
+
+The processed SoundFont (piano.sf2) is likewise dedicated to the public
+domain under CC0 1.0. How it was made is described in THIRD_PARTY.md and in
+tools/make-piano.
