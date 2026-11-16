@@ -63,6 +63,37 @@ pub const KEY_LABELS: &str = "Keyboard labels";
 pub const KEY_LABELS_HINT: &str =
     "Which letters the on-screen keyboard shows. Playing works the same on every keyboard.";
 pub const KEY_LABELS_AUTOMATIC: &str = "Automatic";
+pub const CTRL: &str = "Ctrl";
+pub const ALT: &str = "Alt";
+pub const SHIFT: &str = "Shift";
+
+/// A friendlier name than egui's for some keys, in shortcuts.
+pub fn key_name(key: egui::Key) -> Option<&'static str> {
+    use egui::Key;
+    Some(match key {
+        Key::ArrowLeft => "Left arrow",
+        Key::ArrowRight => "Right arrow",
+        Key::ArrowUp => "Up arrow",
+        Key::ArrowDown => "Down arrow",
+        Key::PageUp => "Page Up",
+        Key::PageDown => "Page Down",
+        Key::Escape => "Esc",
+        Key::Backspace => "Backspace",
+        Key::Delete => "Delete",
+        Key::Minus => "-",
+        _ => return None,
+    })
+}
+
+/// The name of a keyboard layout family.
+pub fn layout_name(family: crate::keys::LayoutFamily) -> &'static str {
+    use crate::keys::LayoutFamily;
+    match family {
+        LayoutFamily::Qwerty => "QWERTY",
+        LayoutFamily::Azerty => "AZERTY",
+        LayoutFamily::Qwertz => "QWERTZ",
+    }
+}
 
 pub fn shortcut_plays_notes(shortcut: &str) -> String {
     format!("{shortcut} plays a note. Add Ctrl or Alt, or choose a key that does not play notes.")

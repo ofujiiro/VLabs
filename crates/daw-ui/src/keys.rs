@@ -15,6 +15,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use egui::{Key, Modifiers};
 
+use crate::text;
+
 // ----- Playing notes
 
 /// The semitone a physical key plays, counted from the keyboard's lowest C.
@@ -437,18 +439,21 @@ impl Shortcut {
 
     /// As people read it: "Ctrl+Shift+Z", "Space", "Page Up".
     pub fn display(self) -> String {
-        let mut text = String::new();
+        let mut shown = String::new();
         if self.ctrl {
-            text.push_str("Ctrl+");
+            shown.push_str(text::CTRL);
+            shown.push('+');
         }
         if self.alt {
-            text.push_str("Alt+");
+            shown.push_str(text::ALT);
+            shown.push('+');
         }
         if self.shift {
-            text.push_str("Shift+");
+            shown.push_str(text::SHIFT);
+            shown.push('+');
         }
-        text.push_str(key_display_name(self.key));
-        text
+        shown.push_str(text::key_name(self.key).unwrap_or_else(|| self.key.symbol_or_name()));
+        shown
     }
 
     /// As stored in the settings file: "ctrl+shift+Z".
@@ -487,23 +492,6 @@ impl Shortcut {
         }
         shortcut.key = Key::from_name(rest)?;
         Some(shortcut)
-    }
-}
-
-/// A friendly name for a key.
-fn key_display_name(key: Key) -> &'static str {
-    match key {
-        Key::ArrowLeft => "Left arrow",
-        Key::ArrowRight => "Right arrow",
-        Key::ArrowUp => "Up arrow",
-        Key::ArrowDown => "Down arrow",
-        Key::PageUp => "Page Up",
-        Key::PageDown => "Page Down",
-        Key::Escape => "Esc",
-        Key::Backspace => "Backspace",
-        Key::Delete => "Delete",
-        Key::Minus => "-",
-        _ => key.symbol_or_name(),
     }
 }
 

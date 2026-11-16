@@ -545,42 +545,8 @@ impl Workspace {
                 });
             }
             ui.separator();
-            ui.menu_button(text::THEME, |ui| {
-                for (choice, label) in [
-                    (ThemeChoice::System, text::THEME_SYSTEM),
-                    (ThemeChoice::Light, text::THEME_LIGHT),
-                    (ThemeChoice::Dark, text::THEME_DARK),
-                ] {
-                    if ui
-                        .selectable_label(self.settings.theme == choice, label)
-                        .clicked()
-                    {
-                        self.settings.theme = choice;
-                        ui.close();
-                    }
-                }
-            });
-            ui.menu_button(text::KEY_LABELS, |ui| {
-                ui.label(RichText::new(text::KEY_LABELS_HINT).small().weak());
-                let choices = [
-                    (LabelChoice::Automatic, text::KEY_LABELS_AUTOMATIC),
-                    (LabelChoice::Fixed(LayoutFamily::Qwerty), "QWERTY"),
-                    (LabelChoice::Fixed(LayoutFamily::Azerty), "AZERTY"),
-                    (LabelChoice::Fixed(LayoutFamily::Qwertz), "QWERTZ"),
-                ];
-                for (choice, label) in choices {
-                    if ui
-                        .selectable_label(self.settings.key_labels == choice, label)
-                        .clicked()
-                    {
-                        self.settings.key_labels = choice;
-                        if let LabelChoice::Fixed(family) = choice {
-                            self.labels.set_family(family);
-                        }
-                        ui.close();
-                    }
-                }
-            });
+            ui.menu_button(text::THEME, |ui| self.theme_menu(ui));
+            ui.menu_button(text::KEY_LABELS, |ui| self.labels_menu(ui));
             if ui.button(text::SHORTCUTS).clicked() {
                 self.dialog = Some(Dialog::Shortcuts {
                     capturing: None,
@@ -593,6 +559,48 @@ impl Workspace {
                 ui.close();
             }
         });
+    }
+
+    fn theme_menu(&mut self, ui: &mut Ui) {
+        for (choice, label) in [
+            (ThemeChoice::System, text::THEME_SYSTEM),
+            (ThemeChoice::Light, text::THEME_LIGHT),
+            (ThemeChoice::Dark, text::THEME_DARK),
+        ] {
+            if ui
+                .selectable_label(self.settings.theme == choice, label)
+                .clicked()
+            {
+                self.settings.theme = choice;
+                ui.close();
+            }
+        }
+    }
+
+    fn labels_menu(&mut self, ui: &mut Ui) {
+        ui.label(RichText::new(text::KEY_LABELS_HINT).small().weak());
+        let families = [
+            LayoutFamily::Qwerty,
+            LayoutFamily::Azerty,
+            LayoutFamily::Qwertz,
+        ];
+        let choices = std::iter::once((LabelChoice::Automatic, text::KEY_LABELS_AUTOMATIC)).chain(
+            families
+                .into_iter()
+                .map(|family| (LabelChoice::Fixed(family), text::layout_name(family))),
+        );
+        for (choice, label) in choices {
+            if ui
+                .selectable_label(self.settings.key_labels == choice, label)
+                .clicked()
+            {
+                self.settings.key_labels = choice;
+                if let LabelChoice::Fixed(family) = choice {
+                    self.labels.set_family(family);
+                }
+                ui.close();
+            }
+        }
     }
 
     fn show_dialog(&mut self, ctx: &egui::Context) {
