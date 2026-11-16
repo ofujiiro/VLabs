@@ -1,0 +1,76 @@
+# Phase 0 risk spikes and, later, integration tests that need things the
+# main CI job does not have: a virtual sound card, a virtual screen, and
+# downloaded reference plugins. Results are printed in the log and uploaded
+# as artifacts.
+
+name: Spikes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "spikes/**"
+      - "crates/daw-rt/**"
+      - ".github/workflows/spikes.yml"
+      - ".github/scripts/**"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+concurrency:
+  group: spikes-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  audio-latency:
+    name: Audio output (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-26.04
+          - name: Windows
+            os: windows-2025
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux libraries and a virtual sound card (PipeWire)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libjack-jackd2-dev \
+            pipewire pipewire-alsa pipewire-jack wireplumber dbus
+          .github/scripts/start-virtual-audio.sh
+
+      # Windows runners have no sound device; this installs a virtual one.
+      - name: Install a virtual sound card (Windows)
+        if: runner.os == 'Windows'
+        uses: LABSN/sound-ci-helpers@e9d6ba52163a3283714a68412036ddf33f78d49c # main, 2024
+
+      - name: Install Rust
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: spikes
+
+      # A debug build, so the audio-thread allocation check is active.
+      - name: Build
+        run: cargo build -p spike-audio-latency --locked
+
+      - name: Measure (smallest buffer the system accepts)
+        run: cargo run -p spike-audio-latency --locked -- --seconds 6 --list
+
+      - name: Measure (256-frame buffer)
+        run: cargo run -p spike-audio-latency --locked -- --seconds 4 --buffer 256
