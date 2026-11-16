@@ -3,7 +3,7 @@
 //! What the interface and the audio thread tell each other.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 
 use daw_dsp::Instrument;
 use daw_model::Ticks;
@@ -79,6 +79,17 @@ pub enum EngineEvent {
     Stopped,
 }
 
+/// A note from a MIDI keyboard, for the track that receives live input.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LiveNote {
+    pub key: u8,
+    /// 0 releases the note.
+    pub velocity: f32,
+}
+
+/// No track receives live input.
+pub(crate) const NO_TARGET: usize = usize::MAX;
+
 /// Everything the audio thread sends back.
 pub(crate) enum Outgoing {
     Event(EngineEvent),
@@ -116,6 +127,8 @@ pub(crate) struct Shared {
     pub load: AtomicU32,
     /// Peak output level of the last block, as f32 bits.
     pub peak: AtomicU32,
+    /// The instrument slot that MIDI keyboards play ([`NO_TARGET`] for none).
+    pub live_target: AtomicUsize,
 }
 
 impl Shared {
@@ -127,6 +140,7 @@ impl Shared {
             count_in_left: AtomicI64::new(0),
             load: AtomicU32::new(0),
             peak: AtomicU32::new(0),
+            live_target: AtomicUsize::new(NO_TARGET),
         })
     }
 

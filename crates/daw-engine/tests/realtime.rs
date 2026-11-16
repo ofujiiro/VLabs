@@ -272,3 +272,30 @@ fn stop_returns_to_where_playback_started_then_to_the_start() {
     run(&mut processor, &mut engine, 1, &mut events);
     assert_eq!(engine.position(), Ticks::ZERO);
 }
+
+#[test]
+fn midi_keyboard_notes_play_the_live_track_only_when_one_is_chosen() {
+    let (mut engine, mut processor) = engine();
+    let project = Project::starter("P", "T");
+    let (track, _) = project.first_pattern().unwrap();
+    engine.sync(&project, 1);
+    let midi = engine.midi_sender();
+    let mut events = Vec::new();
+    run(&mut processor, &mut engine, 2, &mut events);
+
+    // No live track chosen: the note goes nowhere.
+    midi.note_on(69, 0.8);
+    let silent = run(&mut processor, &mut engine, 20, &mut events);
+    midi.note_off(69);
+    assert!(
+        silent.iter().all(|s| s.abs() < 1e-6),
+        "a note played with no live track chosen"
+    );
+
+    engine.set_live_target(Some(track));
+    midi.note_on(69, 0.8);
+    let sounding = run(&mut processor, &mut engine, 20, &mut events);
+    midi.note_off(69);
+    let peak = sounding.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+    assert!(peak > 0.05, "the MIDI note is silent (peak {peak})");
+}

@@ -7,8 +7,8 @@ mod messages;
 mod processor;
 mod program;
 
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use daw_model::{Instrument as InstrumentSpec, Project, Ticks, TrackId};
 
@@ -16,7 +16,7 @@ pub use library::SoundLibrary;
 pub use messages::EngineEvent;
 pub use processor::{EngineProcessor, MAX_SLOTS};
 
-use messages::{Command, Outgoing, RECORD_ACTIVE, RECORD_COUNT_IN, Shared};
+use messages::{Command, LiveNote, NO_TARGET, Outgoing, RECORD_ACTIVE, RECORD_COUNT_IN, Shared};
 
 /// Room in the queue from the interface to the audio thread.
 const COMMAND_QUEUE: usize = 4096;
@@ -39,6 +39,40 @@ impl Default for EngineConfig {
             sample_rate: 48_000,
             max_block: 1024,
         }
+    }
+}
+
+/// Room in the queue from MIDI keyboards to the audio thread.
+const LIVE_QUEUE: usize = 2048;
+
+/// Sends notes from MIDI keyboards straight to the audio thread, to the
+/// track chosen with [`Engine::set_live_target`]. Cheap to share between
+/// MIDI threads; the audio thread never waits for it.
+pub struct MidiSender {
+    producer: Mutex<rtrb::Producer<LiveNote>>,
+}
+
+impl MidiSender {
+    /// A key went down (`velocity` from 0 to 1).
+    pub fn note_on(&self, key: u8, velocity: f32) {
+        self.push(LiveNote {
+            key,
+            velocity: velocity.max(f32::MIN_POSITIVE),
+        });
+    }
+
+    /// A key came up.
+    pub fn note_off(&self, key: u8) {
+        self.push(LiveNote { key, velocity: 0.0 });
+    }
+
+    fn push(&self, note: LiveNote) {
+        // Only MIDI threads take this lock; a full queue drops the note.
+        let _ = self
+            .producer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(note);
     }
 }
 
@@ -65,6 +99,7 @@ pub struct Engine {
     slots: Vec<Option<(TrackId, InstrumentSpec)>>,
     compiled_revision: Option<u64>,
     problems: Vec<String>,
+    midi: Arc<MidiSender>,
 }
 
 impl Engine {
@@ -73,11 +108,13 @@ impl Engine {
     pub fn new(config: EngineConfig, library: SoundLibrary) -> (Self, EngineProcessor) {
         let (command_tx, command_rx) = rtrb::RingBuffer::new(COMMAND_QUEUE);
         let (outgoing_tx, outgoing_rx) = rtrb::RingBuffer::new(OUTGOING_QUEUE);
+        let (live_tx, live_rx) = rtrb::RingBuffer::new(LIVE_QUEUE);
         let shared = Shared::new();
         let processor = EngineProcessor::new(
             config.sample_rate,
             config.max_block,
             command_rx,
+            live_rx,
             outgoing_tx,
             Arc::clone(&shared),
         );
@@ -90,6 +127,9 @@ impl Engine {
             slots: vec![None; MAX_SLOTS],
             compiled_revision: None,
             problems: Vec::new(),
+            midi: Arc::new(MidiSender {
+                producer: Mutex::new(live_tx),
+            }),
         };
         (engine, processor)
     }
@@ -231,6 +271,17 @@ impl Engine {
         if let Some(slot) = self.slot_of(track) {
             self.send(Command::NoteOff { slot, key });
         }
+    }
+
+    /// The sender MIDI keyboards use to play the live-input track.
+    pub fn midi_sender(&self) -> Arc<MidiSender> {
+        Arc::clone(&self.midi)
+    }
+
+    /// Chooses the track that MIDI keyboards play (and record into).
+    pub fn set_live_target(&mut self, track: Option<TrackId>) {
+        let slot = track.and_then(|t| self.slot_of(t)).unwrap_or(NO_TARGET);
+        self.shared.live_target.store(slot, Ordering::Relaxed);
     }
 
     /// Silences everything immediately.

@@ -9,3 +9,13 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+cpal.workspace = true
+daw-rt.workspace = true
+midir.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# JACK is loaded at run time when present, never required.
+cpal = { workspace = true, features = ["jack"] }
+libc.workspace = true

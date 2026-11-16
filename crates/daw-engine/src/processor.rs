@@ -16,7 +16,8 @@ use daw_dsp::{Click, Instrument};
 use daw_model::{Region, Ticks};
 
 use crate::messages::{
-    Command, EngineEvent, Garbage, Outgoing, RECORD_ACTIVE, RECORD_COUNT_IN, RECORD_IDLE, Shared,
+    Command, EngineEvent, Garbage, LiveNote, NO_TARGET, Outgoing, RECORD_ACTIVE, RECORD_COUNT_IN,
+    RECORD_IDLE, Shared,
 };
 use crate::program::Program;
 
@@ -75,6 +76,7 @@ pub struct EngineProcessor {
     sample_rate: f64,
     max_block: usize,
     commands: rtrb::Consumer<Command>,
+    live: rtrb::Consumer<LiveNote>,
     outgoing: rtrb::Producer<Outgoing>,
     shared: Arc<Shared>,
     program: Option<Box<Program>>,
@@ -104,6 +106,7 @@ impl EngineProcessor {
         sample_rate: u32,
         max_block: usize,
         commands: rtrb::Consumer<Command>,
+        live: rtrb::Consumer<LiveNote>,
         outgoing: rtrb::Producer<Outgoing>,
         shared: Arc<Shared>,
     ) -> Self {
@@ -112,6 +115,7 @@ impl EngineProcessor {
             sample_rate: f64::from(sample_rate),
             max_block,
             commands,
+            live,
             outgoing,
             shared,
             program: None,
@@ -211,12 +215,53 @@ impl EngineProcessor {
         }
         for _ in 0..MAX_COMMANDS_PER_BLOCK {
             let Ok(command) = self.commands.pop() else {
-                return;
+                break;
             };
             self.handle(command);
             if self.pending.is_some() {
                 return;
             }
+        }
+        // Notes from MIDI keyboards go to the track that receives live input.
+        let target = self.shared.live_target.load(Ordering::Relaxed);
+        for _ in 0..MAX_COMMANDS_PER_BLOCK {
+            let Ok(note) = self.live.pop() else { break };
+            if target == NO_TARGET {
+                continue;
+            }
+            if note.velocity > 0.0 {
+                self.note_on(target, note.key, note.velocity);
+            } else {
+                self.note_off(target, note.key);
+            }
+        }
+    }
+
+    fn note_on(&mut self, slot: usize, key: u8, velocity: f32) {
+        if let Some(Some(instrument)) = self.instruments.get_mut(slot) {
+            instrument.note_on(key, velocity);
+        }
+        if let Recording::Active { slot: target } = self.recording
+            && target == slot
+        {
+            let start = self.position_ticks();
+            self.recorded_held[usize::from(key & 0x7F)] = Some((start, velocity));
+            self.send(Outgoing::Event(EngineEvent::RecordingNoteStarted {
+                key,
+                velocity,
+                start,
+            }));
+        }
+    }
+
+    fn note_off(&mut self, slot: usize, key: u8) {
+        if let Some(Some(instrument)) = self.instruments.get_mut(slot) {
+            instrument.note_off(key);
+        }
+        if let Recording::Active { slot: target } = self.recording
+            && target == slot
+        {
+            self.close_recorded_note(key, self.position_ticks());
         }
     }
 
@@ -265,32 +310,8 @@ impl EngineProcessor {
                 slot,
                 key,
                 velocity,
-            } => {
-                if let Some(Some(instrument)) = self.instruments.get_mut(slot) {
-                    instrument.note_on(key, velocity);
-                }
-                if let Recording::Active { slot: target } = self.recording
-                    && target == slot
-                {
-                    let start = self.position_ticks();
-                    self.recorded_held[usize::from(key & 0x7F)] = Some((start, velocity));
-                    self.send(Outgoing::Event(EngineEvent::RecordingNoteStarted {
-                        key,
-                        velocity,
-                        start,
-                    }));
-                }
-            }
-            Command::NoteOff { slot, key } => {
-                if let Some(Some(instrument)) = self.instruments.get_mut(slot) {
-                    instrument.note_off(key);
-                }
-                if let Recording::Active { slot: target } = self.recording
-                    && target == slot
-                {
-                    self.close_recorded_note(key, self.position_ticks());
-                }
-            }
+            } => self.note_on(slot, key, velocity),
+            Command::NoteOff { slot, key } => self.note_off(slot, key),
             Command::Panic => {
                 for instrument in self.instruments.iter_mut().flatten() {
                     instrument.all_notes_off(true);
