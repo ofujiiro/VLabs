@@ -9,3 +9,12 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+daw-dsp.workspace = true
+daw-model.workspace = true
+daw-rt.workspace = true
+rtrb.workspace = true
+
+[dev-dependencies]
+daw-rt.workspace = true
