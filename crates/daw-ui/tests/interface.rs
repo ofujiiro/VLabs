@@ -498,3 +498,60 @@ fn the_option_popups_and_about_box_open() {
     f.harness.run_steps(2);
     assert!(f.harness.query_by_label(text::CLOSE).is_none());
 }
+
+/// Asks to close the window, as the window's close button does.
+fn request_close(f: &mut Fixture) {
+    f.harness
+        .input_mut()
+        .viewports
+        .entry(egui::ViewportId::ROOT)
+        .or_default()
+        .events
+        .push(egui::ViewportEvent::Close);
+    f.harness.step();
+}
+
+fn sent_close_commands(f: &Fixture) -> (bool, bool) {
+    let commands = f
+        .harness
+        .output()
+        .viewport_output
+        .get(&egui::ViewportId::ROOT)
+        .map_or_else(Vec::new, |v| v.commands.clone());
+    (
+        commands.contains(&egui::ViewportCommand::CancelClose),
+        commands.contains(&egui::ViewportCommand::Close),
+    )
+}
+
+#[test]
+fn closing_with_unsaved_changes_asks_and_never_just_quits() {
+    let mut f = fixture();
+    // Nothing to save: closing is allowed straight away.
+    request_close(&mut f);
+    assert_eq!(
+        sent_close_commands(&f),
+        (false, false),
+        "no reason to stop a clean close"
+    );
+
+    let roll = f.roll();
+    f.click(roll.center(), Modifiers::NONE);
+    request_close(&mut f);
+    assert!(sent_close_commands(&f).0, "the close is held back");
+    f.harness.run_steps(3);
+    f.harness.get_by_label(text::UNSAVED_QUESTION);
+
+    // Cancel keeps everything.
+    f.harness.get_by_label(text::CANCEL).click();
+    f.harness.run_steps(2);
+    assert_eq!(f.notes().len(), 1);
+    assert!(f.harness.query_by_label(text::UNSAVED_QUESTION).is_none());
+
+    // Discard closes for real.
+    request_close(&mut f);
+    f.harness.run_steps(3);
+    f.harness.get_by_label(text::DISCARD_CHANGES).click();
+    f.harness.step();
+    assert!(sent_close_commands(&f).1, "discarding closes the window");
+}
