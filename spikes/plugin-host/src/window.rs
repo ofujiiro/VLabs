@@ -305,7 +305,7 @@ mod windows {
 
     impl EditorWindow {
         pub fn new(title: &str, width: u32, height: u32) -> Result<Self, String> {
-            let class_name = wide("VLabsSpikeEditorWindow");
+            let class_name = wide("SpikeEditorWindow");
             let title = wide(title);
             // SAFETY: plain Win32 calls with valid, nul-terminated strings
             // that outlive the calls.

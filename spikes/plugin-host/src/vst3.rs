@@ -95,7 +95,7 @@ impl Class for HostApplication {
 
 impl IHostApplicationTrait for HostApplication {
     unsafe fn getName(&self, name: *mut String128) -> tresult {
-        let text: Vec<u16> = "VLabs plugin spike".encode_utf16().collect();
+        let text: Vec<u16> = "Plugin hosting spike".encode_utf16().collect();
         let name = unsafe { &mut *name };
         name.fill(0);
         name[..text.len()].copy_from_slice(&text);

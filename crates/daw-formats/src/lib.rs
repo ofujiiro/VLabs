@@ -1,3 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #![doc = include_str!("../README.md")]
+
+mod atomic;
+mod native;
+
+pub use atomic::write_atomically;
+pub use native::{
+    FORMAT_VERSION, FileError, load_project, project_from_bytes, project_from_json,
+    project_to_bytes, save_project,
+};

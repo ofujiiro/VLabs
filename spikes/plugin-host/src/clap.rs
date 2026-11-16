@@ -243,8 +243,8 @@ impl ClapPlugin {
             id.to_string_lossy()
         );
         let host_info = HostInfo::new(
-            "VLabs plugin spike",
-            "VLabs",
+            "Plugin hosting spike",
+            "Phase 0 spike",
             "https://example.invalid",
             "0.0.0",
         )

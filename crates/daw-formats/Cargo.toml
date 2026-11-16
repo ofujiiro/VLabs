@@ -9,3 +9,10 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+daw-ident.workspace = true
+daw-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zip.workspace = true

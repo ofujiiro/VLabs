@@ -32,7 +32,7 @@ Developer commands. Usage: cargo xtask <command>
 /// The cargo package that builds the program people launch.
 const APP_PACKAGE: &str = "daw-app";
 
-/// The systems VLabs ships for; the licence check runs once for each.
+/// The systems the program ships for; the licence check runs once for each.
 const DENY_TARGETS: [&str; 2] = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"];
 
 /// Files copied next to the program in `dist/`. The GPL requires its text to

@@ -560,7 +560,7 @@ fn build(root: &Path, output: &Path, mics: &[char]) -> Result<(), String> {
     Ok(())
 }
 
-/// Plays every key of a built SoundFont through VLabs' own player and
+/// Plays every key of a built SoundFont through our own player and
 /// checks it: pitch, level against the neighbouring keys, loop continuity
 /// and a smooth decay. Writes a short demo to listen to.
 #[allow(clippy::too_many_lines, reason = "a list of checks")]
