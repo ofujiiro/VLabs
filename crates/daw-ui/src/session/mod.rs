@@ -3,21 +3,40 @@
 //! The open song and everything the interface does with it, with no
 //! drawing: editing commands, playing notes, the transport, recording and
 //! files. The views call these methods; tests call them directly.
+//!
+//! The song-level operations (views, tracks, patterns, clips) are in
+//! `arrange`, the mixer and the effects in `mixing`.
+
+mod arrange;
+mod mixing;
+
+pub use mixing::MAX_GAIN;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use daw_engine::{Engine, EngineEvent, RecordState};
+use daw_engine::{Engine, EngineEvent, PlaybackScope, RecordState};
 use daw_model::{
-    ClipContent, Document, MAX_KEY, MeterMap, Note, NoteId, Pattern, PatternId, Project, Region,
-    TEMPO_RANGE, TICKS_PER_WHOLE, Ticks, TimeSignature, TrackId,
+    ClipContent, ClipId, Document, MAX_KEY, MeterMap, Note, NoteId, Pattern, PatternId, Project,
+    Region, TEMPO_RANGE, TICKS_PER_WHOLE, Ticks, TimeSignature, TrackId,
 };
 use egui::Key;
 
+use crate::export::{Export, ExportFormat};
 use crate::keys::{HIGHEST_OFFSET, note_offset};
 use crate::settings::{Settings, clamp_base};
 use crate::text;
+
+/// What the large surface in the middle of the window shows (decision
+/// 0014).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    /// The whole song: tracks and their clips on a timeline.
+    Song,
+    /// One pattern: the step grid for drums, the piano roll for the rest.
+    Pattern,
+}
 
 /// A rhythmic grid that notes snap to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,6 +121,19 @@ impl Placement {
     pub fn to_song(self, pattern: Ticks) -> Ticks {
         pattern - self.offset + self.start
     }
+
+    /// A song position as a position in a pattern of `length` that the
+    /// clip repeats: inside the clip it folds back onto the pattern; past
+    /// the clip's end it carries on (a recording that runs past the end
+    /// lengthens the pattern).
+    pub fn to_pattern_folded(self, song: Ticks, length: Ticks) -> Ticks {
+        let at = self.to_pattern(song);
+        if song >= self.start && song < self.start + self.length && length > Ticks::ZERO {
+            Ticks(at.0.rem_euclid(length.0))
+        } else {
+            at
+        }
+    }
 }
 
 /// One recording pass that is still running.
@@ -118,14 +150,28 @@ const MERGE_TRANSPOSE: u64 = 2;
 /// Takes count from here, far from the fixed keys above.
 const FIRST_TAKE: u64 = 1 << 32;
 
+/// The note the computer keyboard's Z key plays on drum tracks: the kick
+/// (General MIDI drum keys).
+const DRUM_BASE: u8 = 36;
+
 /// The song being worked on, with its undo history, connected to the engine.
 #[allow(clippy::struct_excessive_bools, reason = "independent preferences")]
 pub struct Session {
     doc: Document,
     engine: Engine,
     path: Option<PathBuf>,
+    view: View,
     track: TrackId,
     pattern: PatternId,
+    /// The pattern last opened on each track (what clicking the track
+    /// places and opens).
+    current: HashMap<TrackId, PatternId>,
+    selected_clip: Option<ClipId>,
+    /// Whether a pattern plays in a loop while it is open.
+    loop_pattern: bool,
+    /// The scope the engine was last given (to notice changes).
+    scope: Option<PlaybackScope>,
+    export: Option<Export>,
     selection: HashSet<NoteId>,
     selection_revision: u64,
     /// The grid notes snap to.
@@ -136,6 +182,7 @@ pub struct Session {
     clipboard_span: Ticks,
     paste_at: Option<Ticks>,
     keyboard_base: u8,
+    drum_base: u8,
     keyboard_velocity: f32,
     held_keys: HashMap<Key, u8>,
     pointer_note: Option<u8>,
@@ -156,14 +203,12 @@ pub struct Session {
 }
 
 impl Session {
-    /// Opens a project in the engine. `path` is where it was loaded from
-    /// (or `None` for a new song); `saved` says whether the file on disk
-    /// matches it.
+    /// Opens a project in the engine, showing the song. `path` is where it
+    /// was loaded from (or `None` for a new song); `saved` says whether the
+    /// file on disk matches it.
     pub fn new(engine: Engine, project: Project, path: Option<PathBuf>, saved: bool) -> Self {
         let project = editable(project);
-        let (track, pattern) = project
-            .first_pattern()
-            .unwrap_or((TrackId(0), PatternId(0)));
+        let (track, pattern) = first_focus(&project);
         let doc = if saved {
             Document::new(project)
         } else {
@@ -173,8 +218,14 @@ impl Session {
             doc,
             engine,
             path,
+            view: View::Song,
             track,
             pattern,
+            current: HashMap::new(),
+            selected_clip: None,
+            loop_pattern: true,
+            scope: None,
+            export: None,
             selection: HashSet::new(),
             selection_revision: 0,
             grid: Grid::Note(16),
@@ -183,6 +234,7 @@ impl Session {
             clipboard_span: Ticks::ZERO,
             paste_at: None,
             keyboard_base: 48,
+            drum_base: DRUM_BASE,
             keyboard_velocity: 0.8,
             held_keys: HashMap::new(),
             pointer_note: None,
@@ -206,14 +258,12 @@ impl Session {
         session
     }
 
-    /// The song a new user starts with.
+    /// The song a new user starts with: a drum track and a piano track,
+    /// open on the empty beat (decision 0014).
     pub fn starter(engine: Engine) -> Self {
-        Self::new(
-            engine,
-            Project::starter(text::FIRST_PATTERN, text::FIRST_TRACK),
-            None,
-            true,
-        )
+        let mut session = Self::new(engine, starter_project(), None, true);
+        session.open_first_beat();
+        session
     }
 
     /// Takes the preferences that affect playing and recording.
@@ -253,6 +303,22 @@ impl Session {
 
     pub(crate) fn document_mut(&mut self) -> &mut Document {
         &mut self.doc
+    }
+
+    /// Starts a gesture (a drag): the edits until [`Self::end_gesture`]
+    /// become one undo step named `label`.
+    pub fn begin_gesture(&mut self, label: &str) {
+        self.doc.begin_gesture(label);
+    }
+
+    /// Ends the gesture in progress.
+    pub fn end_gesture(&mut self) {
+        self.doc.end_gesture();
+    }
+
+    /// Abandons the gesture in progress, putting everything back.
+    pub fn cancel_gesture(&mut self) {
+        self.doc.cancel_gesture();
     }
 
     /// The engine.
@@ -365,10 +431,12 @@ impl Session {
         }
         if self.doc.revision() != self.selection_revision {
             self.selection_revision = self.doc.revision();
+            self.keep_focus_valid();
             let pattern = self.pattern();
             let present: HashSet<NoteId> = pattern.notes.iter().map(|n| n.id).collect();
             self.selection.retain(|id| present.contains(id));
         }
+        self.poll_export();
         if let Some((_, since)) = self.playing_intent
             && (self.engine.is_playing() == self.is_playing() || since.elapsed() > INTENT_TIME)
         {
@@ -390,17 +458,73 @@ impl Session {
     }
 
     fn sync_engine(&mut self) {
-        self.engine.sync(
-            self.doc.project(),
-            self.doc.revision(),
-            daw_engine::PlaybackScope::Song,
-        );
+        let scope = self.playback_scope();
+        if self.scope.is_some_and(|old| old != scope) {
+            self.relocate_for(scope);
+        }
+        self.scope = Some(scope);
+        self.engine
+            .sync(self.doc.project(), self.doc.revision(), scope);
         self.engine.set_live_target(Some(self.track));
     }
 
+    /// What Space plays (decision 0014): in the song view, the song; in a
+    /// pattern, the part of the song where the pattern is placed (looping
+    /// unless the loop is off), or the pattern alone if it is not placed.
+    pub fn playback_scope(&self) -> PlaybackScope {
+        if self.view == View::Song {
+            return PlaybackScope::Song;
+        }
+        match placement(self.project(), self.track, self.pattern) {
+            Some(place) if self.loop_pattern => {
+                Region::new(place.start, place.start + place.length)
+                    .map_or(PlaybackScope::Unlooped, PlaybackScope::Looping)
+            }
+            Some(_) => PlaybackScope::Unlooped,
+            None => PlaybackScope::Pattern {
+                track: self.track,
+                pattern: self.pattern,
+                looping: self.loop_pattern,
+            },
+        }
+    }
+
+    /// The part of the timeline that plays in a loop now, if any (in the
+    /// pattern's own time while a pattern that is not placed plays alone).
+    pub fn loop_in_play(&self) -> Option<Region> {
+        match self.playback_scope() {
+            PlaybackScope::Song => self.project().loop_region,
+            PlaybackScope::Looping(region) => Some(region),
+            PlaybackScope::Unlooped => None,
+            PlaybackScope::Pattern { looping, .. } => looping
+                .then(|| Region::new(Ticks::ZERO, self.pattern().length))
+                .flatten(),
+        }
+    }
+
+    /// Moves the play position into what a new scope plays, when the view
+    /// changes (a pattern alone counts from its own start).
+    fn relocate_for(&mut self, scope: PlaybackScope) {
+        let at = self.engine.position();
+        let target = match scope {
+            PlaybackScope::Looping(region) if at < region.start || at >= region.end => {
+                Some(region.start)
+            }
+            PlaybackScope::Pattern { .. } => Some(Ticks::ZERO),
+            PlaybackScope::Song | PlaybackScope::Unlooped
+                if matches!(self.scope, Some(PlaybackScope::Pattern { .. })) =>
+            {
+                Some(self.placement().start)
+            }
+            _ => None,
+        };
+        if let Some(target) = target {
+            self.engine.locate(target);
+        }
+    }
+
     fn stop_at_the_end(&mut self) {
-        let looping = self.project().loop_region.is_some();
-        if looping
+        if self.is_looping()
             || self.awaiting_stop
             || !self.engine.is_playing()
             || self.engine.record_state() != RecordState::Idle
@@ -408,8 +532,14 @@ impl Session {
         {
             return;
         }
-        let placement = self.placement();
-        if self.engine.position() >= placement.start + placement.length {
+        let end = match self.view {
+            View::Song => self.project().song_end(),
+            View::Pattern => {
+                let placement = self.placement();
+                placement.start + placement.length
+            }
+        };
+        if self.engine.position() >= end {
             self.stop();
         }
     }
@@ -439,7 +569,7 @@ impl Session {
             } => {
                 self.recording_held.remove(&key);
                 // A note held across the loop's end carries on from its start.
-                if let Some(region) = self.project().loop_region
+                if let Some(region) = self.loop_in_play()
                     && end == region.end
                     && start < end
                     && self.key_is_down(key)
@@ -475,7 +605,7 @@ impl Session {
         let pattern_length = self.pattern().length;
         let mut note = Note {
             id: NoteId(0),
-            start: placement.to_pattern(start),
+            start: placement.to_pattern_folded(start, pattern_length),
             length: (end - start).max(Ticks(1)),
             key,
             velocity,
@@ -486,7 +616,7 @@ impl Session {
             let step = self.grid.step(&self.project().meter, note.start);
             daw_model::quantize_starts(&mut notes, step);
             note = notes[0];
-            if self.project().loop_region.is_some() && note.start >= pattern_length {
+            if self.loop_in_play().is_some() && note.start >= pattern_length {
                 note.start -= pattern_length;
             }
         }
@@ -511,10 +641,13 @@ impl Session {
     /// velocity and start, in pattern time.
     pub fn notes_being_recorded(&self) -> Vec<(u8, f32, Ticks)> {
         let placement = self.placement();
+        let length = self.pattern().length;
         let mut notes: Vec<_> = self
             .recording_held
             .iter()
-            .map(|(&key, &(start, velocity))| (key, velocity, placement.to_pattern(start)))
+            .map(|(&key, &(start, velocity))| {
+                (key, velocity, placement.to_pattern_folded(start, length))
+            })
             .collect();
         notes.sort_by_key(|n| n.0);
         notes
@@ -558,14 +691,28 @@ impl Session {
         self.record_state() != RecordState::Idle
     }
 
-    /// The play position in the pattern.
+    /// The play position in the pattern being edited (folded back onto the
+    /// pattern where its clip repeats it).
     pub fn position(&self) -> Ticks {
-        self.placement().to_pattern(self.engine.position())
+        self.placement()
+            .to_pattern_folded(self.engine.position(), self.pattern().length)
+    }
+
+    /// The play position in the song (in the pattern's own time while a
+    /// pattern that is not placed plays alone).
+    pub fn song_position(&self) -> Ticks {
+        self.engine.position()
     }
 
     /// Starts playback.
     pub fn play(&mut self) {
         self.sync_engine();
+        if let Some(PlaybackScope::Looping(region)) = self.scope {
+            let at = self.engine.position();
+            if at < region.start || at >= region.end {
+                self.engine.locate(region.start);
+            }
+        }
         self.engine.play();
         self.playing_intent = Some((true, Instant::now()));
     }
@@ -589,11 +736,16 @@ impl Session {
     }
 
     /// Starts recording into the pattern in focus (after the count-in), or
-    /// stops if already recording.
+    /// stops if already recording. In the song view it opens the pattern
+    /// first: recording always goes into the pattern on screen.
     pub fn toggle_record(&mut self) {
         if self.is_recording() {
             self.stop();
             return;
+        }
+        if self.view == View::Song {
+            let (track, pattern) = (self.track, self.pattern);
+            self.open_pattern(track, pattern);
         }
         self.sync_engine();
         self.engine.record(self.track, self.count_in_bars);
@@ -607,25 +759,49 @@ impl Session {
         self.paste_at = Some(at);
     }
 
-    /// Back to the start of the pattern.
+    /// Moves the play position to a point in the song.
+    pub fn locate_song(&mut self, at: Ticks) {
+        self.engine.locate(at.max(Ticks::ZERO));
+    }
+
+    /// Back to the start of the pattern, or of the song.
     pub fn to_start(&mut self) {
-        self.locate(Ticks::ZERO);
+        match self.view {
+            View::Song => self.locate_song(Ticks::ZERO),
+            View::Pattern => self.locate(Ticks::ZERO),
+        }
     }
 
-    /// Whether the pattern plays in a loop.
+    /// Whether what is on screen plays in a loop: the open pattern, or
+    /// the song's loop region in the song view.
     pub fn is_looping(&self) -> bool {
-        self.project().loop_region.is_some()
+        match self.view {
+            View::Song => self.project().loop_region.is_some(),
+            View::Pattern => self.loop_pattern,
+        }
     }
 
-    /// Loop on or off.
+    /// Loop on or off. In the song view, the loop covers the whole song
+    /// until a part is chosen on the ruler.
     pub fn toggle_loop(&mut self) {
-        let placement = self.placement();
-        let region = if self.is_looping() {
-            None
-        } else {
-            Region::new(placement.start, placement.start + placement.length)
-        };
-        self.doc.edit(text::EDIT_LOOP, |p| p.loop_region = region);
+        match self.view {
+            View::Pattern => self.loop_pattern = !self.loop_pattern,
+            View::Song => {
+                let region = if self.is_looping() {
+                    None
+                } else {
+                    Region::new(Ticks::ZERO, self.song_length())
+                };
+                self.doc.edit(text::EDIT_LOOP, |p| p.loop_region = region);
+            }
+        }
+    }
+
+    /// Loops a part of the song (or nothing).
+    pub fn set_loop_region(&mut self, region: Option<Region>) {
+        if self.project().loop_region != region {
+            self.doc.edit(text::EDIT_LOOP, |p| p.loop_region = region);
+        }
     }
 
     /// Whether the metronome clicks while playing.
@@ -993,9 +1169,14 @@ impl Session {
 
     // ----- Playing notes live
 
-    /// The note the computer keyboard's Z key plays.
+    /// The note the computer keyboard's Z key plays: the kick on drum
+    /// tracks.
     pub fn keyboard_base(&self) -> u8 {
-        self.keyboard_base
+        if self.is_drum_track() {
+            self.drum_base
+        } else {
+            self.keyboard_base
+        }
     }
 
     /// How hard computer-keyboard notes play.
@@ -1010,9 +1191,15 @@ impl Session {
 
     /// Moves the computer keyboard up or down by octaves.
     pub fn shift_keyboard_octave(&mut self, octaves: i32) {
-        let base = i32::from(self.keyboard_base) + 12 * octaves;
+        let current = self.keyboard_base();
+        let base = i32::from(current) + 12 * octaves;
         let highest = i32::from(clamp_base(127));
-        self.keyboard_base = u8::try_from(base.clamp(0, highest)).unwrap_or(self.keyboard_base);
+        let base = u8::try_from(base.clamp(0, highest)).unwrap_or(current);
+        if self.is_drum_track() {
+            self.drum_base = base;
+        } else {
+            self.keyboard_base = base;
+        }
     }
 
     /// A computer key went down. Returns whether it plays a note.
@@ -1023,7 +1210,7 @@ impl Session {
         if self.held_keys.contains_key(&physical) {
             return true; // Auto-repeat.
         }
-        let key = self.keyboard_base.saturating_add(offset).min(MAX_KEY);
+        let key = self.keyboard_base().saturating_add(offset).min(MAX_KEY);
         self.held_keys.insert(physical, key);
         self.engine.note_on(self.track, key, self.keyboard_velocity);
         true
@@ -1085,7 +1272,7 @@ impl Session {
 
     /// The computer key that plays a note, if any, at the current octave.
     pub fn computer_key_for(&self, key: u8) -> Option<u8> {
-        let offset = key.checked_sub(self.keyboard_base)?;
+        let offset = key.checked_sub(self.keyboard_base())?;
         (offset <= HIGHEST_OFFSET).then_some(offset)
     }
 
@@ -1118,15 +1305,14 @@ impl Session {
         }
     }
 
-    /// Replaces the song with another project (opened, new or recovered).
+    /// Replaces the song with another project (opened, new or recovered),
+    /// showing the song.
     pub fn replace(&mut self, project: Project, path: Option<PathBuf>, saved: bool) {
         self.release_keys();
         self.engine.stop();
         self.engine.panic();
         let project = editable(project);
-        let (track, pattern) = project
-            .first_pattern()
-            .unwrap_or((TrackId(0), PatternId(0)));
+        let (track, pattern) = first_focus(&project);
         self.doc = if saved {
             Document::new(project)
         } else {
@@ -1134,8 +1320,12 @@ impl Session {
         };
         self.engine.invalidate();
         self.path = path;
+        self.view = View::Song;
         self.track = track;
         self.pattern = pattern;
+        self.current.clear();
+        self.selected_clip = None;
+        self.scope = None;
         self.selection.clear();
         self.paste_at = None;
         self.take = None;
@@ -1161,14 +1351,106 @@ impl Session {
         }
     }
 
-    /// Starts a new song.
+    /// Starts a new song, open on its beat.
     pub fn new_song(&mut self) {
-        self.replace(
-            Project::starter(text::FIRST_PATTERN, text::FIRST_TRACK),
-            None,
-            true,
-        );
+        self.replace(starter_project(), None, true);
+        self.open_first_beat();
     }
+
+    /// Opens the first drum pattern (a new song starts there).
+    fn open_first_beat(&mut self) {
+        let beat = self
+            .project()
+            .tracks
+            .iter()
+            .find(|t| t.instrument.is_drums())
+            .map(|t| t.id)
+            .and_then(|track| self.current_pattern(track).map(|p| (track, p)));
+        if let Some((track, pattern)) = beat {
+            self.open_pattern(track, pattern);
+        }
+    }
+
+    // ----- Export
+
+    /// Starts writing the song to a WAV file in the background.
+    pub fn start_export(&mut self, path: &Path, format: ExportFormat) {
+        if self.export.is_some() {
+            return;
+        }
+        let path = crate::export::with_wav_extension(path);
+        self.export = Some(Export::start(
+            self.project().clone(),
+            self.engine.library().clone(),
+            self.engine.config(),
+            path,
+            format,
+        ));
+    }
+
+    /// How far the export has come, 0 to 1, while one runs.
+    pub fn export_progress(&self) -> Option<f32> {
+        self.export.as_ref().map(Export::progress)
+    }
+
+    /// Stops the export (nothing is written).
+    pub fn cancel_export(&mut self) {
+        if let Some(export) = &self.export {
+            export.cancel();
+        }
+    }
+
+    /// Waits for the export to end (for tests and for quitting).
+    pub fn finish_export(&mut self) {
+        if let Some(export) = &mut self.export {
+            export.wait();
+        }
+        self.poll_export();
+    }
+
+    fn poll_export(&mut self) {
+        let Some(result) = self.export.as_mut().and_then(Export::result) else {
+            return;
+        };
+        self.export = None;
+        match result {
+            Ok(Some(path)) => self.set_status(text::exported(&path.display().to_string())),
+            Ok(None) => self.set_status(text::EXPORT_CANCELLED),
+            Err(error) => self.set_status(text::could_not_export(&error)),
+        }
+    }
+}
+
+/// The song a new user starts with: drums on top (a one-bar beat repeated
+/// over four bars), a piano with an empty four-bar pattern, a limiter on
+/// the master. It plays through once; patterns loop on their own.
+fn starter_project() -> Project {
+    let mut project = Project::starter(text::FIRST_PATTERN, text::FIRST_TRACK);
+    project.add_drums_with_pattern(
+        text::DRUMS_TRACK,
+        text::FIRST_BEAT,
+        daw_model::ACOUSTIC_KIT,
+        1,
+        4,
+    );
+    project.loop_region = None;
+    project
+}
+
+/// The track and pattern in focus when a project opens: the first track's
+/// first pattern.
+fn first_focus(project: &Project) -> (TrackId, PatternId) {
+    project
+        .first_pattern()
+        .or_else(|| {
+            project.tracks.iter().find_map(|t| {
+                project
+                    .track_patterns(t.id)
+                    .next()
+                    .map(|pattern| (t.id, pattern.id))
+            })
+        })
+        .unwrap_or((TrackId(0), PatternId(0)))
 }
 
 /// Adds the project's file ending if the path has none.
@@ -1193,11 +1475,11 @@ fn editable(mut project: Project) -> Project {
         return project;
     }
     let length = project.meter.bar_start(4);
-    let pattern = project.add_pattern(text::FIRST_PATTERN, length);
     let track = match project.tracks.first() {
         Some(track) => track.id,
         None => project.add_track(text::FIRST_TRACK, daw_model::Instrument::builtin_piano()),
     };
+    let pattern = project.add_pattern_for(track, text::FIRST_PATTERN, length);
     project.add_clip(track, Ticks::ZERO, length, pattern);
     if project.loop_region.is_none() {
         project.loop_region = Region::new(Ticks::ZERO, length);
@@ -1262,6 +1544,9 @@ fn round_up_to_bar(meter: &MeterMap, clip_start: Ticks, length: Ticks) -> Ticks 
     meter.bar_start(bar) - clip_start
 }
 
+/// Changes a pattern's length (`length` counted from the clip's offset).
+/// Clips that played it exactly once follow; clips that repeat it keep
+/// their length.
 fn set_length(
     project: &mut Project,
     track: TrackId,
@@ -1270,19 +1555,23 @@ fn set_length(
     length: Ticks,
 ) {
     let old_end = place.start + place.length;
+    let old_length = project.pattern(pattern).map_or(Ticks::ZERO, |p| p.length);
     if let Some(p) = project.pattern_mut(pattern) {
         p.length = length + place.offset;
     }
     if let Some(t) = project.track_mut(track) {
         for clip in &mut t.clips {
-            if clip.start == place.start
-                && matches!(clip.content, ClipContent::Pattern { pattern: p, .. } if p == pattern)
+            if let ClipContent::Pattern { pattern: p, offset } = clip.content
+                && p == pattern
+                && clip.length == old_length - offset
             {
-                clip.length = length;
+                clip.length = length + place.offset - offset;
             }
         }
     }
-    if let Some(region) = project.loop_region
+    let followed = place.length == old_length - place.offset;
+    if followed
+        && let Some(region) = project.loop_region
         && region.start == place.start
         && region.end == old_end
     {

@@ -1,21 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The main window (decision 0011): the transport bar on top, the location
-//! line, the piano roll as the one large focus surface, and the play
-//! surface at the bottom. Routes the keyboard: note keys to the session,
-//! shortcuts to commands. Shows the menus and dialogs.
+//! The main window (decisions 0011 and 0014): the transport bar on top, the
+//! location line, one large focus surface (the song, the step grid or the
+//! piano roll), and the bottom area (the keyboard or the mixer). Routes the
+//! keyboard: note keys to the session, shortcuts to commands. Shows the
+//! menus, dialogs and effect windows.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
-use daw_model::{Note, Project};
+use daw_model::{EffectId, Note, PatternId, Project, TrackId};
 use egui::{Button, Event, Key, Modal, Panel, RichText, ThemePreference, Ui, ViewportCommand};
 
+use crate::effect_ui::EffectWindows;
+use crate::export::ExportFormat;
 use crate::keyboard_panel::{self, KeyboardPanel};
 use crate::keys::{BindError, Command, KeyLabels, Keymap, LayoutFamily, Shortcut, note_offset};
+use crate::mixer::{MIXER_HEIGHT, MixerPanel};
 use crate::piano_roll::PianoRoll;
-use crate::session::Session;
+use crate::session::{Session, View};
 use crate::settings::{LabelChoice, Settings, ThemeChoice};
+use crate::song_view::SongView;
+use crate::step_grid::StepGrid;
 use crate::text;
 use crate::theme::{self, Palette};
 use crate::transport;
@@ -26,6 +32,27 @@ pub trait Host {
     fn choose_file_to_open(&mut self) -> Option<PathBuf>;
     /// Asks the person where to save the song.
     fn choose_file_to_save(&mut self, suggested_name: &str) -> Option<PathBuf>;
+    /// Asks the person where to export the song as a WAV file.
+    fn choose_export_file(&mut self, suggested_name: &str) -> Option<PathBuf>;
+}
+
+/// Something a part of the window asks the window to do (open a dialog or
+/// a window), collected during a frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Intent {
+    /// Ask for a track's new name.
+    RenameTrack(TrackId),
+    /// Ask for a pattern's new name.
+    RenamePattern(PatternId),
+    /// Open an effect's window.
+    OpenEffect(EffectId),
+}
+
+/// What a rename dialog renames.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Renaming {
+    Track(TrackId),
+    Pattern(PatternId),
 }
 
 /// Something the window asks the program to do.
@@ -59,6 +86,14 @@ enum Dialog {
         capturing: Option<Command>,
         message: Option<String>,
     },
+    Rename {
+        what: Renaming,
+        name: String,
+    },
+    Export {
+        format: ExportFormat,
+    },
+    Exporting,
 }
 
 /// The whole window.
@@ -68,6 +103,10 @@ pub struct Workspace {
     keymap: Keymap,
     labels: KeyLabels,
     roll: PianoRoll,
+    steps: StepGrid,
+    song: SongView,
+    mixer: MixerPanel,
+    effects: EffectWindows,
     keyboard: KeyboardPanel,
     host: Box<dyn Host>,
     dialog: Option<Dialog>,
@@ -102,6 +141,10 @@ impl Workspace {
             keymap,
             labels,
             roll: PianoRoll::default(),
+            steps: StepGrid::default(),
+            song: SongView::default(),
+            mixer: MixerPanel::default(),
+            effects: EffectWindows::default(),
             keyboard: KeyboardPanel::default(),
             host,
             dialog: None,
@@ -158,8 +201,26 @@ impl Workspace {
     pub fn open(&mut self, path: PathBuf) {
         if self.session.open(&path).is_ok() {
             self.settings.remember_file(path);
-            self.roll.refit();
+            self.refit_views();
         }
+    }
+
+    /// Fits every view to the song that has just opened.
+    fn refit_views(&mut self) {
+        self.roll.refit();
+        self.song.refit();
+        self.effects.close_all();
+    }
+
+    /// Whether the person is dragging something in the view on screen.
+    fn is_dragging(&self) -> bool {
+        self.roll.is_dragging() || self.steps.is_dragging() || self.song.is_dragging()
+    }
+
+    /// Abandons a drag in the view on screen. Returns whether there was one.
+    fn cancel_drag(&mut self) -> bool {
+        let s = &mut self.session;
+        self.roll.cancel_drag(s) | self.steps.cancel_drag(s) | self.song.cancel_drag(s)
     }
 
     /// Draws the window and handles its input. Call once per frame.
@@ -188,6 +249,8 @@ impl Workspace {
         let line = egui::Frame::new()
             .fill(p.background)
             .inner_margin(egui::Margin::symmetric(16, 0));
+        let mut intents = Vec::new();
+        let keyboard_shown = self.settings.show_keyboard && !self.settings.show_mixer;
         Panel::top("location")
             .exact_size(44.0)
             .frame(line)
@@ -195,14 +258,17 @@ impl Workspace {
                 transport::location_bar(
                     ui,
                     &mut self.session,
-                    self.settings.show_keyboard,
+                    (keyboard_shown, self.settings.show_mixer),
                     &mut actions,
+                    &mut intents,
                 );
             });
         let bottom = egui::Frame::new()
             .fill(p.surface)
             .inner_margin(egui::Margin::symmetric(12, 0));
-        let height = if self.settings.show_keyboard {
+        let height = if self.settings.show_mixer {
+            36.0 + MIXER_HEIGHT
+        } else if keyboard_shown {
             36.0 + keyboard_panel::KEYS_HEIGHT + 8.0
         } else {
             36.0
@@ -220,7 +286,9 @@ impl Workspace {
                         &mut actions,
                     );
                 });
-                if self.settings.show_keyboard {
+                if self.settings.show_mixer {
+                    self.mixer.ui(ui, &mut self.session, &mut intents);
+                } else if keyboard_shown {
                     self.keyboard.keys(ui, &mut self.session, &self.labels);
                 }
             });
@@ -229,19 +297,29 @@ impl Workspace {
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(p.grid))
-            .show(ui, |ui| {
-                self.roll.ui(ui, &mut self.session);
+            .show(ui, |ui| match self.session.view() {
+                View::Song => self.song.ui(ui, &mut self.session, &mut intents),
+                View::Pattern if self.session.is_drum_track() => {
+                    self.steps.ui(ui, &mut self.session, &self.labels);
+                }
+                View::Pattern => self.roll.ui(ui, &mut self.session),
             });
+        self.effects.ui(&ctx, &mut self.session);
         self.show_dialog(&ctx);
 
+        for intent in intents {
+            self.handle_intent(intent);
+        }
         for command in actions {
             self.run(&ctx, command);
         }
         self.update_title(&ctx);
         if self.session.is_playing()
             || self.session.is_recording()
-            || self.roll.is_dragging()
+            || self.is_dragging()
             || self.session.pointer_note().is_some()
+            || self.session.export_progress().is_some()
+            || (self.settings.show_mixer && self.mixer.is_moving())
         {
             ctx.request_repaint();
         } else {
@@ -375,8 +453,35 @@ impl Workspace {
         });
     }
 
+    /// Something a part of the window asked for.
+    fn handle_intent(&mut self, intent: Intent) {
+        let project = self.session.project();
+        match intent {
+            Intent::RenameTrack(track) => {
+                if let Some(t) = project.track(track) {
+                    self.dialog = Some(Dialog::Rename {
+                        what: Renaming::Track(track),
+                        name: t.name.clone(),
+                    });
+                }
+            }
+            Intent::RenamePattern(pattern) => {
+                if let Some(p) = project.pattern(pattern) {
+                    self.dialog = Some(Dialog::Rename {
+                        what: Renaming::Pattern(pattern),
+                        name: p.name.clone(),
+                    });
+                }
+            }
+            Intent::OpenEffect(id) => self.effects.open(id),
+        }
+    }
+
     /// Runs a command, from a shortcut, a button or the menu.
     pub fn run(&mut self, ctx: &egui::Context, command: Command) {
+        if self.session.view() == View::Song && self.run_in_song(command) {
+            return;
+        }
         let s = &mut self.session;
         match command {
             Command::PlayStop => s.toggle_play(),
@@ -385,12 +490,12 @@ impl Workspace {
             Command::Loop => s.toggle_loop(),
             Command::Metronome => s.toggle_metronome(),
             Command::Undo => {
-                self.roll.cancel_drag(s);
-                s.undo();
+                self.cancel_drag();
+                self.session.undo();
             }
             Command::Redo => {
-                self.roll.cancel_drag(s);
-                s.redo();
+                self.cancel_drag();
+                self.session.redo();
             }
             Command::New => self.ask_then(ctx, Pending::New),
             Command::Open => self.ask_then(ctx, Pending::Open(None)),
@@ -416,8 +521,8 @@ impl Workspace {
             Command::Duplicate => s.duplicate(),
             Command::Delete => s.delete_selected(),
             Command::Deselect => {
-                if !self.roll.cancel_drag(s) {
-                    s.deselect();
+                if !self.cancel_drag() {
+                    self.session.deselect();
                 }
             }
             Command::MoveEarlier => s.nudge(-1),
@@ -430,8 +535,73 @@ impl Workspace {
             Command::KeyboardOctaveDown => s.shift_keyboard_octave(-1),
             Command::ZoomIn => self.roll.zoom(1.25),
             Command::ZoomOut => self.roll.zoom(0.8),
-            Command::ToggleKeyboard => self.settings.show_keyboard = !self.settings.show_keyboard,
+            Command::ToggleKeyboard => {
+                if self.settings.show_mixer {
+                    self.settings.show_mixer = false;
+                    self.settings.show_keyboard = true;
+                } else {
+                    self.settings.show_keyboard = !self.settings.show_keyboard;
+                }
+            }
+            Command::ToggleMixer => self.settings.show_mixer = !self.settings.show_mixer,
+            Command::SwitchView => {
+                self.cancel_drag();
+                match self.session.view() {
+                    View::Song => {
+                        let track = self.session.track_id();
+                        self.session.open_track(track);
+                    }
+                    View::Pattern => self.session.show_song(),
+                }
+            }
+            Command::Export => {
+                if self.session.export_progress().is_some() {
+                    self.dialog = Some(Dialog::Exporting);
+                } else {
+                    self.dialog = Some(Dialog::Export {
+                        format: ExportFormat::default(),
+                    });
+                }
+            }
         }
+    }
+
+    /// Commands that mean something else in the song view: they act on the
+    /// selected clip. Returns whether the command was handled here.
+    fn run_in_song(&mut self, command: Command) -> bool {
+        let s = &mut self.session;
+        let clip = s.selected_clip();
+        match command {
+            Command::Delete => {
+                if let Some(clip) = clip {
+                    s.remove_clip(clip);
+                }
+            }
+            Command::Duplicate => {
+                if let Some(clip) = clip {
+                    s.duplicate_clip(clip);
+                }
+            }
+            Command::MoveEarlier => s.nudge_clip(-1),
+            Command::MoveLater => s.nudge_clip(1),
+            Command::Deselect => {
+                if !self.song.cancel_drag(s) {
+                    s.select_clip(None);
+                }
+            }
+            Command::ZoomIn => self.song.zoom(1.25),
+            Command::ZoomOut => self.song.zoom(0.8),
+            Command::SelectAll
+            | Command::Copy
+            | Command::Cut
+            | Command::Paste
+            | Command::TransposeUp
+            | Command::TransposeDown
+            | Command::OctaveUp
+            | Command::OctaveDown => {}
+            _ => return false,
+        }
+        true
     }
 
     /// Saves; asks where if the song has no file yet (or `choose` is set).
@@ -469,7 +639,7 @@ impl Workspace {
 
     /// Does `then` now, or first asks about unsaved changes.
     fn ask_then(&mut self, ctx: &egui::Context, then: Pending) {
-        self.roll.cancel_drag(&mut self.session);
+        self.cancel_drag();
         if self.session.is_dirty() {
             self.dialog = Some(Dialog::Unsaved(then));
         } else {
@@ -481,7 +651,7 @@ impl Workspace {
         match pending {
             Pending::New => {
                 self.session.new_song();
-                self.roll.refit();
+                self.refit_views();
             }
             Pending::Open(path) => {
                 let path = path.or_else(|| self.host.choose_file_to_open());
@@ -519,6 +689,7 @@ impl Workspace {
                 (text::OPEN, Command::Open),
                 (text::SAVE, Command::Save),
                 (text::SAVE_AS, Command::SaveAs),
+                (text::EXPORT, Command::Export),
             ] {
                 if item(ui, label, command, &self.keymap) {
                     actions.push(command);
@@ -603,6 +774,7 @@ impl Workspace {
         }
     }
 
+    #[allow(clippy::too_many_lines, reason = "one place for every dialog")]
     fn show_dialog(&mut self, ctx: &egui::Context) {
         let Some(dialog) = self.dialog.take() else {
             return;
@@ -666,7 +838,7 @@ impl Workspace {
                         keep = false;
                         self.session
                             .replace((*project).clone(), path.clone(), false);
-                        self.roll.refit();
+                        self.refit_views();
                         self.requests.push(Request::RecoveryAccepted);
                     }
                     Some(false) => {
@@ -695,6 +867,108 @@ impl Workspace {
                 let (capturing, message, close) = self.shortcuts_window(ctx, capturing, message);
                 keep = !close;
                 Dialog::Shortcuts { capturing, message }
+            }
+            Dialog::Rename { what, mut name } => {
+                let mut done = None;
+                modal("rename", ctx).show(ctx, |ui| {
+                    ui.set_width(340.0);
+                    ui.heading(text::RENAME);
+                    ui.add_space(8.0);
+                    let field = ui.add(
+                        egui::TextEdit::singleline(&mut name)
+                            .desired_width(300.0)
+                            .hint_text(text::NAME),
+                    );
+                    if !field.has_focus() && !field.lost_focus() {
+                        field.request_focus();
+                    }
+                    if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                        done = Some(true);
+                    }
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if ui.button(text::OK).clicked() {
+                            done = Some(true);
+                        }
+                        if ui.button(text::CANCEL).clicked() {
+                            done = Some(false);
+                        }
+                    });
+                });
+                if let Some(accepted) = done {
+                    keep = false;
+                    if accepted {
+                        match what {
+                            Renaming::Track(track) => self.session.rename_track(track, &name),
+                            Renaming::Pattern(pattern) => {
+                                self.session.rename_pattern(pattern, &name);
+                            }
+                        }
+                    }
+                }
+                Dialog::Rename { what, name }
+            }
+            Dialog::Export { mut format } => {
+                let mut choice = None;
+                modal("export", ctx).show(ctx, |ui| {
+                    ui.set_width(420.0);
+                    ui.heading(text::EXPORT_TITLE);
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(text::EXPORT_HINT).weak());
+                    ui.add_space(10.0);
+                    for (value, label, hint) in [
+                        (
+                            ExportFormat::Studio,
+                            text::EXPORT_STUDIO,
+                            text::EXPORT_STUDIO_HINT,
+                        ),
+                        (ExportFormat::Cd, text::EXPORT_CD, text::EXPORT_CD_HINT),
+                    ] {
+                        ui.radio_value(&mut format, value, label);
+                        ui.label(RichText::new(hint).small().weak());
+                        ui.add_space(4.0);
+                    }
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button(text::EXPORT_BUTTON).clicked() {
+                            choice = Some(true);
+                        }
+                        if ui.button(text::CANCEL).clicked() {
+                            choice = Some(false);
+                        }
+                    });
+                });
+                match choice {
+                    Some(true) => {
+                        keep = false;
+                        let suggested = format!("{}.wav", self.session.display_name());
+                        if let Some(path) = self.host.choose_export_file(&suggested) {
+                            self.session.start_export(&path, format);
+                            self.dialog = Some(Dialog::Exporting);
+                            return;
+                        }
+                    }
+                    Some(false) => keep = false,
+                    None => {}
+                }
+                Dialog::Export { format }
+            }
+            Dialog::Exporting => {
+                let progress = self.session.export_progress();
+                if progress.is_none() {
+                    keep = false;
+                }
+                modal("exporting", ctx).show(ctx, |ui| {
+                    ui.set_width(380.0);
+                    ui.heading(text::EXPORTING);
+                    ui.add_space(10.0);
+                    ui.add(egui::ProgressBar::new(progress.unwrap_or(1.0)).show_percentage());
+                    ui.add_space(10.0);
+                    if ui.button(text::CANCEL).clicked() {
+                        self.session.cancel_export();
+                    }
+                });
+                Dialog::Exporting
             }
         };
         if keep {

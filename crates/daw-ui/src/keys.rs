@@ -272,11 +272,17 @@ pub enum Command {
     ZoomOut,
     /// Show or hide the on-screen keyboard.
     ToggleKeyboard,
+    /// Show or hide the mixer.
+    ToggleMixer,
+    /// Switch between the song and the open pattern.
+    SwitchView,
+    /// Export the song as a WAV file.
+    Export,
 }
 
 impl Command {
     /// Every command, in the order the shortcuts window lists them.
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 32] = [
         Self::PlayStop,
         Self::Record,
         Self::ToStart,
@@ -306,6 +312,9 @@ impl Command {
         Self::ZoomIn,
         Self::ZoomOut,
         Self::ToggleKeyboard,
+        Self::ToggleMixer,
+        Self::SwitchView,
+        Self::Export,
     ];
 
     /// The stable name used in the settings file.
@@ -340,6 +349,9 @@ impl Command {
             Self::ZoomIn => "zoom_in",
             Self::ZoomOut => "zoom_out",
             Self::ToggleKeyboard => "toggle_keyboard",
+            Self::ToggleMixer => "toggle_mixer",
+            Self::SwitchView => "switch_view",
+            Self::Export => "export",
         }
     }
 
@@ -548,6 +560,9 @@ impl Default for Keymap {
             (Command::ZoomIn, S::ctrl(Key::Plus)),
             (Command::ZoomOut, S::ctrl(Key::Minus)),
             (Command::ToggleKeyboard, S::ctrl(Key::K)),
+            (Command::ToggleMixer, S::plain(Key::F9)),
+            (Command::SwitchView, S::plain(Key::F5)),
+            (Command::Export, S::ctrl(Key::E)),
         ];
         Self { bindings }
     }

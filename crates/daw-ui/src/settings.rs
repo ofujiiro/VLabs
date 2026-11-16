@@ -61,6 +61,8 @@ pub struct Settings {
     pub keyboard_velocity: f32,
     /// Whether the on-screen keyboard is shown.
     pub show_keyboard: bool,
+    /// Whether the mixer is shown (in place of the keyboard).
+    pub show_mixer: bool,
     /// How the on-screen keyboard is labelled.
     pub key_labels: LabelChoice,
     /// Shortcuts changed from the defaults (see [`crate::Keymap`]).
@@ -81,6 +83,7 @@ impl Default for Settings {
             keyboard_base: 48,
             keyboard_velocity: 0.8,
             show_keyboard: true,
+            show_mixer: false,
             key_labels: LabelChoice::Automatic,
             shortcuts: BTreeMap::new(),
             recent_files: Vec::new(),

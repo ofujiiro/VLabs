@@ -11,6 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+daw-dsp.workspace = true
 daw-engine.workspace = true
 daw-formats.workspace = true
 daw-ident.workspace = true

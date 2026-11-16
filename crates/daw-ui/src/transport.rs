@@ -2,7 +2,8 @@
 
 //! The bars across the top: the transport (play, stop, record, where the
 //! song is, tempo, time signature, metronome, loop, undo) and the location
-//! line under it (what is being edited, its length, the grid).
+//! line under it (where you are, the way around, and the settings of what
+//! is on screen).
 
 use daw_engine::RecordState;
 use daw_model::{TEMPO_RANGE, Ticks, TimeSignature};
@@ -13,9 +14,10 @@ use egui::{
 
 use crate::icons::{Icon, Look, icon_button};
 use crate::keys::{Command, Keymap};
-use crate::session::{Grid, NOTE_LENGTHS, Session};
+use crate::session::{Grid, NOTE_LENGTHS, Session, View};
 use crate::text;
 use crate::theme::{Palette, size};
+use crate::workspace::Intent;
 
 /// The size of the main transport buttons.
 const BIG: f32 = 40.0;
@@ -68,10 +70,15 @@ pub fn transport_bar(
         }
         metronome_options(ui, session);
         let look = Look::on(session.is_looping());
+        let loop_label = if session.view() == View::Song {
+            text::LOOP_SONG
+        } else {
+            text::LOOP
+        };
         if icon_button(
             ui,
             Icon::Loop,
-            text::LOOP,
+            loop_label,
             &keymap.text(Command::Loop),
             look,
             SMALL,
@@ -257,7 +264,7 @@ fn position_readout(ui: &mut Ui, session: &Session) {
     let p = Palette::of(ui.ctx());
     let (rect, response) = ui.allocate_exact_size(vec2(118.0, BIG + 4.0), Sense::hover());
     let project = session.project();
-    let song_position = session.placement().to_song(session.position());
+    let song_position = session.song_position();
     let (main, small, color) = match session.record_state() {
         RecordState::CountIn(left) => {
             let beat = project.meter.signature_at(song_position).beat_length();
@@ -351,45 +358,245 @@ fn time_signature_button(ui: &mut Ui, session: &mut Session) {
     });
 }
 
-/// The line under the transport: where you are, and the editor's grid.
+/// The line under the transport (decision 0014): where you are, as a
+/// path that is also the way around (song › track › pattern), and the
+/// settings of what is on screen. On the right, the switches for the
+/// bottom of the window: the keyboard or the mixer.
 pub fn location_bar(
     ui: &mut Ui,
     session: &mut Session,
-    keyboard_shown: bool,
+    bottom: (bool, bool),
     actions: &mut Vec<Command>,
+    intents: &mut Vec<Intent>,
 ) {
+    let (keyboard_shown, mixer_shown) = bottom;
     let p = Palette::of(ui.ctx());
     ui.horizontal_centered(|ui| {
-        let pattern_name = session.pattern().name.clone();
-        let place = text::location_prefix(&session.display_name(), session.track_name());
-        ui.label(RichText::new(place).color(p.text_weak));
-        ui.label(RichText::new(pattern_name).heading());
+        ui.spacing_mut().item_spacing.x = 6.0;
+        match session.view() {
+            View::Song => {
+                ui.label(RichText::new(session.display_name()).heading());
+            }
+            View::Pattern => {
+                let song = ui
+                    .add(
+                        Button::new(RichText::new(session.display_name()).color(p.text_weak))
+                            .frame(false),
+                    )
+                    .on_hover_text(text::SHOW_SONG);
+                if song.clicked() {
+                    session.show_song();
+                }
+                ui.label(RichText::new("›").color(p.text_weak));
+                track_menu(ui, session);
+                ui.label(RichText::new("›").color(p.text_weak));
+                pattern_menu(ui, session, intents);
+                if !session.is_placed() {
+                    ui.label(RichText::new(text::NOT_PLACED).small().color(p.selected))
+                        .on_hover_text(text::NOT_PLACED_HINT);
+                }
+            }
+        }
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
+            let mixer_label = if mixer_shown {
+                text::HIDE_MIXER
+            } else {
+                text::SHOW_MIXER
+            };
+            if icon_button(
+                ui,
+                Icon::Mixer,
+                mixer_label,
+                "",
+                Look::on(mixer_shown),
+                30.0,
+            )
+            .clicked()
+            {
+                actions.push(Command::ToggleMixer);
+            }
             let keyboard_label = if keyboard_shown {
                 text::HIDE_KEYBOARD
             } else {
                 text::SHOW_KEYBOARD
             };
-            let look = if keyboard_shown {
-                Look::Active
-            } else {
-                Look::Normal
-            };
-            if icon_button(ui, Icon::Keyboard, keyboard_label, "", look, 30.0).clicked() {
+            if icon_button(
+                ui,
+                Icon::Keyboard,
+                keyboard_label,
+                "",
+                Look::on(keyboard_shown),
+                30.0,
+            )
+            .clicked()
+            {
                 actions.push(Command::ToggleKeyboard);
             }
+            if session.view() == View::Song {
+                return;
+            }
             ui.add_space(12.0);
-            note_length_menu(ui, session);
-            ui.label(RichText::new(text::NOTE_LENGTH).weak());
-            ui.add_space(12.0);
-            grid_menu(ui, session);
-            ui.label(RichText::new(text::SNAP).weak())
-                .on_hover_text(text::SNAP_HINT);
-            ui.add_space(12.0);
-            pattern_length(ui, session);
+            if session.is_drum_track() {
+                pattern_length(ui, session);
+                ui.add_space(12.0);
+                steps_menu(ui, session);
+                ui.label(RichText::new(text::STEPS).weak())
+                    .on_hover_text(text::STEPS_HINT);
+                ui.add_space(12.0);
+                kit_menu(ui, session);
+                ui.label(RichText::new(text::KIT).weak())
+                    .on_hover_text(text::KIT_HINT);
+            } else {
+                note_length_menu(ui, session);
+                ui.label(RichText::new(text::NOTE_LENGTH).weak());
+                ui.add_space(12.0);
+                grid_menu(ui, session);
+                ui.label(RichText::new(text::SNAP).weak())
+                    .on_hover_text(text::SNAP_HINT);
+                ui.add_space(12.0);
+                pattern_length(ui, session);
+            }
         });
+    });
+}
+
+/// A button that opens a menu, with a small arrow.
+fn dropdown(ui: &mut Ui, label: RichText, hint: &str) -> egui::Response {
+    let response = ui
+        .add(
+            Button::new(label)
+                .right_text("    ")
+                .min_size(vec2(0.0, 28.0)),
+        )
+        .on_hover_text(hint);
+    let arrow = egui::Rect::from_center_size(
+        egui::pos2(response.rect.right() - 13.0, response.rect.center().y),
+        vec2(12.0, 12.0),
+    );
+    crate::icons::paint(
+        ui.painter(),
+        Icon::ChevronDown,
+        arrow,
+        Palette::of(ui.ctx()).text_weak,
+    );
+    response
+}
+
+/// The track in the path: a menu of every track, to open another.
+fn track_menu(ui: &mut Ui, session: &mut Session) {
+    let name = RichText::new(session.track_name()).size(size::HEADING);
+    let response = dropdown(ui, name, text::OPEN_TRACK_HINT);
+    Popup::menu(&response).show(|ui| {
+        ui.set_min_width(200.0);
+        let tracks: Vec<_> = session
+            .project()
+            .tracks
+            .iter()
+            .map(|t| (t.id, t.name.clone()))
+            .collect();
+        for (track, name) in tracks {
+            if ui
+                .selectable_label(track == session.track_id(), name)
+                .clicked()
+            {
+                session.open_track(track);
+                ui.close();
+            }
+        }
+    });
+}
+
+/// The pattern in the path: a menu to switch, add, copy, rename or delete.
+fn pattern_menu(ui: &mut Ui, session: &mut Session, intents: &mut Vec<Intent>) {
+    let name = RichText::new(session.pattern().name.clone()).heading();
+    let response = dropdown(ui, name, text::PATTERN_MENU_HINT);
+    Popup::menu(&response).show(|ui| {
+        ui.set_min_width(220.0);
+        let track = session.track_id();
+        let patterns: Vec<_> = session
+            .project()
+            .track_patterns(track)
+            .map(|p| (p.id, p.name.clone()))
+            .collect();
+        for (pattern, name) in patterns {
+            if ui
+                .selectable_label(pattern == session.pattern_id(), name)
+                .clicked()
+            {
+                session.open_pattern(track, pattern);
+                ui.close();
+            }
+        }
+        ui.separator();
+        if ui.button(text::NEW_PATTERN).clicked() {
+            session.new_pattern();
+            ui.close();
+        }
+        if ui.button(text::DUPLICATE_PATTERN).clicked() {
+            session.duplicate_pattern();
+            ui.close();
+        }
+        if ui.button(text::RENAME_PATTERN).clicked() {
+            intents.push(Intent::RenamePattern(session.pattern_id()));
+            ui.close();
+        }
+        if ui.button(text::DELETE_PATTERN).clicked() {
+            let pattern = session.pattern_id();
+            session.remove_pattern(pattern);
+            ui.close();
+        }
+    });
+}
+
+/// Kits offered on drum tracks.
+const KITS: [&str; 2] = [daw_model::ACOUSTIC_KIT, daw_model::ELECTRONIC_KIT];
+
+fn kit_menu(ui: &mut Ui, session: &mut Session) {
+    let track = session.track_id();
+    let current = session
+        .kit(track)
+        .unwrap_or(daw_model::ACOUSTIC_KIT)
+        .to_owned();
+    let response = dropdown(ui, RichText::new(text::kit_name(&current)), text::KIT_HINT);
+    Popup::menu(&response).show(|ui| {
+        for kit in KITS {
+            if ui
+                .selectable_label(current == kit, text::kit_name(kit))
+                .clicked()
+            {
+                session.set_kit(track, kit);
+                ui.close();
+            }
+        }
+    });
+}
+
+/// Step sizes offered for the step grid: 1/`n` of a whole note.
+const STEP_SIZES: [i64; 5] = [8, 16, 32, 12, 24];
+
+fn steps_menu(ui: &mut Ui, session: &mut Session) {
+    let current = session.step();
+    let name = STEP_SIZES
+        .iter()
+        .find(|&&n| Ticks::note_value(1, n) == current)
+        .map_or_else(
+            || text::CUSTOM_LENGTH.to_owned(),
+            |&n| text::note_value_name(n),
+        );
+    let response = dropdown(ui, RichText::new(name), text::STEPS_HINT);
+    Popup::menu(&response).show(|ui| {
+        for n in STEP_SIZES {
+            let step = Ticks::note_value(1, n);
+            if ui
+                .selectable_label(current == step, text::note_value_name(n))
+                .clicked()
+            {
+                session.set_step(step);
+                ui.close();
+            }
+        }
     });
 }
 

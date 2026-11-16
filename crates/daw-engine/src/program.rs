@@ -15,15 +15,23 @@ use std::sync::Arc;
 /// What the transport plays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlaybackScope {
-    /// The whole song, as arranged on the timeline.
+    /// The whole song, as arranged on the timeline, looping the song's own
+    /// loop region if it has one.
     Song,
-    /// One pattern on its own, looping from its start (the other tracks are
-    /// silent but can still be played live).
+    /// The song, looping one region instead of the song's own loop: for
+    /// working on a pattern with the rest of the song around it.
+    Looping(Region),
+    /// The song, never looping (it plays on until stopped).
+    Unlooped,
+    /// One pattern on its own from its start, looping or not (the other
+    /// tracks are silent but can still be played live).
     Pattern {
         /// The pattern's track.
         track: TrackId,
         /// The pattern.
         pattern: PatternId,
+        /// Whether it plays again from its start when it ends.
+        looping: bool,
     },
 }
 
@@ -120,10 +128,25 @@ pub(crate) struct Program {
 }
 
 /// The project as the scope plays it: for a pattern, the pattern alone,
-/// placed at the start of its track and looping.
+/// placed at the start of its track.
 pub(crate) fn scoped(project: &Project, scope: PlaybackScope) -> std::borrow::Cow<'_, Project> {
-    let PlaybackScope::Pattern { track, pattern } = scope else {
-        return std::borrow::Cow::Borrowed(project);
+    let (track, pattern, looping) = match scope {
+        PlaybackScope::Song => return std::borrow::Cow::Borrowed(project),
+        PlaybackScope::Looping(region) => {
+            let mut view = project.clone();
+            view.loop_region = Some(region);
+            return std::borrow::Cow::Owned(view);
+        }
+        PlaybackScope::Unlooped => {
+            let mut view = project.clone();
+            view.loop_region = None;
+            return std::borrow::Cow::Owned(view);
+        }
+        PlaybackScope::Pattern {
+            track,
+            pattern,
+            looping,
+        } => (track, pattern, looping),
     };
     let Some(length) = project.pattern(pattern).map(|p| p.length) else {
         return std::borrow::Cow::Borrowed(project);
@@ -144,7 +167,11 @@ pub(crate) fn scoped(project: &Project, scope: PlaybackScope) -> std::borrow::Co
             });
         }
     }
-    view.loop_region = Region::new(Ticks::ZERO, length);
+    view.loop_region = if looping {
+        Region::new(Ticks::ZERO, length)
+    } else {
+        None
+    };
     std::borrow::Cow::Owned(view)
 }
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The desktop's own open and save dialogs.
+//! The desktop's own open, save and export dialogs.
 
 use std::path::{Path, PathBuf};
 
@@ -42,6 +42,19 @@ impl Host for DialogHost {
             .set_title(text::SAVE_TITLE)
             .set_file_name(suggested_name)
             .save_file();
+        self.remember(path.as_deref());
+        path
+    }
+
+    fn choose_export_file(&mut self, suggested_name: &str) -> Option<PathBuf> {
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter(text::EXPORT_FILE_TYPE, &["wav"])
+            .set_title(text::EXPORT_TITLE)
+            .set_file_name(suggested_name);
+        if let Some(folder) = &self.folder {
+            dialog = dialog.set_directory(folder);
+        }
+        let path = dialog.save_file();
         self.remember(path.as_deref());
         path
     }

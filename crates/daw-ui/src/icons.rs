@@ -36,6 +36,8 @@ pub enum Icon {
     Menu,
     /// A few piano keys.
     Keyboard,
+    /// Three faders.
+    Mixer,
     /// A plus sign.
     Plus,
     /// A minus sign.
@@ -156,6 +158,20 @@ pub fn paint(painter: &Painter, icon: Icon, rect: Rect, color: Color32) {
                 let key =
                     Rect::from_center_size(pos2(x, body.top() + h * 0.3), vec2(w * 0.11, h * 0.6));
                 painter.rect_filled(key, CornerRadius::ZERO, color);
+            }
+        }
+        Icon::Mixer => {
+            let h = s * 0.56;
+            let line = Stroke::new(stroke.width * 0.7, color);
+            for (column, knob) in [(-1.0, 0.25), (0.0, -0.2), (1.0, 0.1)] {
+                let x = c.x + column * s * 0.22;
+                painter.line_segment([pos2(x, c.y - h / 2.0), pos2(x, c.y + h / 2.0)], line);
+                let y = c.y + knob * h;
+                painter.rect_filled(
+                    Rect::from_center_size(pos2(x, y), vec2(s * 0.17, s * 0.11)),
+                    CornerRadius::same(1),
+                    color,
+                );
             }
         }
         Icon::Plus | Icon::Minus => {

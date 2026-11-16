@@ -1145,7 +1145,7 @@ impl PianoRoll {
         painter.rect_filled(ruler, CornerRadius::ZERO, p.surface);
         let grid = layout.grid;
         let meter = &session.project().meter;
-        if let Some(region) = session.project().loop_region {
+        if let Some(region) = session.loop_in_play() {
             let placement = session.placement();
             let x0 = self.tick_to_x(grid, placement.to_pattern(region.start));
             let x1 = self.tick_to_x(grid, placement.to_pattern(region.end));

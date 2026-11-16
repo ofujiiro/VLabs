@@ -27,6 +27,7 @@ use egui_kittest::kittest::Queryable;
 #[derive(Clone, Default)]
 struct FakeHost {
     save_to: Arc<Mutex<Option<PathBuf>>>,
+    export_to: Arc<Mutex<Option<PathBuf>>>,
     asked: Arc<Mutex<u32>>,
 }
 
@@ -40,6 +41,11 @@ impl Host for FakeHost {
         *self.asked.lock().unwrap() += 1;
         self.save_to.lock().unwrap().clone()
     }
+
+    fn choose_export_file(&mut self, _suggested_name: &str) -> Option<PathBuf> {
+        *self.asked.lock().unwrap() += 1;
+        self.export_to.lock().unwrap().clone()
+    }
 }
 
 struct Fixture {
@@ -48,7 +54,24 @@ struct Fixture {
     host: FakeHost,
 }
 
+/// A new song, open on its piano pattern (the phase 1 tests work there).
 fn fixture() -> Fixture {
+    let mut f = new_song();
+    let session = f.harness.state_mut().as_mut().unwrap().session_mut();
+    let piano = session
+        .project()
+        .tracks
+        .iter()
+        .find(|t| !t.instrument.is_drums())
+        .unwrap()
+        .id;
+    session.open_track(piano);
+    f.harness.run_steps(3);
+    f
+}
+
+/// A new song as a new user sees it: open on the empty beat.
+fn new_song() -> Fixture {
     let mut harness = Harness::builder()
         .with_size(vec2(1280.0, 800.0))
         .build_ui_state(

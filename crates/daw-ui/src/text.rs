@@ -136,6 +136,9 @@ pub fn command_name(command: crate::keys::Command) -> &'static str {
         C::ZoomIn => "Zoom in",
         C::ZoomOut => "Zoom out",
         C::ToggleKeyboard => "Show or hide the keyboard",
+        C::ToggleMixer => "Show or hide the mixer",
+        C::SwitchView => "Switch between the song and the pattern",
+        C::Export => "Export as WAV",
     }
 }
 pub const ABOUT: &str = "About";
@@ -383,7 +386,7 @@ pub const DISCARD_RECOVERY: &str = "Start fresh";
 
 pub fn about() -> String {
     format!(
-        "{} {}\nAn easy, open-source music workstation.\nLicensed under the GNU GPL, version 3 or later.\nPiano: Osiris Piano by Versilian Studios and Karoryfer Samples (CC0).\nFonts: the Go fonts by Bigelow & Holmes (BSD licence).",
+        "{} {}\nAn easy, open-source music workstation.\nLicensed under the GNU GPL, version 3 or later.\nPiano: Osiris Piano by Versilian Studios and Karoryfer Samples (CC0).\nDrums: Big Rusty Drums by Karoryfer Samples (CC0).\nFonts: the Go fonts by Bigelow & Holmes (BSD licence).",
         daw_ident::PRODUCT_NAME,
         env!("CARGO_PKG_VERSION")
     )
@@ -392,4 +395,357 @@ pub fn about() -> String {
 /// The name of the project file type in open and save dialogs.
 pub fn file_type_name() -> String {
     format!("{} song", daw_ident::PRODUCT_NAME)
+}
+
+// ----- Phase 2: drums, the song, the mixer, effects, export
+
+/// The drum track of a new song.
+pub const DRUMS_TRACK: &str = "Drums";
+/// The first drum pattern of a new song.
+pub const FIRST_BEAT: &str = "Beat 1";
+
+/// "Beat 2": a drum pattern's default name.
+pub fn beat_name(number: u32) -> String {
+    format!("Beat {number}")
+}
+
+/// "Pattern 2": a pattern's default name.
+pub fn pattern_name(number: u32) -> String {
+    format!("Pattern {number}")
+}
+
+/// "Piano 2": a name made unique with a number.
+pub fn numbered(base: &str, number: u32) -> String {
+    format!("{base} {number}")
+}
+
+// Undo-step names.
+pub const EDIT_ADD_TRACK: &str = "add track";
+pub const EDIT_RENAME_TRACK: &str = "rename track";
+pub const EDIT_REMOVE_TRACK: &str = "delete track";
+pub const EDIT_MOVE_TRACK: &str = "move track";
+pub const EDIT_KIT: &str = "change kit";
+pub const EDIT_NEW_PATTERN: &str = "new pattern";
+pub const EDIT_DUPLICATE_PATTERN: &str = "duplicate pattern";
+pub const EDIT_RENAME_PATTERN: &str = "rename pattern";
+pub const EDIT_REMOVE_PATTERN: &str = "delete pattern";
+pub const EDIT_STEPS: &str = "change step size";
+pub const EDIT_ADD_HIT: &str = "add drum hit";
+pub const EDIT_REMOVE_HIT: &str = "remove drum hits";
+pub const EDIT_PAINT_HITS: &str = "draw drum hits";
+pub const EDIT_PLACE_PATTERN: &str = "place pattern";
+pub const EDIT_MOVE_CLIP: &str = "move clip";
+pub const EDIT_RESIZE_CLIP: &str = "change clip length";
+pub const EDIT_REMOVE_CLIP: &str = "remove clip";
+pub const EDIT_DUPLICATE_CLIP: &str = "duplicate clip";
+pub const EDIT_VOLUME: &str = "change volume";
+pub const EDIT_PAN: &str = "change pan";
+pub const EDIT_MUTE: &str = "mute track";
+pub const EDIT_SOLO: &str = "solo track";
+pub const EDIT_MASTER_VOLUME: &str = "change master volume";
+pub const EDIT_ADD_EFFECT: &str = "add effect";
+pub const EDIT_REMOVE_EFFECT: &str = "remove effect";
+pub const EDIT_MOVE_EFFECT: &str = "move effect";
+pub const EDIT_EFFECT_ON: &str = "switch effect on";
+pub const EDIT_EFFECT_OFF: &str = "bypass effect";
+pub const EDIT_CHANGE_EFFECT: &str = "change effect";
+pub const EDIT_PAD: &str = "change drum sound";
+
+// The location line.
+pub const SONG: &str = "Song";
+pub const SHOW_SONG: &str = "Show the whole song";
+pub const OPEN_TRACK_HINT: &str = "Open another track";
+pub const PATTERN_MENU_HINT: &str = "Choose, add, copy or rename patterns";
+pub const NEW_PATTERN: &str = "New pattern";
+pub const DUPLICATE_PATTERN: &str = "Duplicate this pattern";
+pub const RENAME_PATTERN: &str = "Rename…";
+pub const DELETE_PATTERN: &str = "Delete this pattern";
+pub const NOT_PLACED: &str = "Not in the song yet";
+pub const NOT_PLACED_HINT: &str =
+    "This pattern plays on its own. In the song view, click on its track to place it.";
+pub const RENAME: &str = "Rename";
+pub const NAME: &str = "Name";
+pub const OK: &str = "OK";
+pub const KIT: &str = "Kit";
+pub const KIT_HINT: &str = "Which drum kit this track plays";
+pub const STEPS: &str = "Steps";
+pub const STEPS_HINT: &str = "How long each square of the step grid is";
+pub const LOOP_SONG: &str = "Loop the song (drag along the ruler to loop a part)";
+pub const SONG_ZOOM_HINT: &str = "Ctrl + mouse wheel zooms";
+
+/// A bundled kit's name.
+pub fn kit_name(kit: &str) -> &str {
+    match kit {
+        daw_model::ACOUSTIC_KIT => "Acoustic",
+        daw_model::ELECTRONIC_KIT => "Electronic",
+        other => other,
+    }
+}
+
+// The step sequencer.
+pub const STEP_GRID: &str = "Step sequencer";
+pub const LOUDNESS: &str = "Loudness";
+pub const LOUDNESS_HINT: &str =
+    "How hard each hit of the chosen sound plays. Drag a bar up or down.";
+pub const PAD_HINT: &str = "Click to hear it and change its sound";
+pub const EMPTY_BEAT_HINT: &str = "Click the squares to make a beat — press Space to hear it";
+
+/// The second line of the empty step grid's hint, with the computer keys
+/// that play the kick, the snare and the hi-hat.
+pub fn beat_keys_hint(kick: &str, snare: &str, hat: &str) -> String {
+    format!(
+        "Or play the drums on the computer keyboard: {kick} is the kick, {snare} the snare, {hat} the hi-hat"
+    )
+}
+
+/// A square of the step grid, for screen readers: "Kick, step 3".
+pub fn step_cell(sound: &str, step: usize) -> String {
+    format!("{sound}, step {step}")
+}
+pub const PAD_VOLUME: &str = "Volume";
+pub const PAD_PAN: &str = "Pan";
+pub const PAD_TUNE: &str = "Tune";
+pub const PAD_LENGTH: &str = "Length";
+pub const PAD_MUTED: &str = "Silence this sound";
+pub const RESET_SOUND: &str = "Reset";
+pub const HITS_OUTSIDE: &str = "Some notes of this pattern are not drum sounds and are not shown.";
+
+/// The name of a drum sound.
+pub fn pad_name(sound: daw_dsp::drums::PadSound) -> &'static str {
+    use daw_dsp::drums::PadSound as P;
+    match sound {
+        P::Kick => "Kick",
+        P::Snare => "Snare",
+        P::Clap => "Clap",
+        P::ClosedHat => "Closed hi-hat",
+        P::PedalHat => "Pedal hi-hat",
+        P::OpenHat => "Open hi-hat",
+        P::Rimshot => "Rimshot",
+        P::SideStick => "Side stick",
+        P::LowTom => "Low tom",
+        P::MidTom => "Mid tom",
+        P::HighTom => "High tom",
+        P::Crash => "Crash",
+        P::Ride => "Ride",
+        P::RideBell => "Ride bell",
+        P::Cowbell => "Cowbell",
+    }
+}
+
+// The song view.
+pub const SONG_VIEW: &str = "Song timeline";
+pub const TRACKS: &str = "Tracks";
+
+/// What a drum track plays, under its name: "Acoustic kit".
+pub fn kit_description(kit: &str) -> String {
+    format!("{kit} kit")
+}
+pub const ADD_DRUMS: &str = "Drums";
+pub const ADD_DRUMS_HINT: &str = "Add a drum track";
+pub const ADD_PIANO: &str = "Piano";
+pub const ADD_PIANO_HINT: &str = "Add a piano track";
+pub const ADD_TRACK: &str = "Add a track:";
+pub const MUTE: &str = "Mute";
+pub const SOLO: &str = "Solo";
+pub const MUTE_SHORT: &str = "M";
+pub const SOLO_SHORT: &str = "S";
+pub const MUTE_HINT: &str = "Silence this track";
+pub const SOLO_HINT: &str = "Hear this track alone";
+pub const TRACK_MENU: &str = "Track options";
+pub const MOVE_UP: &str = "Move up";
+pub const MOVE_DOWN: &str = "Move down";
+pub const DELETE_TRACK: &str = "Delete track";
+pub const OPEN_PATTERN: &str = "Open";
+pub const DUPLICATE_CLIP: &str = "Duplicate";
+pub const REMOVE_CLIP: &str = "Remove from the song";
+pub const SONG_HINT: &str = "Click on a track to place its pattern · drag to move · drag the end to repeat · double-click to open";
+
+// The mixer.
+pub const MIXER: &str = "Mixer";
+pub const SHOW_MIXER: &str = "Show the mixer";
+pub const HIDE_MIXER: &str = "Hide the mixer";
+pub const MASTER: &str = "Master";
+pub const VOLUME: &str = "Volume";
+pub const PAN: &str = "Pan";
+pub const PAN_HINT: &str = "Where the track sits, from left to right. Double-click for the middle.";
+pub const VOLUME_HINT: &str = "Double-click for 0 dB";
+pub const ADD_EFFECT: &str = "Add effect";
+pub const EFFECTS: &str = "Effects";
+pub const NO_EFFECTS: &str = "No effects";
+pub const EFFECT_HINT: &str = "Click to adjust · right-click for more";
+pub const EFFECT_ON: &str = "On";
+pub const REMOVE_EFFECT: &str = "Remove";
+pub const MOVE_EARLIER: &str = "Move up the chain";
+pub const MOVE_LATER: &str = "Move down the chain";
+pub const LEVEL: &str = "Level";
+
+/// The name of an effect.
+pub fn effect_name(kind: &daw_model::EffectKind) -> &'static str {
+    use daw_model::EffectKind as K;
+    match kind {
+        K::Eq(_) => "EQ",
+        K::Compressor(_) => "Compressor",
+        K::Reverb(_) => "Reverb",
+        K::Delay(_) => "Delay",
+        K::Limiter(_) => "Limiter",
+    }
+}
+
+/// What an effect does, in a few words.
+pub fn effect_description(kind: &daw_model::EffectKind) -> &'static str {
+    use daw_model::EffectKind as K;
+    match kind {
+        K::Eq(_) => "Shape the tone: more or less bass, middle and treble",
+        K::Compressor(_) => "Even out the loudness: quiet parts up, loud parts down",
+        K::Reverb(_) => "Put the sound in a room",
+        K::Delay(_) => "Echoes in time with the song",
+        K::Limiter(_) => "Keep peaks from distorting, and make it louder",
+    }
+}
+
+/// An effect window's title.
+pub fn effect_title(effect: &str, place: &str) -> String {
+    format!("{effect} — {place}")
+}
+
+// Effect controls.
+pub const LOW_CUT: &str = "Low cut";
+pub const HIGH_CUT: &str = "High cut";
+pub const LOW: &str = "Bass";
+pub const MID: &str = "Middle";
+pub const HIGH: &str = "Treble";
+pub const FREQUENCY: &str = "Frequency";
+pub const GAIN: &str = "Gain";
+pub const WIDTH_Q: &str = "Width";
+pub const THRESHOLD: &str = "Threshold";
+pub const RATIO: &str = "Ratio";
+pub const ATTACK: &str = "Attack";
+pub const RELEASE: &str = "Release";
+pub const KNEE: &str = "Softness";
+pub const MAKEUP: &str = "Make-up gain";
+pub const ROOM_SIZE: &str = "Room size";
+pub const DAMPING: &str = "Damping";
+pub const STEREO_WIDTH: &str = "Width";
+pub const AMOUNT: &str = "Amount";
+pub const PRE_DELAY: &str = "Pre-delay";
+pub const TIME: &str = "Time";
+pub const IN_TIME: &str = "In time with the song";
+pub const REPEATS: &str = "Repeats";
+pub const TONE: &str = "Tone";
+pub const PING_PONG: &str = "Bounce left and right";
+pub const CEILING: &str = "Ceiling";
+pub const DRIVE: &str = "Loudness";
+pub const EQ_CURVE: &str = "EQ curve";
+pub const THRESHOLD_HINT: &str = "Sound louder than this is turned down";
+pub const RATIO_HINT: &str =
+    "How strongly: 4:1 lets 1 dB through for every 4 dB above the threshold";
+pub const DAMPING_HINT: &str = "Higher makes the room sound darker";
+pub const CEILING_HINT: &str = "The output never goes above this";
+pub const DRIVE_HINT: &str = "Turns the sound up into the limiter";
+pub const REPEATS_HINT: &str = "How much of each echo comes back again";
+pub const TONE_HINT: &str = "Lower makes the echoes darker";
+
+/// Decibels: "-3.0 dB", "+6.0 dB".
+pub fn db(value: f32) -> String {
+    if value <= -60.0 {
+        "−∞ dB".to_owned()
+    } else if value > 0.04 {
+        format!("+{value:.1} dB")
+    } else {
+        format!("{value:.1} dB")
+    }
+}
+
+/// A frequency: "80 Hz", "1.2 kHz".
+pub fn hz(value: f32) -> String {
+    if value >= 1000.0 {
+        format!("{:.1} kHz", value / 1000.0)
+    } else {
+        format!("{value:.0} Hz")
+    }
+}
+
+/// Milliseconds: "12 ms".
+pub fn ms(value: f32) -> String {
+    if value < 10.0 {
+        format!("{value:.1} ms")
+    } else {
+        format!("{value:.0} ms")
+    }
+}
+
+/// A share as a percentage: "35%".
+pub fn percent(value: f32) -> String {
+    format!("{:.0}%", value * 100.0)
+}
+
+/// A compression ratio: "4:1".
+pub fn ratio(value: f32) -> String {
+    if value >= 19.95 {
+        "∞:1".to_owned()
+    } else {
+        format!("{value:.1}:1")
+    }
+}
+
+/// A pan position: "L 30", "Centre", "R 30".
+pub fn pan(value: f32) -> String {
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "a percentage from -100 to 100"
+    )]
+    let amount = (value * 100.0).round() as i32;
+    match amount {
+        0 => "Centre".to_owned(),
+        a if a < 0 => format!("L {}", -a),
+        a => format!("R {a}"),
+    }
+}
+
+/// A tuning in semitones: "+2 st".
+pub fn semitones(value: f32) -> String {
+    if value.abs() < 0.05 {
+        "0 st".to_owned()
+    } else if value > 0.0 {
+        format!("+{value:.1} st")
+    } else {
+        format!("{value:.1} st")
+    }
+}
+
+/// A Q value as a width.
+pub fn q(value: f32) -> String {
+    format!("Q {value:.2}")
+}
+
+/// Seconds: "1.25 s".
+pub fn seconds(value: f32) -> String {
+    format!("{value:.2} s")
+}
+
+/// A multiple: "×1.5".
+pub fn times(value: f32) -> String {
+    format!("×{value:.2}")
+}
+
+// Export.
+pub const EXPORT: &str = "Export as WAV…";
+pub const EXPORT_TITLE: &str = "Export the song";
+pub const EXPORT_HINT: &str =
+    "The whole song is written to a WAV file, with its echoes and reverb fading out at the end.";
+pub const EXPORT_CD: &str = "CD quality";
+pub const EXPORT_CD_HINT: &str = "16-bit, 44.1 kHz — plays everywhere";
+pub const EXPORT_STUDIO: &str = "Studio quality";
+pub const EXPORT_STUDIO_HINT: &str = "24-bit, 48 kHz — for further work";
+pub const EXPORT_BUTTON: &str = "Choose where and export…";
+pub const EXPORTING: &str = "Exporting the song…";
+pub const EXPORT_CANCELLED: &str = "Export cancelled";
+pub const EXPORT_FILE_TYPE: &str = "WAV sound file";
+
+pub fn exported(path: &str) -> String {
+    format!("Exported {path}")
+}
+
+pub fn could_not_export(error: &str) -> String {
+    format!("Could not export the song: {error}")
 }

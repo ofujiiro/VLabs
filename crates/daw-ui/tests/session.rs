@@ -16,23 +16,44 @@
 
 use std::path::PathBuf;
 
-use daw_engine::{Engine, EngineConfig, EngineProcessor, SoundLibrary};
-use daw_model::{Ticks, TimeSignature};
+use daw_engine::{Engine, EngineConfig, EngineProcessor, PlaybackScope, SoundLibrary};
+use daw_model::{Region, Ticks, TimeSignature, TrackId};
 use daw_ui::session::Grid;
-use daw_ui::{Session, text};
+use daw_ui::{Session, View, text};
 use egui::Key;
 
 /// Frames per simulated audio block.
 const BLOCK: usize = 256;
 
+/// A new song, open on its piano pattern (the phase 1 tests work there).
 fn session() -> (Session, EngineProcessor) {
-    // No piano is registered, so tracks play a sine synth: quick to build
-    // and still audible.
+    let (mut session, processor) = new_song();
+    let piano = piano_track(&session);
+    session.open_track(piano);
+    session.update();
+    (session, processor)
+}
+
+/// A new song as a new user sees it: open on the empty beat.
+fn new_song() -> (Session, EngineProcessor) {
+    // No piano is registered, so the piano plays a sine synth: quick to
+    // build and still audible. Drums fall back to the electronic kit.
     let (engine, processor) = Engine::new(EngineConfig::default(), SoundLibrary::new());
     let mut session = Session::starter(engine);
     session.update();
     (session, processor)
 }
+
+fn piano_track(session: &Session) -> TrackId {
+    session
+        .project()
+        .tracks
+        .iter()
+        .find(|t| !t.instrument.is_drums())
+        .unwrap()
+        .id
+}
+
 
 /// Lets `seconds` of audio pass, updating the session between blocks the
 /// way the interface does between frames.
@@ -147,8 +168,12 @@ fn the_pattern_grows_for_notes_past_its_end() {
     assert_eq!(s.pattern_bars(), 6);
     let placement = s.placement();
     assert_eq!(placement.length, Ticks::WHOLE * 6);
-    let region = s.project().loop_region.expect("still looping");
-    assert_eq!(region.end, Ticks::WHOLE * 6, "the loop follows the pattern");
+    assert!(s.is_looping());
+    assert_eq!(
+        s.playback_scope(),
+        PlaybackScope::Looping(Region::new(Ticks::ZERO, Ticks::WHOLE * 6).unwrap()),
+        "the loop follows the pattern"
+    );
     s.undo();
     assert_eq!(s.pattern_bars(), 4, "growing is part of the same undo step");
 }
@@ -337,6 +362,9 @@ fn saving_and_opening_round_trip() {
 
     let (mut other, _processor) = session();
     other.open(&saved).expect("opened");
+    assert_eq!(other.view(), View::Song, "an opened song shows the song");
+    let piano = piano_track(&other);
+    other.open_track(piano);
     assert_eq!(keys(&other), [67]);
     assert!(!other.is_dirty());
     assert!(

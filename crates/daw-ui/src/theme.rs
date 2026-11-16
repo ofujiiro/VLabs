@@ -10,6 +10,23 @@ use egui::{
     Color32, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Theme, Visuals,
 };
 
+/// Colours that tell tracks apart, in order (readable on both themes).
+pub const TRACK_COLORS: [Color32; 8] = [
+    Color32::from_rgb(236, 142, 72),
+    Color32::from_rgb(72, 199, 186),
+    Color32::from_rgb(141, 132, 232),
+    Color32::from_rgb(92, 166, 240),
+    Color32::from_rgb(231, 112, 160),
+    Color32::from_rgb(214, 190, 82),
+    Color32::from_rgb(120, 196, 104),
+    Color32::from_rgb(200, 120, 230),
+];
+
+/// The colour of the track at `index` in the list.
+pub fn track_color(index: usize) -> Color32 {
+    TRACK_COLORS[index % TRACK_COLORS.len()]
+}
+
 /// Named colours. Each theme fills in the same names.
 #[derive(Clone, Copy, Debug)]
 pub struct Palette {

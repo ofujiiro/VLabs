@@ -19,7 +19,7 @@ use daw_engine::{
 };
 use daw_model::{
     BUILTIN_PIANO, ChainPlace, DelaySettings, DelayTime, ELECTRONIC_KIT, EffectKind, Note, NoteId,
-    Project, ReverbSettings, Ticks,
+    Project, Region, ReverbSettings, Ticks,
 };
 
 #[global_allocator]
@@ -176,6 +176,7 @@ fn pad_settings_change_while_the_kit_plays_without_allocating() {
     let scope = PlaybackScope::Pattern {
         track: drums,
         pattern: beat,
+        looping: true,
     };
     engine.sync(&project, 1, scope);
     engine.play();
@@ -241,6 +242,7 @@ fn pattern_mode_plays_one_pattern_in_a_loop() {
         PlaybackScope::Pattern {
             track: piano,
             pattern,
+            looping: true,
         },
     );
     engine.play();
@@ -250,6 +252,72 @@ fn pattern_mode_plays_one_pattern_in_a_loop() {
         peak(&looped[96_000..96_000 + 4800]) > 0.02,
         "and loops after its one bar"
     );
+}
+
+#[test]
+fn the_song_can_loop_another_region_or_not_loop_at_all() {
+    let mut project = song();
+    let (_, pattern) = project.first_pattern().unwrap();
+    project.pattern_mut(pattern).unwrap().length = Ticks::WHOLE * 2;
+    project.update_clip(project.tracks[0].clips[0].id, |c| {
+        c.length = Ticks::WHOLE * 2;
+    });
+    // A second note half-way through bar 2, and the song's own loop on bar 1.
+    let second = Ticks::WHOLE + Ticks::QUARTER * 2;
+    project.add_note(pattern, note(second, Ticks::note_value(1, 32), 69, 0.9));
+    project.loop_region = Region::new(Ticks::ZERO, Ticks::WHOLE);
+    let play = |scope, from: Ticks, frames: usize| {
+        let (mut engine, mut processor) = Engine::new(config(), library());
+        engine.sync(&project, 1, scope);
+        engine.locate(from);
+        engine.play();
+        run(&mut engine, &mut processor, frames)
+    };
+    // At 120 BPM a 4/4 bar lasts two seconds: 96,000 frames.
+    let at_second = 144_000;
+    let song = play(PlaybackScope::Song, Ticks::ZERO, at_second + 4800);
+    assert!(
+        peak(&song[at_second..]) < 1e-4,
+        "the song's own loop never reaches the second note"
+    );
+    let unlooped = play(PlaybackScope::Unlooped, Ticks::ZERO, at_second + 4800);
+    assert!(
+        peak(&unlooped[at_second..]) > 0.02,
+        "without a loop it plays on to it"
+    );
+    let bar_two = Region::new(Ticks::WHOLE, Ticks::WHOLE * 2).unwrap();
+    let looping = play(
+        PlaybackScope::Looping(bar_two),
+        Ticks::WHOLE,
+        144_000 + 4800,
+    );
+    assert!(peak(&looping[48_000..52_800]) > 0.02, "bar 2 plays");
+    assert!(peak(&looping[90_000..140_000]) < 1e-4, "then nothing");
+    assert!(
+        peak(&looping[144_000..]) > 0.02,
+        "and bar 2 again, not bar 1, after the loop"
+    );
+}
+
+#[test]
+fn a_pattern_alone_can_play_once() {
+    let mut project = song();
+    let (piano, pattern) = project.first_pattern().unwrap();
+    project.pattern_mut(pattern).unwrap().length = Ticks::WHOLE;
+    let (mut engine, mut processor) = Engine::new(config(), library());
+    engine.sync(
+        &project,
+        1,
+        PlaybackScope::Pattern {
+            track: piano,
+            pattern,
+            looping: false,
+        },
+    );
+    engine.play();
+    let once = run(&mut engine, &mut processor, 96_000 + 4800);
+    assert!(peak(&once[..4800]) > 0.02, "the pattern plays");
+    assert!(peak(&once[96_000..]) < 1e-4, "and does not start again");
 }
 
 #[test]

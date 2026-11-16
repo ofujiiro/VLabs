@@ -20,6 +20,7 @@ considered instead.
 | [0011](0011-main-window-design.md) | The main window: one focus surface, with context and drawers | Accepted |
 | [0012](0012-interface-drives-the-engine.md) | The interface drives the engine through its control handle | Accepted |
 | [0013](0013-autosave-and-crash-recovery.md) | Autosave and crash recovery | Accepted |
+| [0014](0014-song-patterns-and-mixer-screens.md) | Phase 2 screens: song, step sequencer, mixer | Accepted |
 
 ## Writing a new record
 
