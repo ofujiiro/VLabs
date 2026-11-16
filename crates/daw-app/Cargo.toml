@@ -11,4 +11,22 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+daw-devices.workspace = true
+daw-engine.workspace = true
+daw-formats.workspace = true
 daw-ident.workspace = true
+daw-model.workspace = true
+daw-rt.workspace = true
+daw-ui.workspace = true
+eframe.workspace = true
+egui.workspace = true
+rfd.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The system clipboard, on Linux only (decision 0005).
+eframe = { workspace = true, features = ["clipboard"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_UI_Input_KeyboardAndMouse"] }

@@ -25,8 +25,9 @@ in the layers below it; a test (`xtask/src/rules.rs`) enforces this.
  layer 0   daw-ident (names)     daw-rt (real-time safety tools)
 ```
 
-`daw-ui` and `daw-engine` never see each other. They meet only in
-`daw-app`, through the project model and the engine's message queues.
+`daw-ui` drives the engine through its control handle only (play, stop,
+record, notes, the play position); the processing half belongs to
+`daw-app`, which hands it to the sound output (decision 0012).
 
 ## Threads
 
@@ -35,7 +36,9 @@ in the layers below it; a test (`xtask/src/rules.rs`) enforces this.
 | Interface | The window, drawing, user input, edits to the project | May not block for long: slow work goes to workers |
 | Audio | The sound card's callback: the engine's processing | Real-time: no allocation, locks, files, network or logging |
 | MIDI input | Receives notes from MIDI keyboards | Only timestamps and queues them |
-| Workers *(planned)* | Saving, autosave, loading audio, drawing waveforms | Ordinary threads |
+| Autosave | Writes recovery copies of the song in the background | Ordinary thread |
+| Device watchers | Reopen the sound output and connect MIDI keyboards as they come and go | Ordinary threads |
+| Workers *(planned)* | Loading audio, drawing waveforms | Ordinary threads |
 | Plugin scanner *(planned)* | A separate process that inspects plugins | A crash there cannot reach the program |
 
 ## How an edit becomes sound
@@ -101,8 +104,9 @@ bars.
   them (migrations).
 - **Saving is atomic:** write to a temporary file, then rename over the old
   one, so a crash never leaves a half-written project.
-- **Autosave and crash recovery:** the program saves a recovery copy in the
-  background at regular intervals and offers it after a crash.
+- **Autosave and crash recovery:** while there are unsaved changes, a
+  recovery copy is written in the background every few seconds; after a
+  crash it is offered back (decision 0013).
 - **Interchange:** DAWproject and Standard MIDI Files, import and export
   (phase 6). Audio import: WAV, FLAC, MP3, OGG; export: WAV, FLAC.
 
@@ -122,10 +126,18 @@ bars.
 
 ## The interface *(phase 1 onwards)*
 
-Built with egui (eframe, wgpu renderer). All interface code is in `daw-ui`.
-The piano roll, timeline and mixer are custom-drawn surfaces that draw only
-what is visible. User-facing text lives in one module so it can be
-translated later. Dark and light themes follow the system by default.
+Built with egui (eframe, wgpu renderer). All interface code is in `daw-ui`:
+
+- `session`: the open song and everything done to it, with no drawing
+  (editing commands, the selection, playing notes, the transport,
+  recording, files). Tested without a window.
+- `workspace`: the window's layout (decision 0011), keyboard routing (note
+  keys to the session, shortcuts to commands), menus and dialogs.
+- `piano_roll`, `transport`, `keyboard_panel`: the custom-drawn views; they
+  draw only what is visible.
+- `keys`: note keys by physical position, the rebindable shortcut table.
+- `text`: every user-facing string. `theme`: colours, fonts, spacing; dark
+  and light themes follow the system by default.
 
 ## Testing
 
@@ -135,4 +147,10 @@ translated later. Dark and light themes follow the system by default.
   that processing allocated nothing.
 - Repository rules (layers, licence headers, the product name in one place)
   are tests in `xtask`.
-- Screenshots of the interface are rendered without a window for review.
+- Interface tests drive the real window contents with simulated mouse and
+  keyboard input and read them back through the accessibility tree
+  (`egui_kittest`); they also fail on missing glyphs and unlabelled
+  controls.
+- The whole program is run on a virtual screen and sound card (Xvfb and a
+  private PipeWire), driven with simulated input; screenshots and a
+  recording of its sound output are checked (see `CLAUDE.md`).

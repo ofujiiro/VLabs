@@ -3,7 +3,8 @@
 The phases come from the project brief. Each ends with a build the owner can
 run and a checklist of things to try. Status is updated at every milestone.
 
-**Now:** phase 1 (first sound). Phase 0 is complete: all three risk spikes
+**Now:** phase 1 (first sound) is built and waiting for the owner's
+hands-on check (checklist below). Phase 0 is complete: all three risk spikes
 passed on Windows and Linux (decision 0009).
 
 ## Phase 0 — Foundations and risk spikes
@@ -22,12 +23,57 @@ passed on Windows and Linux (decision 0009).
 
 ## Phase 1 — First sound
 
-Project model, undo, save and load, transport, engine core, SoundFont piano,
-piano roll, playing notes from the computer keyboard, live note recording
-with metronome and count-in.
+- [x] Project model: exact musical time, tracks, patterns, notes, tempo and
+      time signature; undo and redo for everything (decision 0007)
+- [x] Native project files, with migration tests from the first version
+- [x] Engine core: transport, sample-accurate scheduling, metronome,
+      count-in, offline rendering through the same processing as playback
+- [x] Bundled piano: a CC0 SoundFont built from the Osiris Piano
+- [x] Sound output with no setup, a silent stand-in when there is no sound
+      card, MIDI keyboards connected automatically
+- [x] The main window (decision 0011): transport bar, piano roll with mouse
+      editing and a velocity lane, on-screen keyboard, menus, dark and light
+      themes
+- [x] Playing from the computer keyboard, by key position on every layout;
+      labels follow the keyboard's layout
+- [x] Live note recording with metronome and count-in; one take is one undo
+      step; optional snapping of recorded notes
+- [x] Our own shortcut scheme, rebindable, shown in tooltips and menus, never
+      clashing with note keys
+- [x] Autosave and crash recovery, settings remembered (decision 0013)
+- [ ] The owner's hands-on check of the milestone build
 
-Also carried over from phase 0: a small Windows clipboard of our own (egui's
-pulls in a Boost-licensed crate), and the "no sound card" stand-in.
+### Phase 1 milestone: things to try
+
+1. Start the program: an empty piano roll says "Click anywhere to place a
+   note". Click a few spots: each click places a note and you hear it.
+2. Press Space: the pattern plays in a loop. Press Space again to stop.
+3. Play the computer keyboard: the bottom row from Z and the row from Q are
+   two piano octaves. Page Up and Page Down move the octave. The on-screen
+   keyboard shows which key plays what (on an AZERTY keyboard, check the
+   letters match your keys).
+4. Drag a note to move it, drag its right edge to make it longer,
+   right-click it to delete it. Drag in the velocity lane to change how hard
+   it plays. Ctrl+Z undoes, Ctrl+Shift+Z redoes.
+5. Press Ctrl+R: one bar of clicks counts you in, then play something on
+   the keyboard. Press Ctrl+R or Space to stop. One Ctrl+Z removes the whole
+   take.
+6. Save with Ctrl+S, close, and open the song again from the menu.
+7. Plug in a MIDI keyboard while the program is running: a message says it
+   is connected, and it plays the piano.
+8. Try the light theme (menu › Theme) and change a shortcut (menu ›
+   Keyboard shortcuts).
+
+### Known gaps in this build
+
+- On Windows, copy and paste of notes works inside the program but not
+  between two copies of it (the system clipboard is used on Linux only;
+  decision 0005).
+- The sustain pedal and pitch wheel of a MIDI keyboard are not used yet.
+- The sound is on the quiet side (a three-note chord peaks around −16 dBFS);
+  a master limiter in phase 2 will let the level go up safely.
+- Open and save dialogs are not attached to the window, so on some desktops
+  they may open behind it.
 
 ## Phase 2 — Making a beat
 

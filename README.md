@@ -14,9 +14,12 @@ automatically when you plug one in, but nothing extra is ever required.
 
 ## Status
 
-**Pre-alpha.** The foundations are being laid (roadmap phase 0); there is
-nothing to make music with yet. See [ROADMAP.md](ROADMAP.md) for what is
-planned and what is done.
+**Pre-alpha.** Roadmap phase 1 ("first sound") works: place and edit notes
+in a piano roll, play the bundled piano from the computer keyboard or a MIDI
+keyboard, record what you play with a metronome and count-in, undo anything,
+save and open songs. Your work is saved automatically and offered back after
+a crash. See [ROADMAP.md](ROADMAP.md) for what is done, what to try and what
+comes next.
 
 ## Building from source
 

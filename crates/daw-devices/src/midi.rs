@@ -14,7 +14,7 @@ use midir::{MidiInput, MidiInputConnection};
 /// How often the port list is checked for keyboards coming and going.
 const SCAN_INTERVAL: Duration = Duration::from_millis(1500);
 
-/// A MIDI message VLabs understands (others are ignored).
+/// A MIDI message the program understands (others are ignored).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MidiMessage {
     /// A key went down.

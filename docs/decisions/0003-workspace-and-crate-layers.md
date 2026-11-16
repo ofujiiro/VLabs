@@ -54,5 +54,6 @@ Developer automation lives in `xtask/`.
 ## Consequences
 
 - The engine can be tested in CI with no sound card and no window.
-- The interface and the engine cannot reach each other's internals; they meet
-  only in `daw-app`, through the model and the engine's message queues.
+- The interface and the engine cannot reach each other's internals. (The
+  interface drives the engine through its public control handle: see
+  decision 0012.)

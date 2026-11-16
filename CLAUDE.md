@@ -111,6 +111,19 @@ These come from the brief; tests and CI enforce most of them.
   ```
 
   (packages: `pipewire pipewire-alsa pipewire-jack wireplumber dbus`).
+- **Driving the program:** with the virtual sound card running, start
+  `target/debug/daw-app` under `xvfb-run`, find the window with
+  `xdotool search --name <product name>`, then click and type with
+  `xdotool mousemove X Y click 1` / `xdotool key ctrl+r`, take screenshots
+  with `import -window root`, and record what it plays with
+  `pw-record --target test-speakers -P '{ stream.capture.sink=true }' out.wav`.
+  Point `HOME`, `XDG_CONFIG_HOME` and `XDG_DATA_HOME` at a scratch folder so
+  settings and recovery copies do not leak between runs. `--silent` starts
+  the program without opening a sound device.
+- **Interface tests** (`crates/daw-ui/tests/interface.rs`) use
+  `egui_kittest`: find controls by their accessible label, click them, send
+  keys. Dialogs re-centre for a few frames after opening; run a few frames
+  before clicking inside one.
 - **Reference plugins** (test fixtures only, never linked or bundled): Surge
   XT 1.3.4 from `github.com/surge-synthesizer/releases-xt` releases
   (`surge-xt-linux-1.3.4-pluginsonly.tar.gz`, `surge-xt-win64-1.3.4-pluginsonly.zip`).

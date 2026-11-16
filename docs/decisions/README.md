@@ -17,6 +17,9 @@ considered instead.
 | [0008](0008-bundled-sounds-and-fonts.md) | Where the bundled piano, drums and fonts come from | Accepted |
 | [0009](0009-phase-0-spike-results.md) | Results of the three phase 0 risk spikes | Accepted |
 | [0010](0010-audio-backends.md) | Which audio systems are used on each platform | Accepted |
+| [0011](0011-main-window-design.md) | The main window: one focus surface, with context and drawers | Accepted |
+| [0012](0012-interface-drives-the-engine.md) | The interface drives the engine through its control handle | Accepted |
+| [0013](0013-autosave-and-crash-recovery.md) | Autosave and crash recovery | Accepted |
 
 ## Writing a new record
 

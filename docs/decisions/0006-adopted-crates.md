@@ -20,19 +20,19 @@ memory. "Planned" means checked and chosen, but not yet in `Cargo.toml`.
 | `windows-sys` | 0.61.2 | MIT OR Apache-2.0 | 2026-11-16 | Win32 windows for plugin editors on Windows. |
 | `libloading` | 0.9.1 | ISC | 2026-11-16 | Loading VST3 plugin libraries. |
 | `egui`, `eframe` | 0.37.0 | MIT OR Apache-2.0 | 2026-11-16 | The interface, as decided in the brief (released October 2026). Used with the wgpu renderer (wgpu 30), AccessKit for accessibility, X11 and Wayland; without the default fonts, the system fonts, or (on Windows) the clipboard feature. |
+| `rustysynth` | 1.3.8 | MIT | 2026-11-16 | SoundFont playback for the bundled piano. |
+| `serde`, `serde_json` | 1.0.229, 1.0.154 | MIT OR Apache-2.0 | 2026-11-16 | The human-readable project description and the settings file. |
+| `zip` | 9.6.0 | MIT | 2026-11-16 | The single-file project container (deflate only). |
+| `midir` | 0.11.1 | MIT | 2026-11-16 | MIDI keyboard input with hot-plugging. |
+| `rfd` | 0.18.0 | MIT | 2026-11-16 | The desktop's own open and save dialogs: Windows' file dialog; on Linux the XDG portal over D-Bus (loaded at run time) or zenity. Default features. |
+| `claxon` | 0.4.3 | Apache-2.0 | 2026-11-16 | FLAC decoding; for now only in `tools/make-piano`, which builds the bundled piano from the FLAC recordings. |
+| `egui_kittest` (with `kittest`) | 0.37.0 (0.5.0) | MIT OR Apache-2.0 | 2026-11-16 | Tests only: drives the real interface with simulated input and inspects it through its accessibility tree, with no window. Also fails tests on any glyph missing from our fonts and on unlabelled controls. |
 
 ## Planned (checked, adopted when the phase needs them)
 
 | Crate | Version | Licence | For |
 | --- | --- | --- | --- |
-| `rustysynth` | 1.3.8 | MIT | SoundFont playback (phase 1) |
-| `serde`, `serde_json` | 1.0.229, 1.0.154 | MIT OR Apache-2.0 | The human-readable project description (phase 1) |
-| `zip` | 9.6.0 | MIT | The single-file project container (phase 1) |
-| `midir` | 0.11.1 | MIT | MIDI keyboard input with hot-plugging (phase 1) |
-| `directories` | 6.0.0 | MIT OR Apache-2.0 | Standard folders for settings and autosaves (phase 1) |
-| `rfd` | 0.18.0 | MIT | Native open and save dialogs (phase 1) |
 | `hound` | 3.5.1 | Apache-2.0 | WAV reading and writing (phase 2) |
-| `claxon` | 0.4.3 | Apache-2.0 | FLAC decoding (phase 4) |
 | `flacenc` | 0.5.1 | Apache-2.0 | FLAC export (phase 6) |
 | `lewton` | 0.10.2 | MIT OR Apache-2.0 | OGG Vorbis decoding (phase 4) |
 | `nanomp3` | 0.2.0 | MIT OR Apache-2.0 | MP3 decoding, pure Rust (phase 4) |
@@ -45,5 +45,8 @@ memory. "Planned" means checked and chosen, but not yet in `Cargo.toml`.
   lines and we want our own failure report and a counting mode for tests.
   Written in `daw-rt`.
 - `dark-light`: eframe already follows the system's dark or light setting.
+- `directories` (MIT OR Apache-2.0): its `dirs-sys` dependency pulls in
+  `option-ext`, which is MPL-2.0. Finding the standard folders is a few lines
+  of our own (`crates/daw-app/src/paths.rs`, decision 0013).
 - `midly`, `symphonia`, `oxisynth`, `triple_buffer`, `vst3-sys`,
   `audio_thread_priority`: licences, see decision 0005.
