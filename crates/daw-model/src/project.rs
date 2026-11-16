@@ -2,6 +2,7 @@
 
 //! The project: everything that makes up one song.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -150,8 +151,9 @@ impl Project {
 
     /// Removes notes by id.
     pub fn remove_notes(&mut self, pattern: PatternId, ids: &[NoteId]) {
+        let wanted = IdSet::new(ids);
         if let Some(pattern) = self.pattern_mut(pattern) {
-            pattern.notes.retain(|n| !ids.contains(&n.id));
+            pattern.notes.retain(|n| !wanted.contains(n.id));
         }
     }
 
@@ -163,8 +165,9 @@ impl Project {
         ids: &[NoteId],
         mut change: impl FnMut(&mut Note),
     ) {
+        let wanted = IdSet::new(ids);
         if let Some(pattern) = self.pattern_mut(pattern) {
-            for note in pattern.notes.iter_mut().filter(|n| ids.contains(&n.id)) {
+            for note in pattern.notes.iter_mut().filter(|n| wanted.contains(n.id)) {
                 change(note);
                 *note = sanitized(*note);
             }
@@ -250,6 +253,29 @@ impl Project {
 impl Default for Project {
     fn default() -> Self {
         Self::empty()
+    }
+}
+
+/// A set of note ids that stays fast for large selections.
+enum IdSet<'a> {
+    Few(&'a [NoteId]),
+    Many(HashSet<NoteId>),
+}
+
+impl<'a> IdSet<'a> {
+    fn new(ids: &'a [NoteId]) -> Self {
+        if ids.len() <= 16 {
+            Self::Few(ids)
+        } else {
+            Self::Many(ids.iter().copied().collect())
+        }
+    }
+
+    fn contains(&self, id: NoteId) -> bool {
+        match self {
+            Self::Few(ids) => ids.contains(&id),
+            Self::Many(ids) => ids.contains(&id),
+        }
     }
 }
 

@@ -12,6 +12,9 @@ pub const HISTORY_LIMIT: usize = 1000;
 struct Step {
     label: String,
     before: Project,
+    /// Edits made with [`Document::edit_merged`] and the same key join
+    /// this step instead of starting a new one.
+    merge: Option<u64>,
 }
 
 /// An edit gesture in progress (a drag, for example): every change made
@@ -87,11 +90,49 @@ impl Document {
                     self.push_undo(Step {
                         label: label.to_owned(),
                         before,
+                        merge: None,
                     });
                     self.redo.clear();
                 }
             }
             None => self.revision += 1,
+        }
+        result
+    }
+
+    /// Like [`Document::edit`], but successive edits with the same `key`
+    /// become a single undo step, as long as nothing else was done in
+    /// between. The step takes the label of the latest edit. Used for things
+    /// that arrive piece by piece but are one action for the person, such as
+    /// the notes of one recording.
+    pub fn edit_merged<R>(
+        &mut self,
+        label: &str,
+        key: u64,
+        change: impl FnOnce(&mut Project) -> R,
+    ) -> R {
+        let joins_last = self.gesture.is_none()
+            && self.redo.is_empty()
+            && self.undo.last().is_some_and(|step| step.merge == Some(key));
+        if !joins_last {
+            let depth = self.undo.len();
+            let revision = self.revision;
+            let result = self.edit(label, change);
+            if self.revision != revision
+                && self.undo.len() >= depth
+                && let Some(step) = self.undo.last_mut()
+            {
+                step.merge = Some(key);
+            }
+            return result;
+        }
+        let before = self.project.clone();
+        let result = change(&mut self.project);
+        if before != self.project {
+            self.revision += 1;
+            if let Some(step) = self.undo.last_mut() {
+                label.clone_into(&mut step.label);
+            }
         }
         result
     }
@@ -119,6 +160,7 @@ impl Document {
             self.push_undo(Step {
                 label: gesture.label,
                 before: gesture.before,
+                merge: None,
             });
             self.redo.clear();
         } else if self.revision != gesture.revision {
@@ -161,6 +203,7 @@ impl Document {
         self.redo.push(Step {
             label: step.label,
             before: after,
+            merge: None,
         });
         Some(label)
     }
@@ -175,6 +218,7 @@ impl Document {
         self.push_undo(Step {
             label: step.label,
             before,
+            merge: None,
         });
         Some(label)
     }
@@ -331,6 +375,31 @@ mod tests {
             "undoing past the save makes it differ from the file"
         );
         assert!(Document::new_unsaved(Project::empty()).is_dirty());
+    }
+
+    #[test]
+    fn merged_edits_are_one_step_until_something_else_happens() {
+        let (mut doc, pattern) = document();
+        for key in [60, 62, 64] {
+            doc.edit_merged("record notes", 7, |p| p.add_note(pattern, note(key)));
+        }
+        assert_eq!(doc.undo_depth(), 1);
+        assert_eq!(doc.undo_label(), Some("record notes"));
+        doc.edit("Add note", |p| p.add_note(pattern, note(70)));
+        doc.edit_merged("record notes", 7, |p| p.add_note(pattern, note(72)));
+        assert_eq!(doc.undo_depth(), 3, "an edit in between starts a new step");
+        doc.undo();
+        doc.undo();
+        doc.undo();
+        assert_eq!(keys(&doc, pattern), Vec::<u8>::new());
+        doc.redo();
+        assert_eq!(keys(&doc, pattern), [60, 62, 64]);
+        doc.edit_merged("record notes", 7, |p| p.add_note(pattern, note(74)));
+        assert_eq!(
+            doc.undo_depth(),
+            2,
+            "a redone step is closed: later edits do not join it"
+        );
     }
 
     #[test]
