@@ -25,6 +25,13 @@ publish = false
 # dependency rules in CLAUDE.md: the licence check will reject anything that
 # is not permissively licensed.
 daw-ident = { path = "crates/daw-ident" }
+daw-rt = { path = "crates/daw-rt" }
+
+# Outside crates. Version, licence and maintenance were checked when each was
+# adopted; see docs/decisions/0006-adopted-crates.md.
+cpal = "0.18.2"
+libc = "0.2.191"
+rtrb = "0.4.1"
 
 # Lints shared by every crate. CI turns every warning into an error.
 # Reasons are recorded in docs/decisions/0004-toolchain-and-quality-gates.md.

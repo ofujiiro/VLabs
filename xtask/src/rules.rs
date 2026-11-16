@@ -14,8 +14,8 @@ use super::workspace_root;
 /// A crate may depend only on crates in layers below its own. The reasons
 /// are in `docs/architecture.md`; change both together.
 const LAYERS: &[&[&str]] = &[
-    &["daw-ident"],
-    &["daw-model", "daw-dsp", "daw-plugin-host"],
+    &["daw-ident", "daw-rt"],
+    &["daw-model", "daw-dsp", "daw-plugin-host", "daw-devices"],
     &["daw-formats", "daw-engine"],
     &["daw-ui"],
     &["daw-app"],
@@ -85,6 +85,52 @@ fn every_source_file_starts_with_the_licence_identifier() {
             file.display()
         );
     }
+}
+
+#[test]
+fn product_identity_is_written_only_in_daw_ident() {
+    let identity = [
+        daw_ident::PRODUCT_NAME,
+        daw_ident::EXECUTABLE_NAME,
+        daw_ident::PROJECT_FILE_EXTENSION,
+        daw_ident::APPLICATION_ID,
+    ];
+    let mut files = Vec::new();
+    for folder in ["crates", "spikes", "xtask"] {
+        rust_files(&workspace_root().join(folder), &mut files);
+    }
+    let home = workspace_root().join("crates").join("daw-ident");
+    for file in files.iter().filter(|file| !file.starts_with(&home)) {
+        let text = read(file);
+        for value in identity {
+            assert!(
+                !contains_word(&text, value),
+                "{} spells out `{value}`. The product name, file extension and \
+                 identifiers are written only in crates/daw-ident; read them from there \
+                 (see docs/decisions/0002-product-identity-in-one-place.md).",
+                file.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn whole_words_are_found_and_parts_of_words_are_not() {
+    assert!(contains_word("save as song.ext now", "ext"));
+    assert!(contains_word("\"ext\"", "ext"));
+    assert!(!contains_word("extra", "ext"));
+    assert!(!contains_word("a_ext_b", "ext"));
+}
+
+/// Whether `word` appears in `text` with no letter, digit or `_` on either
+/// side.
+fn contains_word(text: &str, word: &str) -> bool {
+    let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
+    text.match_indices(word).any(|(start, _)| {
+        let before = text[..start].chars().next_back();
+        let after = text[start + word.len()..].chars().next();
+        !before.is_some_and(is_word_char) && !after.is_some_and(is_word_char)
+    })
 }
 
 #[test]

@@ -1,0 +1,11 @@
+[package]
+name = "daw-rt"
+description = "Tools that keep the audio thread real-time safe, including the check that fails loudly when it allocates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
