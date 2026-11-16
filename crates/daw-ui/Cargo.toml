@@ -9,3 +9,15 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+daw-engine.workspace = true
+daw-formats.workspace = true
+daw-ident.workspace = true
+daw-model.workspace = true
+egui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+egui_kittest.workspace = true
