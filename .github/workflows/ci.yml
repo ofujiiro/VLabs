@@ -1,0 +1,66 @@
+# Build, test, lint and licence-check every change, on Windows and on Linux.
+#
+# The checks themselves live in `cargo xtask ci`, so running that command
+# locally gives the same answer as CI. Third-party actions are pinned to a
+# commit (the tag is in the comment) so a changed tag cannot change our build.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch makes an older, still-running check moot.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  check:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The reference systems from the brief: a current Ubuntu LTS, and
+          # Windows 11. GitHub has no Windows 11 desktop image; Windows Server
+          # 2025 is built on the same Windows 11 (24H2) code base.
+          - name: Linux (Ubuntu 26.04)
+            os: ubuntu-26.04
+          - name: Windows (Server 2025)
+            os: windows-2025
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libjack-jackd2-dev libudev-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
+
+      - name: Install Rust (the version pinned in rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: cargo-deny@0.20.2
+
+      - name: Run every check (cargo xtask ci)
+        run: cargo xtask ci

@@ -1,0 +1,76 @@
+# cargo-deny settings: which outside code this project may use.
+#
+# Run with `cargo xtask deny` (CI runs it on every change).
+# The policy and the reason for every exception are in
+# docs/decisions/0005-dependency-licensing-policy.md. Change both together.
+
+[graph]
+# Check the dependency graph of every system we ship for, with every optional
+# feature switched on, so nothing slips in through a platform or a feature.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+all-features = true
+
+[licenses]
+# VLabs is GPL-3.0-or-later AND sold under commercial licences by its sole
+# copyright holder. That only works if every piece of outside code may be
+# relicensed with it, so only permissive licences are accepted. A crate
+# offering a choice (for example "MIT OR Apache-2.0") passes when one of the
+# choices is on this list.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+]
+confidence-threshold = 0.93
+# The list states what is acceptable, not what is currently used.
+unused-allowed-license = "allow"
+
+# Narrow, recorded exceptions. Each names one crate and the one extra licence
+# it needs. Never add a copyleft licence (GPL, LGPL, MPL, EPL, CDDL, OFL...)
+# here: find another crate or write the code ourselves.
+exceptions = [
+    # The Unicode character tables inside `unicode-ident`, which the Rust
+    # compiler's own macro tooling needs. The Unicode licence is permissive
+    # (keep the notice, nothing else). See decision 0005.
+    { crate = "unicode-ident", allow = ["Unicode-3.0"] },
+]
+
+# Our own crates are unpublished and licensed GPL-3.0-or-later; they are not
+# outside code, so the allow list does not apply to them.
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+# The workspace's own crates are referred to by path, which is fine.
+allow-wildcard-paths = true
+deny = [
+    # The brief rules out the ASIO SDK: the standard Windows audio system is
+    # the Windows backend for v1.
+    { crate = "asio-sys", reason = "the ASIO SDK may not be used (project brief)" },
+    # The GPL-licensed VST3 bindings. VST3 is hosted through the MIT/Apache
+    # `vst3` crate instead.
+    { crate = "vst3-sys", reason = "GPL-licensed; use the permissively licensed `vst3` crate" },
+    # egui's built-in fonts carry the OFL and Ubuntu font licences. VLabs
+    # ships its own permissively licensed fonts instead.
+    { crate = "epaint_default_fonts", reason = "OFL/Ubuntu-licensed fonts; VLabs bundles its own fonts" },
+]
+
+[advisories]
+# Known security problems and unmaintained crates, from the RustSec database.
+unmaintained = "workspace"
+yanked = "deny"
+
+[sources]
+# Code comes from crates.io only. A git dependency would need a recorded
+# decision and an entry here.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
