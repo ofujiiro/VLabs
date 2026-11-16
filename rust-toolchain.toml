@@ -1,0 +1,7 @@
+# The exact Rust version everyone and everything builds with: developers,
+# CI and release builds. rustup installs it automatically.
+# When changing it, also change `rust-version` in Cargo.toml.
+[toolchain]
+channel = "1.100.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

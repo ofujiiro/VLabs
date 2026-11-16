@@ -1,0 +1,5 @@
+# Formatting is the rustfmt default, plus the settings below.
+# Unix line endings on every system, matching .gitattributes.
+newline_style = "Unix"
+use_field_init_shorthand = true
+use_try_shorthand = true

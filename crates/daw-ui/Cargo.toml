@@ -1,0 +1,11 @@
+[package]
+name = "daw-ui"
+description = "Everything on screen: the editors, the mixer, themes, shortcuts and user-facing text."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

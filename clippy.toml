@@ -1,0 +1,4 @@
+# Settings for the lints enabled in Cargo.toml ([workspace.lints.clippy]).
+# Tests may unwrap and print freely; the rest of the code may not.
+allow-unwrap-in-tests = true
+allow-print-in-tests = true

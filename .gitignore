@@ -1,0 +1,15 @@
+# Build output
+/target/
+/dist/
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+*.swp
+*~
+/.idea/
+/.vscode/
+
+# Local-only settings. Secrets never belong in this repository.
+.env
+.env.*

@@ -1,0 +1,11 @@
+[package]
+name = "daw-model"
+description = "The project as data: the single source of truth that the interface edits and the engine plays."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

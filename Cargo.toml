@@ -1,0 +1,65 @@
+# The Cargo workspace: every part of the application is a separate crate
+# under crates/. What each crate is for, and which crate may use which, is
+# described in docs/architecture.md.
+
+[workspace]
+resolver = "3"
+members = ["crates/*", "spikes/*", "xtask"]
+# Plain `cargo build`, `cargo test` and `cargo run` act on the product crates.
+# Spikes and the developer tool (xtask) are built only when asked for by name;
+# `cargo xtask ci` covers everything.
+default-members = ["crates/*"]
+
+[workspace.package]
+# 0.N.0 is the build delivered at the end of roadmap phase N; 1.0.0 is v1.
+version = "0.0.0"
+edition = "2024"
+# Keep in step with rust-toolchain.toml.
+rust-version = "1.100"
+license = "GPL-3.0-or-later"
+publish = false
+
+[workspace.dependencies]
+# Every dependency is declared here once, then used by a crate with
+# `name.workspace = true`. Before adding an outside crate, read the
+# dependency rules in CLAUDE.md: the licence check will reject anything that
+# is not permissively licensed.
+daw-ident = { path = "crates/daw-ident" }
+
+# Lints shared by every crate. CI turns every warning into an error.
+# Reasons are recorded in docs/decisions/0004-toolchain-and-quality-gates.md.
+[workspace.lints.rust]
+# `unsafe` is off by default. A module that truly needs it (the plugin
+# bindings, for instance) opts in with `#![allow(unsafe_code, reason = "...")]`.
+unsafe_code = "deny"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Pedantic lints that cost more than they give in this codebase.
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# Our documentation is prose full of proper nouns (SoundFont, DAWproject,
+# PipeWire); this lint wants every one of them written as code.
+doc_markdown = "allow"
+# Stricter lints we opt in to.
+undocumented_unsafe_blocks = "deny"
+allow_attributes_without_reason = "warn"
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+unwrap_used = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+
+# Debug builds must still be fast enough to play audio in real time, so
+# dependencies are fully optimised and our own code lightly optimised.
+# Debug assertions (including the audio-thread checks) stay on.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
