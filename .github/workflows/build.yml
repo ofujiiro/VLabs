@@ -1,0 +1,82 @@
+# Builds the program for people to try: a release build on Windows and one
+# on Linux, attached to the run's page as downloadable files.
+#
+# It runs by hand (Actions › Program builds › Run workflow) or when a
+# `milestone-*` tag is pushed, so a private repository's CI minutes are
+# spent on milestone builds, not on every change (CI already builds and
+# tests every change).
+
+name: Program builds
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["milestone-*"]
+
+concurrency:
+  group: program-builds-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux (Ubuntu 26.04)
+            os: ubuntu-26.04
+            artifact: program-linux
+          - name: Windows (Server 2025)
+            os: windows-2025
+            artifact: program-windows
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libjack-jackd2-dev libudev-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
+
+      - name: Install Rust (the version pinned in rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Release build (cargo xtask dist)
+        run: cargo xtask dist
+
+      # Artifacts lose the "executable" permission of Linux files, so the
+      # Linux build is packed in a tar archive, which keeps it.
+      - name: Pack the Linux build
+        if: runner.os == 'Linux'
+        run: tar -czf program-linux.tar.gz -C dist .
+
+      - name: Upload the Linux build
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.artifact }}
+          path: program-linux.tar.gz
+          retention-days: 30
+
+      - name: Upload the Windows build
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
+          retention-days: 30
