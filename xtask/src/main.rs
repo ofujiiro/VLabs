@@ -32,6 +32,9 @@ Developer commands. Usage: cargo xtask <command>
 /// The cargo package that builds the program people launch.
 const APP_PACKAGE: &str = "daw-app";
 
+/// The systems VLabs ships for; the licence check runs once for each.
+const DENY_TARGETS: [&str; 2] = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"];
+
 /// Files copied next to the program in `dist/`. The GPL requires its text to
 /// travel with the program.
 const DIST_DOCUMENTS: [&str; 2] = ["LICENSE", "THIRD_PARTY.md"];
@@ -144,7 +147,14 @@ fn deny() -> Outcome {
                     cargo install cargo-deny --locked"
             .to_owned());
     }
-    cargo(&["deny", "--locked", "check"])
+    // One run per shipping system: cargo-deny would otherwise merge the
+    // features chosen for different systems into one graph and see
+    // dependencies that are never built (decision 0005).
+    for target in DENY_TARGETS {
+        println!("--- {target}");
+        cargo(&["deny", "--locked", "--target", target, "check"])?;
+    }
+    Ok(())
 }
 
 /// Builds the release program and assembles `dist/`, the folder people

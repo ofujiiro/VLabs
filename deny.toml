@@ -6,7 +6,10 @@
 
 [graph]
 # Check the dependency graph of every system we ship for, with every optional
-# feature switched on, so nothing slips in through a platform or a feature.
+# feature of our own crates switched on, so nothing slips in through a
+# platform or a feature. `cargo xtask deny` runs the check once per target
+# (passing --target), because a single run merges the features chosen for
+# different systems and reports dependencies that are never built.
 targets = [
     "x86_64-unknown-linux-gnu",
     "x86_64-pc-windows-msvc",
@@ -35,10 +38,12 @@ unused-allowed-license = "allow"
 # it needs. Never add a copyleft licence (GPL, LGPL, MPL, EPL, CDDL, OFL...)
 # here: find another crate or write the code ourselves.
 exceptions = [
-    # The Unicode character tables inside `unicode-ident`, which the Rust
-    # compiler's own macro tooling needs. The Unicode licence is permissive
-    # (keep the notice, nothing else). See decision 0005.
+    # Unicode character tables. The Unicode licence is permissive (keep the
+    # notice, nothing else). See decision 0005. `unicode-ident` is needed by
+    # the Rust compiler's own macro tooling, `unicode-properties` by egui's
+    # text layout.
     { crate = "unicode-ident", allow = ["Unicode-3.0"] },
+    { crate = "unicode-properties", allow = ["Unicode-3.0"] },
 ]
 
 # Our own crates are unpublished and licensed GPL-3.0-or-later; they are not

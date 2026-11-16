@@ -155,3 +155,59 @@ jobs:
           name: plugin-host-${{ matrix.name }}
           path: spike-output
           if-no-files-found: ignore
+
+  piano-roll:
+    name: Piano roll (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-26.04
+          - name: Windows
+            os: windows-2025
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux libraries, a virtual screen and software graphics
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb mesa-vulkan-drivers libegl1 libgl1 \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
+
+      - name: Install Rust
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: spikes
+
+      - name: Build
+        run: cargo build -p spike-piano-roll --locked
+
+      # Frame build and tessellation time, without a window, through egui's
+      # real input path. Fails if the slowest 5% of frames exceed the budget.
+      - name: Benchmark (10,000 notes)
+        run: cargo run -p spike-piano-roll --locked -- --bench
+
+      # The real window, drawn by wgpu. CI machines have no GPU, so this uses
+      # software rendering: it proves the pipeline works, not GPU speed.
+      - name: Window with autopilot (Linux, virtual screen)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a -s "-screen 0 1600x1000x24" cargo run -p spike-piano-roll --locked -- --autopilot 6 --screenshot piano-roll.bmp
+
+      - name: Window with autopilot (Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: cargo run -p spike-piano-roll --locked -- --autopilot 6 --screenshot piano-roll.bmp
+
+      - name: Keep the screenshot
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: piano-roll-${{ matrix.name }}
+          path: piano-roll.bmp
+          if-no-files-found: ignore

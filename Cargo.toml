@@ -32,6 +32,17 @@ daw-rt = { path = "crates/daw-rt" }
 clack-extensions = "0.2.0"
 clack-host = "0.2.0"
 cpal = "0.18.2"
+# The interface. Default features are off: no OFL-licensed default fonts, no
+# system fonts; VLabs ships its own (decision 0008). The system clipboard
+# ("clipboard") is switched on for Linux only, in the crates that use eframe:
+# on Windows it would pull in a Boost-licensed crate (decision 0005).
+eframe = { version = "0.37.0", default-features = false, features = [
+    "accesskit",
+    "wayland",
+    "wgpu",
+    "x11",
+] }
+egui = { version = "0.37.0", default-features = false }
 libc = "0.2.191"
 libloading = "0.9.1"
 rtrb = "0.4.1"

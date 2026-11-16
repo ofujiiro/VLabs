@@ -1,0 +1,18 @@
+[package]
+name = "spike-piano-roll"
+description = "Phase 0 spike: can egui draw a 10,000-note piano roll that scrolls and zooms smoothly?"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+eframe.workspace = true
+egui.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { workspace = true, features = ["clipboard"] }
