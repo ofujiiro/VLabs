@@ -27,4 +27,18 @@ pub trait Instrument: Send {
     fn is_sounding(&self) -> bool {
         true
     }
+
+    /// Changes the instrument's settings while it plays, without cutting
+    /// off what is sounding (a drum kit's pad settings, for instance).
+    /// Instruments without such settings ignore it.
+    fn apply_settings(&mut self, settings: &InstrumentSettings) {
+        let _ = settings;
+    }
+}
+
+/// Settings an instrument takes while playing.
+#[derive(Clone, Debug, PartialEq)]
+pub enum InstrumentSettings {
+    /// A drum kit's pad settings, indexed by each pad's main key.
+    Drums(Box<crate::drums::PadTable>),
 }

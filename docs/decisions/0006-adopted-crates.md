@@ -25,7 +25,8 @@ memory. "Planned" means checked and chosen, but not yet in `Cargo.toml`.
 | `zip` | 9.6.0 | MIT | 2026-11-16 | The single-file project container (deflate only). |
 | `midir` | 0.11.1 | MIT | 2026-11-16 | MIDI keyboard input with hot-plugging. |
 | `rfd` | 0.18.0 | MIT | 2026-11-16 | The desktop's own open and save dialogs: Windows' file dialog; on Linux the XDG portal over D-Bus (loaded at run time) or zenity. Default features. |
-| `claxon` | 0.4.3 | Apache-2.0 | 2026-11-16 | FLAC decoding; for now only in `tools/make-piano`, which builds the bundled piano from the FLAC recordings. |
+| `claxon` | 0.4.3 | Apache-2.0 | 2026-11-16 | FLAC decoding: the bundled drum kit is stored as FLAC and decoded when loaded; also the piano and drum build tools. Stable for years, no open safety issues. |
+| `flacenc` | 0.5.1 | Apache-2.0 | 2026-11-16 | FLAC encoding (without its default features), for now only in `tools/make-drums`; FLAC export in phase 6. Released December 2025. |
 | `egui_kittest` (with `kittest`) | 0.37.0 (0.5.0) | MIT OR Apache-2.0 | 2026-11-16 | Tests only: drives the real interface with simulated input and inspects it through its accessibility tree, with no window. Also fails tests on any glyph missing from our fonts and on unlabelled controls. |
 
 ## Planned (checked, adopted when the phase needs them)
@@ -33,7 +34,6 @@ memory. "Planned" means checked and chosen, but not yet in `Cargo.toml`.
 | Crate | Version | Licence | For |
 | --- | --- | --- | --- |
 | `hound` | 3.5.1 | Apache-2.0 | WAV reading and writing (phase 2) |
-| `flacenc` | 0.5.1 | Apache-2.0 | FLAC export (phase 6) |
 | `lewton` | 0.10.2 | MIT OR Apache-2.0 | OGG Vorbis decoding (phase 4) |
 | `nanomp3` | 0.2.0 | MIT OR Apache-2.0 | MP3 decoding, pure Rust (phase 4) |
 | `rubato` | 5.1.0 | MIT OR Apache-2.0 | Sample-rate conversion of imported audio (phase 4) |

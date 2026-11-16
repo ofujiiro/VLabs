@@ -43,6 +43,9 @@ cpal = "0.18.2"
 # system fonts; VLabs ships its own (decision 0008). The system clipboard
 # ("clipboard") is switched on for Linux only, in the crates that use eframe:
 # on Windows it would pull in a Boost-licensed crate (decision 0005).
+# FLAC encoding, for tools that prepare the bundled sounds (and FLAC export,
+# phase 6).
+flacenc = { version = "0.5.1", default-features = false }
 eframe = { version = "0.37.0", default-features = false, features = [
     "accesskit",
     "wayland",

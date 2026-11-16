@@ -1,0 +1,17 @@
+acoustic.kit — the bundled acoustic drum kit
+
+Built from Big Rusty Drums by Karoryfer Samples,
+https://github.com/sfzinstruments/karoryfer.big-rusty-drums (commit
+f07ce00df34a46b6b08375be56fe116cf15782bc).
+
+Big Rusty Drums is dedicated to the public domain under the Creative
+Commons CC0 1.0 Universal public domain dedication:
+https://creativecommons.org/publicdomain/zero/1.0/
+
+The processed kit (acoustic.kit) is likewise dedicated to the public domain
+under CC0 1.0. How it was made is described in THIRD_PARTY.md and in
+tools/make-drums.
+
+The electronic kit and the clap and cowbell of the acoustic kit are not
+recordings: they are synthesised by the program's own code (crates/daw-dsp,
+src/drums/synth.rs) and dedicated to the public domain under CC0 1.0 too.

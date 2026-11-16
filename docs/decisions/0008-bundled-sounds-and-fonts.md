@@ -40,13 +40,26 @@ reachable from the development environment; Osiris is also the better
 instrument. The Akai "Splendid Grand Piano" is described as public domain but
 carries no explicit CC0 dedication, so it was not used.
 
-### Drum kit
+### Drum kits
 
-Chosen in phase 2 from two CC0 libraries in the same collection:
-**Virtuosity Drums** (Versilian Studios and Karoryfer Samples, an acoustic jazz
-kit) and **Big Rusty Drums** (Karoryfer Samples). Both carry the CC0 1.0
-licence file in their repositories. Electronic drum sounds, if added, will be
-synthesised by our own code and dedicated to CC0 as well.
+Two kits, so both acoustic and electronic beats are possible with nothing
+installed:
+
+- **Acoustic: Big Rusty Drums** (Karoryfer Samples, CC0 1.0, licence file in
+  its repository). Chosen over Virtuosity Drums (also CC0, from the same
+  collection): Virtuosity is a brushed jazz kit, Big Rusty a full-sounding
+  rock kit that suits more of the music people make with patterns.
+  `tools/make-drums` mixes two or three velocity layers per pad from the
+  library's microphones with the library's own default balance and stores
+  them as FLAC (2.3 MB for 29 sounds); details and checks in
+  `THIRD_PARTY.md`.
+- **Electronic: synthesised by our own code** when the kit is loaded, in the
+  spirit of classic analogue drum machines (no recordings, nothing to
+  bundle), and dedicated to CC0. The acoustic kit borrows its clap and
+  cowbell.
+
+Pads sit on the General MIDI drum keys, so MIDI drum pads play the right
+sounds and a pattern plays on either kit.
 
 ### Fonts
 

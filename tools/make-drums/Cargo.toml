@@ -1,0 +1,16 @@
+[package]
+name = "make-drums"
+description = "Builds the bundled acoustic drum kit from the CC0 Big Rusty Drums samples."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+claxon.workspace = true
+daw-dsp.workspace = true
+flacenc.workspace = true

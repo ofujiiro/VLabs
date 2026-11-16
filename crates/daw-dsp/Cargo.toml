@@ -11,6 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+claxon.workspace = true
 rustysynth.workspace = true
 
 [dev-dependencies]

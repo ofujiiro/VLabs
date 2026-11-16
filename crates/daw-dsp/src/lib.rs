@@ -3,6 +3,7 @@
 #![doc = include_str!("../README.md")]
 
 mod click;
+pub mod drums;
 pub mod effects;
 mod instrument;
 pub mod sf2_writer;
@@ -10,7 +11,7 @@ mod sine;
 mod soundfont;
 
 pub use click::Click;
-pub use instrument::Instrument;
+pub use instrument::{Instrument, InstrumentSettings};
 pub use sine::SineSynth;
 pub use soundfont::{PresetInfo, SOUNDFONT_BLOCK, SoundFontBank, SoundFontError, SoundFontPlayer};
 
