@@ -78,6 +78,15 @@ impl App {
                     midi_sender.note_off(key);
                     Some((key, false))
                 }
+                // The sustain pedal (controller 64): down from half way.
+                MidiMessage::ControlChange {
+                    controller: 64,
+                    value,
+                    ..
+                } => {
+                    midi_sender.sustain(value >= 64);
+                    None
+                }
                 MidiMessage::ControlChange { .. } | MidiMessage::PitchBend { .. } => None,
             };
             if let Some(note) = note {

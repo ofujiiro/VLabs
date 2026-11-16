@@ -55,7 +55,7 @@ pub struct MidiSender {
 impl MidiSender {
     /// A key went down (`velocity` from 0 to 1).
     pub fn note_on(&self, key: u8, velocity: f32) {
-        self.push(LiveNote {
+        self.push(LiveNote::Note {
             key,
             velocity: velocity.max(f32::MIN_POSITIVE),
         });
@@ -63,7 +63,14 @@ impl MidiSender {
 
     /// A key came up.
     pub fn note_off(&self, key: u8) {
-        self.push(LiveNote { key, velocity: 0.0 });
+        self.push(LiveNote::Note { key, velocity: 0.0 });
+    }
+
+    /// The sustain pedal went down (`true`) or came up. While it is down,
+    /// released keys keep sounding, and recorded notes last until the pedal
+    /// comes up, so a recording sounds the way it was played.
+    pub fn sustain(&self, down: bool) {
+        self.push(LiveNote::Sustain(down));
     }
 
     fn push(&self, note: LiveNote) {

@@ -51,6 +51,21 @@ const NO_EVENT: Scheduled = Scheduled {
 struct SlotState {
     /// For each key sounding because of the song: where its note ends.
     held: [Option<Ticks>; 128],
+    /// Whether the sustain pedal is down.
+    sustain: bool,
+    /// Keys played live and released while the pedal was down: they keep
+    /// sounding (and recording) until the pedal comes up.
+    sustained: [bool; 128],
+}
+
+impl SlotState {
+    fn new() -> Self {
+        Self {
+            held: [None; 128],
+            sustain: false,
+            sustained: [false; 128],
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -121,9 +136,7 @@ impl EngineProcessor {
             program: None,
             cursors: Vec::with_capacity(MAX_SLOTS),
             instruments: (0..MAX_SLOTS).map(|_| None).collect(),
-            slots: (0..MAX_SLOTS)
-                .map(|_| SlotState { held: [None; 128] })
-                .collect(),
+            slots: (0..MAX_SLOTS).map(|_| SlotState::new()).collect(),
             playing: false,
             position: 0.0,
             play_started_at: 0.0,
@@ -229,21 +242,29 @@ impl EngineProcessor {
             if target == NO_TARGET {
                 continue;
             }
-            if note.velocity > 0.0 {
-                self.note_on(target, note.key, note.velocity);
-            } else {
-                self.note_off(target, note.key);
+            match note {
+                LiveNote::Note { key, velocity } if velocity > 0.0 => {
+                    self.note_on(target, key, velocity);
+                }
+                LiveNote::Note { key, .. } => self.note_off(target, key),
+                LiveNote::Sustain(down) => self.sustain(target, down),
             }
         }
     }
 
     fn note_on(&mut self, slot: usize, key: u8, velocity: f32) {
+        if let Some(state) = self.slots.get_mut(slot) {
+            state.sustained[usize::from(key & 0x7F)] = false;
+        }
         if let Some(Some(instrument)) = self.instruments.get_mut(slot) {
             instrument.note_on(key, velocity);
         }
         if let Recording::Active { slot: target } = self.recording
             && target == slot
         {
+            // Struck again before its last note ended (held by the pedal, or
+            // a keyboard that never sent the release): that note ends here.
+            self.close_recorded_note(key, self.position_ticks());
             let start = self.position_ticks();
             self.recorded_held[usize::from(key & 0x7F)] = Some((start, velocity));
             self.send(Outgoing::Event(EngineEvent::RecordingNoteStarted {
@@ -255,6 +276,12 @@ impl EngineProcessor {
     }
 
     fn note_off(&mut self, slot: usize, key: u8) {
+        if let Some(state) = self.slots.get_mut(slot)
+            && state.sustain
+        {
+            state.sustained[usize::from(key & 0x7F)] = true;
+            return;
+        }
         if let Some(Some(instrument)) = self.instruments.get_mut(slot) {
             instrument.note_off(key);
         }
@@ -265,12 +292,29 @@ impl EngineProcessor {
         }
     }
 
+    /// The sustain pedal went down or came up. Coming up releases every key
+    /// it was holding.
+    fn sustain(&mut self, slot: usize, down: bool) {
+        let Some(state) = self.slots.get_mut(slot) else {
+            return;
+        };
+        state.sustain = down;
+        if down {
+            return;
+        }
+        for key in 0..128_u8 {
+            if std::mem::take(&mut self.slots[slot].sustained[usize::from(key)]) {
+                self.note_off(slot, key);
+            }
+        }
+    }
+
     fn handle(&mut self, command: Command) {
         match command {
             Command::Program(program) => self.install_program(program),
             Command::Instrument { slot, instrument } => {
                 if slot < MAX_SLOTS {
-                    self.slots[slot].held = [None; 128];
+                    self.slots[slot] = SlotState::new();
                     let old = std::mem::replace(&mut self.instruments[slot], instrument);
                     if let Some(old) = old {
                         self.discard(Garbage::Instrument(old));
@@ -317,7 +361,7 @@ impl EngineProcessor {
                     instrument.all_notes_off(true);
                 }
                 for slot in &mut self.slots {
-                    slot.held = [None; 128];
+                    *slot = SlotState::new();
                 }
             }
         }

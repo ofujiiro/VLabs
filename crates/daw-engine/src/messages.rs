@@ -79,12 +79,13 @@ pub enum EngineEvent {
     Stopped,
 }
 
-/// A note from a MIDI keyboard, for the track that receives live input.
+/// What a MIDI keyboard sends to the track that receives live input.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct LiveNote {
-    pub key: u8,
-    /// 0 releases the note.
-    pub velocity: f32,
+pub(crate) enum LiveNote {
+    /// A key went down, or up when `velocity` is 0.
+    Note { key: u8, velocity: f32 },
+    /// The sustain pedal went down (`true`) or came up.
+    Sustain(bool),
 }
 
 /// No track receives live input.

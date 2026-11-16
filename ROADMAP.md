@@ -60,7 +60,8 @@ passed on Windows and Linux (decision 0009).
    take.
 6. Save with Ctrl+S, close, and open the song again from the menu.
 7. Plug in a MIDI keyboard while the program is running: a message says it
-   is connected, and it plays the piano.
+   is connected, and it plays the piano. The sustain pedal holds notes, and
+   recorded notes last as long as you heard them.
 8. Try the light theme (menu › Theme) and change a shortcut (menu ›
    Keyboard shortcuts).
 
@@ -69,7 +70,8 @@ passed on Windows and Linux (decision 0009).
 - On Windows, copy and paste of notes works inside the program but not
   between two copies of it (the system clipboard is used on Linux only;
   decision 0005).
-- The sustain pedal and pitch wheel of a MIDI keyboard are not used yet.
+- The pitch wheel and other controllers of a MIDI keyboard are not used
+  yet (the sustain pedal is).
 - The sound is on the quiet side (a three-note chord peaks around −16 dBFS);
   a master limiter in phase 2 will let the level go up safely.
 - Open and save dialogs are not attached to the window, so on some desktops

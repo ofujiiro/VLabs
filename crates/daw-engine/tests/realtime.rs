@@ -299,3 +299,67 @@ fn midi_keyboard_notes_play_the_live_track_only_when_one_is_chosen() {
     let peak = sounding.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
     assert!(peak > 0.05, "the MIDI note is silent (peak {peak})");
 }
+
+#[test]
+fn the_sustain_pedal_holds_notes_and_lengthens_recorded_ones() {
+    daw_rt::set_on_violation(daw_rt::OnViolation::Count);
+    let (mut engine, mut processor) = engine();
+    let mut project = Project::starter("P", "T");
+    project.loop_region = None;
+    let (track, _) = project.first_pattern().unwrap();
+    engine.sync(&project, 1);
+    engine.set_live_target(Some(track));
+    engine.set_metronome(false, false, 0.0); // Only the note is measured.
+    let midi = engine.midi_sender();
+    let mut events = Vec::new();
+    run(&mut processor, &mut engine, 2, &mut events);
+    engine.record(track, 0);
+    run(&mut processor, &mut engine, 2, &mut events);
+
+    // Pedal down, a short note: it keeps sounding after its key comes up.
+    let beat_blocks = (RATE as usize / 2).div_ceil(BLOCK);
+    midi.sustain(true);
+    midi.note_on(64, 0.8);
+    run(&mut processor, &mut engine, 4, &mut events);
+    midi.note_off(64);
+    let held = run(&mut processor, &mut engine, beat_blocks, &mut events);
+    let peak = |samples: &[f32]| samples.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+    let tail = &held[held.len() - BLOCK * 4..];
+    assert!(
+        peak(tail) > 0.05,
+        "the pedal holds the note (peak {})",
+        peak(tail)
+    );
+
+    // Pedal up: the note is released, and fades.
+    midi.sustain(false);
+    let released = run(&mut processor, &mut engine, beat_blocks * 2, &mut events);
+    let end = &released[released.len() - BLOCK * 4..];
+    assert!(
+        peak(end) < 0.001,
+        "released when the pedal came up (peak {})",
+        peak(end)
+    );
+    engine.stop();
+    run(&mut processor, &mut engine, 2, &mut events);
+
+    let recorded: Vec<(Ticks, Ticks)> = events
+        .iter()
+        .filter_map(|e| match *e {
+            EngineEvent::RecordedNote { start, end, .. } => Some((start, end)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(recorded.len(), 1, "{events:?}");
+    let (start, end) = recorded[0];
+    assert!(
+        end - start > Ticks::QUARTER,
+        "the recorded note lasts until the pedal came up: {:.2} beats",
+        (end - start).as_quarters()
+    );
+    assert_eq!(
+        daw_rt::violation_count(),
+        0,
+        "allocated on the audio thread"
+    );
+}
