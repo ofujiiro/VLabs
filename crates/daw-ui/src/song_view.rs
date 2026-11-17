@@ -11,17 +11,24 @@
 //! - click the ruler to move the play position; drag along it to loop a
 //!   part of the song;
 //! - the wheel scrolls, Shift+wheel scrolls in time, Ctrl+wheel zooms; hold
-//!   Alt while dragging to move by beats instead of bars.
+//!   Alt while dragging to move by beats instead of bars;
+//! - a track's automation lanes sit under it (decision 0016): click a lane
+//!   to add a point, drag a point to move it, right-click it to remove it.
 
 use daw_dsp::drums::PadSound;
-use daw_model::{Clip, ClipId, Instrument, Pattern, Region, Ticks, TrackId};
+use daw_engine::PluginTarget;
+use daw_model::{
+    AutomationPoint, AutomationTarget, Clip, ClipId, Instrument, Pattern, Project, Region, Ticks,
+    TrackId,
+};
 use egui::{
-    Align, Align2, Button, CornerRadius, CursorIcon, FontId, Layout as EguiLayout, PointerButton,
-    Pos2, Rect, Response, RichText, Sense, Shape, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2,
+    Align, Align2, Button, CornerRadius, CursorIcon, FontId, Label, Layout as EguiLayout,
+    PointerButton, PopupCloseBehavior, Pos2, Rect, Response, RichText, Sense, Shape, Stroke,
+    StrokeKind, TextEdit, Ui, UiBuilder, pos2, vec2,
 };
 
 use crate::icons::{Icon, Look, icon_button};
-use crate::session::Session;
+use crate::session::{LaneChoice, Session};
 use crate::step_grid::PAD_ORDER;
 use crate::text;
 use crate::theme::{Palette, size, track_color};
@@ -30,7 +37,12 @@ use crate::workspace::Intent;
 const HEADER_WIDTH: f32 = 236.0;
 const RULER_HEIGHT: f32 = 28.0;
 const ROW_HEIGHT: f32 = 64.0;
-const ADD_ROW_HEIGHT: f32 = 48.0;
+const LANE_HEIGHT: f32 = 52.0;
+/// Room above and below a lane's line.
+const LANE_MARGIN: f32 = 7.0;
+/// How close to an automation point the pointer must be to take it.
+const POINT_GRAB: f32 = 7.0;
+const ADD_ROW_HEIGHT: f32 = 80.0;
 /// How close to a clip's right end the pointer must be to resize it.
 const EDGE_GRAB: f32 = 8.0;
 const DRAG_THRESHOLD: f32 = 4.0;
@@ -57,6 +69,12 @@ enum Drag {
     },
     /// Moving the view.
     Pan { last: Pos2 },
+    /// Moving an automation point.
+    Point {
+        track: TrackId,
+        target: AutomationTarget,
+        index: usize,
+    },
 }
 
 /// The song view's state between frames.
@@ -74,6 +92,9 @@ pub struct SongView {
     menu_clip: Option<ClipId>,
     menu_at: Pos2,
     scrolled_at: f64,
+    /// The settings offered while a track's lane chooser is open.
+    lane_menu: Option<(TrackId, Vec<LaneChoice>)>,
+    lane_search: String,
 }
 
 impl Default for SongView {
@@ -88,24 +109,72 @@ impl Default for SongView {
             menu_clip: None,
             menu_at: Pos2::ZERO,
             scrolled_at: f64::NEG_INFINITY,
+            lane_menu: None,
+            lane_search: String::new(),
         }
     }
 }
 
-/// The parts of the view, worked out for each frame.
+/// What a row of the view shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RowKind {
+    /// A track, with its clips.
+    Track,
+    /// One of the track's automation lanes.
+    Lane(AutomationTarget),
+}
+
+/// A row of the view: a track, or one of its lanes under it.
 #[derive(Clone, Copy, Debug)]
+struct Row {
+    /// The track's place in the list.
+    index: usize,
+    track: TrackId,
+    kind: RowKind,
+    /// From the top of the first row, in points.
+    offset: f32,
+    height: f32,
+}
+
+/// The parts of the view, worked out for each frame.
+#[derive(Clone, Debug)]
 struct Layout {
     whole: Rect,
     headers: Rect,
     ruler: Rect,
     timeline: Rect,
     top: f32,
+    rows: Vec<Row>,
+    /// Where the rows end, from the top of the first.
+    rows_end: f32,
 }
 
 impl Layout {
-    fn new(whole: Rect, top: f32) -> Self {
+    fn new(whole: Rect, top: f32, project: &Project) -> Self {
         let left = whole.left() + HEADER_WIDTH;
         let below_ruler = whole.top() + RULER_HEIGHT;
+        let mut rows = Vec::new();
+        let mut offset = 0.0;
+        for (index, track) in project.tracks.iter().enumerate() {
+            rows.push(Row {
+                index,
+                track: track.id,
+                kind: RowKind::Track,
+                offset,
+                height: ROW_HEIGHT,
+            });
+            offset += ROW_HEIGHT;
+            for lane in &track.automation {
+                rows.push(Row {
+                    index,
+                    track: track.id,
+                    kind: RowKind::Lane(lane.target),
+                    offset,
+                    height: LANE_HEIGHT,
+                });
+                offset += LANE_HEIGHT;
+            }
+        }
         Self {
             whole,
             headers: Rect::from_min_max(
@@ -115,23 +184,56 @@ impl Layout {
             ruler: Rect::from_min_max(pos2(left, whole.top()), pos2(whole.right(), below_ruler)),
             timeline: Rect::from_min_max(pos2(left, below_ruler), whole.max),
             top,
+            rows,
+            rows_end: offset,
         }
     }
 
-    #[allow(clippy::cast_precision_loss, reason = "small counts")]
-    fn row_top(&self, row: usize) -> f32 {
-        self.timeline.top() + row as f32 * ROW_HEIGHT - self.top
+    /// The top of a row on screen.
+    fn top_of(&self, row: &Row) -> f32 {
+        self.timeline.top() + row.offset - self.top
     }
 
-    /// The track row under a y position.
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "checked before converting"
-    )]
-    fn row_at(&self, y: f32, rows: usize) -> Option<usize> {
-        let at = ((y - self.timeline.top() + self.top) / ROW_HEIGHT).floor();
-        (at >= 0.0 && (at as usize) < rows).then_some(at as usize)
+    /// The top of a track's row on screen.
+    fn row_top(&self, index: usize) -> f32 {
+        self.rows
+            .iter()
+            .find(|r| r.index == index && r.kind == RowKind::Track)
+            .map_or(self.timeline.top(), |r| self.top_of(r))
+    }
+
+    /// The bottom of the last row on screen.
+    fn rows_bottom(&self) -> f32 {
+        self.timeline.top() + self.rows_end - self.top
+    }
+
+    /// The row under a y position.
+    fn row_at(&self, y: f32) -> Option<Row> {
+        let at = y - self.timeline.top() + self.top;
+        self.rows
+            .iter()
+            .find(|r| at >= r.offset && at < r.offset + r.height)
+            .copied()
+    }
+
+    /// A lane's row.
+    fn lane_row(&self, track: TrackId, target: AutomationTarget) -> Option<Row> {
+        self.rows
+            .iter()
+            .find(|r| r.track == track && r.kind == RowKind::Lane(target))
+            .copied()
+    }
+
+    /// Where a lane value (0 to 1) is drawn in a lane's row.
+    fn lane_y(&self, row: &Row, value: f32) -> f32 {
+        let bottom = self.top_of(row) + row.height - LANE_MARGIN;
+        bottom - value.clamp(0.0, 1.0) * (row.height - 2.0 * LANE_MARGIN)
+    }
+
+    /// The lane value at a height in a lane's row.
+    fn lane_value(&self, row: &Row, y: f32) -> f32 {
+        let bottom = self.top_of(row) + row.height - LANE_MARGIN;
+        ((bottom - y) / (row.height - 2.0 * LANE_MARGIN)).clamp(0.0, 1.0)
     }
 }
 
@@ -147,9 +249,8 @@ impl SongView {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         response
             .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Canvas, true, text::SONG_VIEW));
-        let rows = session.project().tracks.len();
-        let content = rows as f32 * ROW_HEIGHT + ADD_ROW_HEIGHT;
-        let mut layout = Layout::new(rect, self.top);
+        let mut layout = Layout::new(rect, self.top, session.project());
+        let content = layout.rows_end + ADD_ROW_HEIGHT;
         if !self.fitted && layout.timeline.width() > 50.0 {
             self.fit(session, &layout);
             self.fitted = true;
@@ -166,9 +267,10 @@ impl SongView {
         ui.painter_at(rect)
             .rect_filled(rect, CornerRadius::ZERO, p.grid);
         self.paint_rows(ui, session, &layout);
+        self.paint_lanes(ui, session, &layout);
         self.paint_clips(ui, session, &layout);
         self.paint_ruler(ui, session, &layout);
-        Self::headers(ui, session, &layout, intents);
+        self.headers(ui, session, &layout, intents);
         self.clip_menu(ui, session);
     }
 
@@ -256,13 +358,85 @@ impl SongView {
         session: &Session,
         pos: Pos2,
     ) -> Option<(ClipId, usize, Rect)> {
-        let rows = session.project().tracks.len();
-        let row = layout.row_at(pos.y, rows)?;
-        let track = &session.project().tracks[row];
+        let row = layout.row_at(pos.y)?;
+        if row.kind != RowKind::Track {
+            return None;
+        }
+        let track = session.project().tracks.get(row.index)?;
         track.clips.iter().rev().find_map(|clip| {
-            let rect = self.clip_rect(layout, row, clip);
-            rect.contains(pos).then_some((clip.id, row, rect))
+            let rect = self.clip_rect(layout, row.index, clip);
+            rect.contains(pos).then_some((clip.id, row.index, rect))
         })
+    }
+
+    /// The automation point under a point of a lane's row, if any.
+    fn point_at(
+        &self,
+        layout: &Layout,
+        session: &Session,
+        row: &Row,
+        target: AutomationTarget,
+        pos: Pos2,
+    ) -> Option<usize> {
+        let lane = session.project().lane(row.track, target)?;
+        lane.points
+            .iter()
+            .enumerate()
+            .filter_map(|(index, p)| {
+                let at = pos2(self.tick_to_x(layout, p.at), layout.lane_y(row, p.value));
+                let distance = at.distance(pos);
+                (distance <= POINT_GRAB).then_some((index, distance))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(index, _)| index)
+    }
+
+    /// A moment of a lane under an x position: on the nearest beat, or
+    /// exactly there with Alt.
+    fn lane_tick(&self, layout: &Layout, session: &Session, x: f32, free: bool) -> Ticks {
+        let at = self.x_to_tick(layout, x).max(Ticks::ZERO);
+        if free {
+            at
+        } else {
+            Self::snap_nearest(session, at, true)
+        }
+    }
+
+    /// A press on a lane: takes the point there, or adds one and takes it.
+    fn press_lane(
+        &mut self,
+        layout: &Layout,
+        session: &mut Session,
+        row: &Row,
+        target: AutomationTarget,
+        pos: Pos2,
+        free: bool,
+    ) {
+        let track = row.track;
+        if let Some(index) = self.point_at(layout, session, row, target, pos) {
+            session.begin_gesture(text::EDIT_MOVE_POINT);
+            self.drag = Drag::Point {
+                track,
+                target,
+                index,
+            };
+            return;
+        }
+        let point = AutomationPoint {
+            at: self.lane_tick(layout, session, pos.x, free),
+            value: layout.lane_value(row, pos.y),
+        };
+        session.begin_gesture(text::EDIT_ADD_POINT);
+        match session.add_lane_point(track, target, point) {
+            Some(index) => {
+                self.drag = Drag::Point {
+                    track,
+                    target,
+                    index,
+                };
+            }
+            None => session.end_gesture(),
+        }
     }
 
     // ----- Input
@@ -328,10 +502,12 @@ impl SongView {
             session.open_pattern(track, pattern);
             return;
         }
+        // (Over the view, not over a menu or popup on top of it. A quick tap
+        // can press and release within one frame.)
         if primary_pressed
             && inside
             && self.drag == Drag::None
-            && response.is_pointer_button_down_on()
+            && (response.hovered() || response.is_pointer_button_down_on())
         {
             if layout.ruler.contains(pos) {
                 let anchor = Self::snap_nearest(session, self.x_to_tick(layout, pos.x), true);
@@ -354,8 +530,12 @@ impl SongView {
                         moved: false,
                     };
                 }
-            } else if let Some(row) = layout.row_at(pos.y, session.project().tracks.len()) {
-                let track = session.project().tracks[row].id;
+            } else if let Some(row) = layout.row_at(pos.y)
+                && let RowKind::Lane(target) = row.kind
+            {
+                self.press_lane(layout, session, &row, target, pos, alt);
+            } else if let Some(row) = layout.row_at(pos.y) {
+                let track = row.track;
                 let at = Self::snap(session, self.x_to_tick(layout, pos.x), alt);
                 session.begin_gesture(text::EDIT_PLACE_PATTERN);
                 if let Some(clip) = session.place_pattern(track, at) {
@@ -374,7 +554,14 @@ impl SongView {
             }
         }
         if secondary_pressed && inside {
-            if let Some((clip, _, _)) = self.clip_at(layout, session, pos) {
+            if let Some(row) = layout.row_at(pos.y)
+                && let RowKind::Lane(target) = row.kind
+            {
+                if let Some(index) = self.point_at(layout, session, &row, target, pos) {
+                    session.remove_lane_point(row.track, target, index);
+                }
+                self.menu_clip = None;
+            } else if let Some((clip, _, _)) = self.clip_at(layout, session, pos) {
                 session.select_clip(Some(clip));
                 self.menu_clip = Some(clip);
                 self.menu_at = pos;
@@ -447,6 +634,19 @@ impl SongView {
                 self.scrolled_at = time;
                 self.drag = Drag::Pan { last: pos };
             }
+            Drag::Point {
+                track,
+                target,
+                index,
+            } if any_down => {
+                if let Some(row) = layout.lane_row(track, target) {
+                    let point = AutomationPoint {
+                        at: self.lane_tick(layout, session, pos.x, alt),
+                        value: layout.lane_value(&row, pos.y),
+                    };
+                    session.move_lane_point(track, target, index, point);
+                }
+            }
             Drag::None => {}
             finished => {
                 match finished {
@@ -463,16 +663,31 @@ impl SongView {
         }
         // The pointer's shape says what a press would do.
         if inside && self.drag == Drag::None && ui.rect_contains_pointer(layout.whole) {
+            let lane = layout.row_at(pos.y).and_then(|row| match row.kind {
+                RowKind::Lane(target) if !layout.ruler.contains(pos) => Some((row, target)),
+                _ => None,
+            });
             let icon = match self.clip_at(layout, session, pos) {
                 Some((_, _, rect)) if pos.x >= rect.right() - EDGE_GRAB => {
                     CursorIcon::ResizeHorizontal
                 }
                 Some(_) => CursorIcon::Grab,
                 None if layout.ruler.contains(pos) => CursorIcon::PointingHand,
-                None => CursorIcon::Default,
+                None => match lane {
+                    Some((row, target))
+                        if self.point_at(layout, session, &row, target, pos).is_some() =>
+                    {
+                        CursorIcon::Grab
+                    }
+                    Some(_) => CursorIcon::Crosshair,
+                    None => CursorIcon::Default,
+                },
             };
             ui.ctx().set_cursor_icon(icon);
-        } else if matches!(self.drag, Drag::Move { moved: true, .. }) {
+        } else if matches!(
+            self.drag,
+            Drag::Point { .. } | Drag::Move { moved: true, .. }
+        ) {
             ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
         } else if matches!(self.drag, Drag::Resize { .. }) {
             ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
@@ -496,15 +711,27 @@ impl SongView {
     fn paint_rows(&self, ui: &Ui, session: &Session, layout: &Layout) {
         let p = Palette::of(ui.ctx());
         let painter = ui.painter_at(layout.timeline);
-        let tracks = &session.project().tracks;
-        for (row, track) in tracks.iter().enumerate() {
-            let top = layout.row_top(row);
+        for row in &layout.rows {
+            let top = layout.top_of(row);
             let band = Rect::from_min_max(
                 pos2(layout.timeline.left(), top),
-                pos2(layout.timeline.right(), top + ROW_HEIGHT),
+                pos2(layout.timeline.right(), top + row.height),
             );
-            if track.id == session.track_id() {
-                painter.rect_filled(band, CornerRadius::ZERO, p.grid_dark_row);
+            if band.bottom() < layout.timeline.top() || band.top() > layout.timeline.bottom() {
+                continue;
+            }
+            match row.kind {
+                RowKind::Track if row.track == session.track_id() => {
+                    painter.rect_filled(band, CornerRadius::ZERO, p.grid_dark_row);
+                }
+                RowKind::Track => {}
+                RowKind::Lane(_) => {
+                    painter.rect_filled(
+                        band,
+                        CornerRadius::ZERO,
+                        track_color(row.index).gamma_multiply(0.07),
+                    );
+                }
             }
             painter.hline(
                 band.x_range(),
@@ -547,7 +774,7 @@ impl SongView {
             Stroke::new(1.0, p.grid_bar.gamma_multiply(0.6)),
         );
         // Hint along the bottom.
-        let rows_bottom = layout.row_top(tracks.len());
+        let rows_bottom = layout.rows_bottom();
         if rows_bottom + 40.0 < layout.timeline.bottom() {
             painter.text(
                 pos2(layout.timeline.center().x, layout.timeline.bottom() - 18.0),
@@ -556,6 +783,69 @@ impl SongView {
                 FontId::proportional(size::SMALL),
                 p.text_weak.gamma_multiply(0.8),
             );
+        }
+    }
+
+    /// Each lane's line through its points, and the points.
+    fn paint_lanes(&self, ui: &Ui, session: &mut Session, layout: &Layout) {
+        let p = Palette::of(ui.ctx());
+        let painter = ui.painter_at(layout.timeline);
+        let hover = ui.input(|i| i.pointer.hover_pos());
+        for row in &layout.rows {
+            let RowKind::Lane(target) = row.kind else {
+                continue;
+            };
+            let top = layout.top_of(row);
+            if top + row.height < layout.timeline.top() || top > layout.timeline.bottom() {
+                continue;
+            }
+            let Some(lane) = session.project().lane(row.track, target).cloned() else {
+                continue;
+            };
+            let color = track_color(row.index);
+            let (left, right) = (layout.timeline.left(), layout.timeline.right());
+            let points: Vec<Pos2> = lane
+                .points
+                .iter()
+                .map(|pt| pos2(self.tick_to_x(layout, pt.at), layout.lane_y(row, pt.value)))
+                .collect();
+            if let (Some(first), Some(last)) = (points.first(), points.last()) {
+                // Before the first point and after the last, the value holds.
+                let mut path = vec![pos2(left.min(first.x), first.y)];
+                path.extend(points.iter().copied());
+                path.push(pos2(right.max(last.x), last.y));
+                painter.add(Shape::line(path, Stroke::new(2.0, color)));
+            }
+            let dragging = match self.drag {
+                Drag::Point {
+                    track,
+                    target: t,
+                    index,
+                } if track == row.track && t == target => Some(index),
+                _ => None,
+            };
+            for (index, at) in points.iter().enumerate() {
+                let near = hover.is_some_and(|h| h.distance(*at) <= POINT_GRAB);
+                let radius = if near || dragging == Some(index) {
+                    5.5
+                } else {
+                    4.0
+                };
+                painter.circle(*at, radius, color, Stroke::new(1.5, p.text));
+            }
+            // While a point moves, its value is written beside it.
+            if let Some(index) = dragging
+                && let (Some(at), Some(point)) = (points.get(index), lane.points.get(index))
+            {
+                let value = session.lane_value_text(row.track, target, point.value);
+                painter.text(
+                    *at + vec2(10.0, -10.0),
+                    Align2::LEFT_BOTTOM,
+                    value,
+                    FontId::proportional(size::SMALL),
+                    p.text,
+                );
+            }
         }
     }
 
@@ -789,9 +1079,14 @@ impl SongView {
     }
 
     /// The track list on the left: real widgets (names, mute, solo, a menu)
-    /// in a column that scrolls with the rows.
-    #[allow(clippy::too_many_lines, reason = "the whole track list, top to bottom")]
-    fn headers(ui: &mut Ui, session: &mut Session, layout: &Layout, intents: &mut Vec<Intent>) {
+    /// in a column that scrolls with the rows, each track's lanes under it.
+    fn headers(
+        &mut self,
+        ui: &mut Ui,
+        session: &mut Session,
+        layout: &Layout,
+        intents: &mut Vec<Intent>,
+    ) {
         let p = Palette::of(ui.ctx());
         ui.painter_at(layout.headers)
             .rect_filled(layout.headers, CornerRadius::ZERO, p.surface);
@@ -800,130 +1095,22 @@ impl SongView {
             layout.whole.y_range(),
             Stroke::new(1.0, p.divider),
         );
-        let tracks: Vec<(TrackId, String, Instrument, bool, bool)> = session
-            .project()
-            .tracks
-            .iter()
-            .map(|t| {
-                (
-                    t.id,
-                    t.name.clone(),
-                    t.instrument.clone(),
-                    t.strip.mute,
-                    t.strip.solo,
-                )
-            })
-            .collect();
-        let count = tracks.len();
-        for (row, (track, name, instrument, mute, solo)) in tracks.into_iter().enumerate() {
-            let top = layout.row_top(row);
+        for row in &layout.rows {
+            let top = layout.top_of(row);
             let rect = Rect::from_min_max(
                 pos2(layout.headers.left(), top),
-                pos2(layout.headers.right() - 1.0, top + ROW_HEIGHT),
+                pos2(layout.headers.right() - 1.0, top + row.height),
             );
             if rect.bottom() < layout.headers.top() || rect.top() > layout.headers.bottom() {
                 continue;
             }
-            let focused = track == session.track_id();
-            let background = ui.interact(
-                rect.intersect(layout.headers),
-                ui.scope_id().with(("track", track.0)),
-                Sense::click(),
-            );
-            if background.clicked() {
-                session.focus_track(track);
+            match row.kind {
+                RowKind::Track => self.track_header(ui, session, layout, row, rect, intents),
+                RowKind::Lane(target) => lane_header(ui, session, layout, row, target, rect),
             }
-            if background.double_clicked() {
-                intents.push(Intent::RenameTrack(track));
-            }
-            let painter = ui.painter_at(layout.headers);
-            if focused {
-                painter.rect_filled(rect, CornerRadius::ZERO, p.raised);
-            }
-            painter.rect_filled(
-                Rect::from_min_max(
-                    rect.left_top() + vec2(0.0, 6.0),
-                    pos2(rect.left() + 4.0, rect.bottom() - 6.0),
-                ),
-                CornerRadius::same(2),
-                track_color(row),
-            );
-            painter.hline(
-                rect.x_range(),
-                rect.bottom() - 0.5,
-                Stroke::new(1.0, p.divider),
-            );
-            let mut child = ui.new_child(
-                UiBuilder::new()
-                    .max_rect(rect.shrink2(vec2(14.0, 8.0)))
-                    .layout(EguiLayout::top_down(Align::Min)),
-            );
-            child.set_clip_rect(layout.headers);
-            child.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                ui.label(RichText::new(&name).strong().size(size::BODY));
-                ui.with_layout(EguiLayout::right_to_left(Align::Center), |ui| {
-                    let menu =
-                        icon_button(ui, Icon::Menu, text::TRACK_MENU, "", Look::Normal, 24.0);
-                    egui::Popup::menu(&menu).show(|ui| {
-                        ui.set_min_width(180.0);
-                        if ui.button(text::RENAME_PATTERN).clicked() {
-                            intents.push(Intent::RenameTrack(track));
-                            ui.close();
-                        }
-                        if ui
-                            .add_enabled(row > 0, Button::new(text::MOVE_UP))
-                            .clicked()
-                        {
-                            session.move_track(track, -1);
-                            ui.close();
-                        }
-                        if ui
-                            .add_enabled(row + 1 < count, Button::new(text::MOVE_DOWN))
-                            .clicked()
-                        {
-                            session.move_track(track, 1);
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui
-                            .add_enabled(count > 1, Button::new(text::DELETE_TRACK))
-                            .clicked()
-                        {
-                            session.remove_track(track);
-                            ui.close();
-                        }
-                    });
-                    let solo_button = ui
-                        .add(
-                            Button::new(text::SOLO_SHORT)
-                                .selected(solo)
-                                .min_size(vec2(26.0, 22.0)),
-                        )
-                        .on_hover_text(text::SOLO_HINT);
-                    if solo_button.clicked() {
-                        session.toggle_solo(track);
-                    }
-                    let mute_button = ui
-                        .add(
-                            Button::new(text::MUTE_SHORT)
-                                .selected(mute)
-                                .min_size(vec2(26.0, 22.0)),
-                        )
-                        .on_hover_text(text::MUTE_HINT);
-                    if mute_button.clicked() {
-                        session.toggle_mute(track);
-                    }
-                });
-            });
-            let kind = match &instrument {
-                Instrument::Drums { kit, .. } => text::kit_description(text::kit_name(kit)),
-                Instrument::SoundFont { .. } => text::FIRST_TRACK.to_owned(),
-            };
-            child.label(RichText::new(kind).small().color(p.text_weak));
         }
         // Adding tracks, under the list.
-        let top = layout.row_top(count);
+        let top = layout.rows_bottom();
         let rect = Rect::from_min_max(
             pos2(layout.headers.left(), top),
             pos2(layout.headers.right() - 1.0, top + ADD_ROW_HEIGHT),
@@ -932,7 +1119,7 @@ impl SongView {
             let mut child = ui.new_child(
                 UiBuilder::new()
                     .max_rect(rect.shrink2(vec2(12.0, 10.0)))
-                    .layout(EguiLayout::left_to_right(Align::Center)),
+                    .layout(EguiLayout::left_to_right(Align::Min).with_main_wrap(true)),
             );
             child.set_clip_rect(layout.headers);
             if child
@@ -949,6 +1136,219 @@ impl SongView {
             {
                 session.add_piano_track();
             }
+            if child
+                .button(format!("+ {}", text::ADD_INSTRUMENT))
+                .on_hover_text(text::ADD_INSTRUMENT_HINT)
+                .clicked()
+            {
+                intents.push(Intent::ChooseInstrument);
+            }
+        }
+    }
+
+    /// One track's header: name, mute, solo and a menu; what it plays; its
+    /// plugin's window and its lanes.
+    #[allow(clippy::too_many_lines, reason = "one header, top to bottom")]
+    fn track_header(
+        &mut self,
+        ui: &mut Ui,
+        session: &mut Session,
+        layout: &Layout,
+        row: &Row,
+        rect: Rect,
+        intents: &mut Vec<Intent>,
+    ) {
+        let p = Palette::of(ui.ctx());
+        let track = row.track;
+        let Some(t) = session.project().track(track) else {
+            return;
+        };
+        let (name, instrument, mute, solo) = (
+            t.name.clone(),
+            t.instrument.clone(),
+            t.strip.mute,
+            t.strip.solo,
+        );
+        let count = session.project().tracks.len();
+        let focused = track == session.track_id();
+        let background = ui.interact(
+            rect.intersect(layout.headers),
+            ui.scope_id().with(("track", track.0)),
+            Sense::click(),
+        );
+        if background.clicked() {
+            session.focus_track(track);
+        }
+        if background.double_clicked() {
+            intents.push(Intent::RenameTrack(track));
+        }
+        let painter = ui.painter_at(layout.headers);
+        if focused {
+            painter.rect_filled(rect, CornerRadius::ZERO, p.raised);
+        }
+        painter.rect_filled(
+            Rect::from_min_max(
+                rect.left_top() + vec2(0.0, 6.0),
+                pos2(rect.left() + 4.0, rect.bottom() - 6.0),
+            ),
+            CornerRadius::same(2),
+            track_color(row.index),
+        );
+        painter.hline(
+            rect.x_range(),
+            rect.bottom() - 0.5,
+            Stroke::new(1.0, p.divider),
+        );
+        let mut child = ui.new_child(
+            UiBuilder::new()
+                .max_rect(rect.shrink2(vec2(14.0, 7.0)))
+                .layout(EguiLayout::top_down(Align::Min)),
+        );
+        child.set_clip_rect(layout.headers);
+        child.spacing_mut().item_spacing.y = 3.0;
+        child.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.with_layout(EguiLayout::right_to_left(Align::Center), |ui| {
+                let menu = icon_button(ui, Icon::Menu, text::TRACK_MENU, "", Look::Normal, 24.0);
+                egui::Popup::menu(&menu).show(|ui| {
+                    ui.set_min_width(180.0);
+                    if ui.button(text::RENAME_PATTERN).clicked() {
+                        intents.push(Intent::RenameTrack(track));
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(row.index > 0, Button::new(text::MOVE_UP))
+                        .clicked()
+                    {
+                        session.move_track(track, -1);
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(row.index + 1 < count, Button::new(text::MOVE_DOWN))
+                        .clicked()
+                    {
+                        session.move_track(track, 1);
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui
+                        .add_enabled(count > 1, Button::new(text::DELETE_TRACK))
+                        .clicked()
+                    {
+                        session.remove_track(track);
+                        ui.close();
+                    }
+                });
+                let solo_button = ui
+                    .add(
+                        Button::new(text::SOLO_SHORT)
+                            .selected(solo)
+                            .min_size(vec2(26.0, 22.0)),
+                    )
+                    .on_hover_text(text::SOLO_HINT);
+                if solo_button.clicked() {
+                    session.toggle_solo(track);
+                }
+                let mute_button = ui
+                    .add(
+                        Button::new(text::MUTE_SHORT)
+                            .selected(mute)
+                            .min_size(vec2(26.0, 22.0)),
+                    )
+                    .on_hover_text(text::MUTE_HINT);
+                if mute_button.clicked() {
+                    session.toggle_mute(track);
+                }
+                ui.with_layout(EguiLayout::left_to_right(Align::Center), |ui| {
+                    ui.add(Label::new(RichText::new(&name).strong().size(size::BODY)).truncate());
+                });
+            });
+        });
+        let plugin = session.track_plugin(track);
+        let missing = plugin.is_some_and(|target| session.is_plugin_missing(target));
+        let kind = match &instrument {
+            Instrument::Drums { kit, .. } => text::kit_description(text::kit_name(kit)),
+            Instrument::SoundFont { .. } => text::FIRST_TRACK.to_owned(),
+            Instrument::Plugin(setup) => text::plugin_track(&setup.plugin.name, missing),
+        };
+        child.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.with_layout(EguiLayout::right_to_left(Align::Center), |ui| {
+                let lanes = icon_button(
+                    ui,
+                    Icon::Automation,
+                    text::AUTOMATION,
+                    text::AUTOMATION_HINT,
+                    Look::Normal,
+                    20.0,
+                );
+                self.lane_chooser(&lanes, session, track);
+                if let Some(target) = plugin.filter(|&target| {
+                    !session.is_plugin_missing(target) && session.has_plugin_window(target)
+                }) {
+                    plugin_window_button(ui, session, target, 20.0);
+                }
+                ui.with_layout(EguiLayout::left_to_right(Align::Center), |ui| {
+                    ui.add(Label::new(RichText::new(kind).small().color(p.text_weak)).truncate());
+                });
+            });
+        });
+    }
+
+    /// The list of settings a track's new lane can change, under the
+    /// Automation button: searchable, the setting last moved in a plugin's
+    /// window first.
+    fn lane_chooser(&mut self, button: &Response, session: &mut Session, track: TrackId) {
+        let shown = egui::Popup::menu(button)
+            .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                if self.lane_menu.as_ref().is_none_or(|(t, _)| *t != track) {
+                    self.lane_menu = Some((track, session.lane_choices(track)));
+                    self.lane_search.clear();
+                }
+                let Some((_, choices)) = &self.lane_menu else {
+                    return;
+                };
+                ui.set_min_width(280.0);
+                ui.label(RichText::new(text::AUTOMATION).strong());
+                if choices.len() > 8 {
+                    ui.add(
+                        TextEdit::singleline(&mut self.lane_search)
+                            .desired_width(f32::INFINITY)
+                            .hint_text(text::SEARCH_SETTINGS),
+                    );
+                }
+                let needle = self.lane_search.trim().to_lowercase();
+                let wanted: Vec<&LaneChoice> = choices
+                    .iter()
+                    .filter(|c| needle.is_empty() || c.name.to_lowercase().contains(&needle))
+                    .collect();
+                if wanted.is_empty() {
+                    ui.label(RichText::new(text::NOTHING_MATCHES).weak());
+                }
+                let mut chosen = None;
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .auto_shrink([false, true])
+                    .show_rows(ui, 24.0, wanted.len(), |ui, range| {
+                        for choice in &wanted[range] {
+                            let mut button = Button::new(&choice.name)
+                                .min_size(vec2(ui.available_width(), 22.0));
+                            if choice.last_moved {
+                                button = button.shortcut_text(text::LAST_MOVED);
+                            }
+                            if ui.add(button).clicked() {
+                                chosen = Some(choice.target);
+                            }
+                        }
+                    });
+                if let Some(target) = chosen {
+                    session.add_lane(track, target);
+                    ui.close();
+                }
+            });
+        if shown.is_none() && self.lane_menu.as_ref().is_some_and(|(t, _)| *t == track) {
+            self.lane_menu = None;
         }
     }
 
@@ -994,6 +1394,82 @@ impl SongView {
         if close || pressed_outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.menu_clip = None;
         }
+    }
+}
+
+/// A lane's header: what it changes, its value where the song is, and a
+/// button that removes it.
+fn lane_header(
+    ui: &mut Ui,
+    session: &mut Session,
+    layout: &Layout,
+    row: &Row,
+    target: AutomationTarget,
+    rect: Rect,
+) {
+    let p = Palette::of(ui.ctx());
+    let painter = ui.painter_at(layout.headers);
+    painter.rect_filled(rect, CornerRadius::ZERO, p.background);
+    painter.rect_filled(
+        Rect::from_min_max(
+            rect.left_top() + vec2(0.0, 4.0),
+            pos2(rect.left() + 4.0, rect.bottom() - 4.0),
+        ),
+        CornerRadius::same(2),
+        track_color(row.index).gamma_multiply(0.6),
+    );
+    painter.hline(
+        rect.x_range(),
+        rect.bottom() - 0.5,
+        Stroke::new(1.0, p.divider),
+    );
+    let name = session.lane_name(row.track, target);
+    let value = session
+        .project()
+        .lane(row.track, target)
+        .and_then(|lane| {
+            #[allow(clippy::cast_precision_loss, reason = "tick positions fit easily")]
+            lane.value_at(session.song_position().0 as f64)
+        })
+        .map_or_default(|value| session.lane_value_text(row.track, target, value));
+    let mut child = ui.new_child(
+        UiBuilder::new()
+            .max_rect(rect.shrink2(vec2(14.0, 6.0)))
+            .layout(EguiLayout::right_to_left(Align::Min)),
+    );
+    child.set_clip_rect(layout.headers);
+    child.spacing_mut().item_spacing.x = 4.0;
+    if icon_button(
+        &mut child,
+        Icon::Minus,
+        text::REMOVE_LANE,
+        "",
+        Look::Normal,
+        20.0,
+    )
+    .clicked()
+    {
+        session.remove_lane(row.track, target);
+    }
+    child.with_layout(EguiLayout::top_down(Align::Min), |ui| {
+        ui.spacing_mut().item_spacing.y = 1.0;
+        ui.add(Label::new(RichText::new(name).small().color(p.text)).truncate())
+            .on_hover_text(text::LANE_HINT);
+        ui.add(Label::new(RichText::new(value).small().monospace().color(p.text_weak)).truncate());
+    });
+}
+
+/// The button that opens (or closes) a plugin's own window.
+fn plugin_window_button(ui: &mut Ui, session: &mut Session, target: PluginTarget, size: f32) {
+    let open = session.is_plugin_window_open(target);
+    let label = if open {
+        text::CLOSE_PLUGIN
+    } else {
+        text::OPEN_PLUGIN
+    };
+    let hint = session.plugin_name(target);
+    if icon_button(ui, Icon::Window, label, &hint, Look::on(open), size).clicked() {
+        session.toggle_plugin_window(target);
     }
 }
 

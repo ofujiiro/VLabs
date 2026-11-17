@@ -92,6 +92,10 @@ impl Session {
         if self.project().effect(id).is_none() {
             return;
         }
+        if self.effect_plugin(id).is_some() {
+            // Undoing brings the plugin back with the settings it has now.
+            self.capture_plugin_states();
+        }
         self.doc
             .edit(text::EDIT_REMOVE_EFFECT, |p| p.remove_effect(id));
     }

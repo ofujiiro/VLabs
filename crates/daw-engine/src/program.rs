@@ -7,8 +7,8 @@ use daw_dsp::effects::{
     CompressorParams, DelayParams, EffectParams, EqParams, LimiterParams, ReverbParams,
 };
 use daw_model::{
-    Clip, ClipContent, ClipId, DelayTime, Effect, EffectId, EffectKind, MeterMap, PatternId,
-    Project, Region, TempoMap, Ticks, TrackId, seconds_per_tick,
+    AutomationTarget, Clip, ClipContent, ClipId, DelayTime, Effect, EffectId, EffectKind, MeterMap,
+    PatternId, Project, Region, TempoMap, Ticks, TrackId, seconds_per_tick,
 };
 use std::sync::Arc;
 
@@ -40,8 +40,71 @@ pub enum PlaybackScope {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct EffectRef {
     pub index: usize,
-    pub params: EffectParams,
+    /// The settings of a built-in effect (a plugin keeps its own).
+    pub params: Option<EffectParams>,
     pub enabled: bool,
+}
+
+/// What an automation lane changes, as the audio thread reaches it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum LaneTarget {
+    Volume,
+    Pan,
+    /// A setting of a built-in effect: which of the track's automated
+    /// effects, and which setting.
+    BuiltinEffect {
+        effect: usize,
+        param: usize,
+    },
+    /// A parameter of a plugin effect, by its table entry.
+    PluginEffect {
+        index: usize,
+        param: u32,
+    },
+    /// A parameter of the track's plugin instrument.
+    Instrument {
+        param: u32,
+    },
+}
+
+/// An automation lane, ready to evaluate on the audio thread.
+#[derive(Clone, Debug)]
+pub(crate) struct CompiledLane {
+    pub target: LaneTarget,
+    /// (tick, value), in time order; never empty.
+    pub points: Vec<(f64, f32)>,
+    /// The value last applied (NaN before the first).
+    pub last: f32,
+}
+
+impl CompiledLane {
+    /// The value at a tick: straight lines between points.
+    pub fn value_at(&self, at: f64) -> f32 {
+        let points = &self.points;
+        let next = points.partition_point(|p| p.0 <= at);
+        if next == 0 {
+            return points[0].1;
+        }
+        let Some(&(t1, v1)) = points.get(next) else {
+            return points[points.len() - 1].1;
+        };
+        let (t0, v0) = points[next - 1];
+        if t1 <= t0 {
+            return v1;
+        }
+        #[allow(clippy::cast_possible_truncation, reason = "a fraction from 0 to 1")]
+        let t = ((at - t0) / (t1 - t0)) as f32;
+        v0 + (v1 - v0) * t
+    }
+}
+
+/// A built-in effect whose settings are automated: where it is, and its
+/// settings without automation.
+#[derive(Clone, Debug)]
+pub(crate) struct AutomatedEffect {
+    pub index: usize,
+    pub base: EffectKind,
+    pub bpm: f64,
 }
 
 /// A note as the engine plays it: absolute positions on the timeline.
@@ -63,8 +126,28 @@ pub(crate) struct TrackProgram {
     /// Output gains after volume, pan, mute and solo.
     pub gain_left: f32,
     pub gain_right: f32,
+    /// Volume and pan as set (automation may override them while playing),
+    /// and whether the track is heard at all (mute and solo).
+    pub gain: f32,
+    pub pan: f32,
+    pub audible: bool,
+    /// The gains applied at the end of the last block: changes glide from
+    /// there over one block, so they never click.
+    pub current_left: f32,
+    pub current_right: f32,
     /// The track's effect chain, in order.
     pub effects: Vec<EffectRef>,
+    /// Settings that change over the song.
+    pub automation: Vec<CompiledLane>,
+    /// Built-in effects with automated settings.
+    pub automated_effects: Vec<AutomatedEffect>,
+}
+
+/// Output gains for a volume and a pan position: the centre is at full level
+/// on both sides, and a side keeps its level as the sound moves to it.
+pub(crate) fn pan_gains(gain: f32, pan: f32) -> (f32, f32) {
+    let pan = pan.clamp(-1.0, 1.0);
+    (gain * (1.0 - pan).min(1.0), gain * (1.0 + pan).min(1.0))
 }
 
 /// Converts between ticks and seconds quickly, for a tempo map with changes.
@@ -176,9 +259,9 @@ pub(crate) fn scoped(project: &Project, scope: PlaybackScope) -> std::borrow::Co
 }
 
 /// The settings the audio thread's effect takes for a project's effect, at
-/// the song's starting tempo (a synced delay follows it).
-pub(crate) fn effect_params(kind: &EffectKind, bpm: f64) -> EffectParams {
-    match kind {
+/// the song's starting tempo (a synced delay follows it). None for a plugin.
+pub(crate) fn effect_params(kind: &EffectKind, bpm: f64) -> Option<EffectParams> {
+    Some(match kind {
         EffectKind::Eq(e) => EffectParams::Eq(EqParams {
             low_cut_hz: e.low_cut_hz,
             low_gain_db: e.low_gain_db,
@@ -228,7 +311,8 @@ pub(crate) fn effect_params(kind: &EffectKind, bpm: f64) -> EffectParams {
             gain_db: l.gain_db,
             release_ms: l.release_ms,
         }),
-    }
+        EffectKind::Plugin(_) => return None,
+    })
 }
 
 fn chain(
@@ -246,6 +330,70 @@ fn chain(
             })
         })
         .collect()
+}
+
+/// A track's automation lanes, ready for the audio thread (lanes without
+/// points, or whose effect is gone, are left out).
+fn lanes(
+    track: &daw_model::Track,
+    bpm: f64,
+    effect_index: &impl Fn(EffectId) -> Option<usize>,
+) -> (Vec<CompiledLane>, Vec<AutomatedEffect>) {
+    let mut lanes = Vec::new();
+    let mut effects: Vec<AutomatedEffect> = Vec::new();
+    for lane in &track.automation {
+        if lane.points.is_empty() {
+            continue;
+        }
+        let target = match lane.target {
+            AutomationTarget::Volume => LaneTarget::Volume,
+            AutomationTarget::Pan => LaneTarget::Pan,
+            // Only a plugin instrument has parameters.
+            AutomationTarget::Instrument { param } if track.instrument.plugin().is_some() => {
+                LaneTarget::Instrument { param }
+            }
+            AutomationTarget::Instrument { .. } => continue,
+            AutomationTarget::Effect { effect, param } => {
+                let Some(found) = track.effects.iter().find(|e| e.id == effect) else {
+                    continue;
+                };
+                let Some(index) = effect_index(effect) else {
+                    continue;
+                };
+                if let EffectKind::Plugin(_) = found.kind {
+                    LaneTarget::PluginEffect { index, param }
+                } else {
+                    let position = effects
+                        .iter()
+                        .position(|e| e.index == index)
+                        .unwrap_or_else(|| {
+                            effects.push(AutomatedEffect {
+                                index,
+                                base: found.kind.clone(),
+                                bpm,
+                            });
+                            effects.len() - 1
+                        });
+                    LaneTarget::BuiltinEffect {
+                        effect: position,
+                        param: param as usize,
+                    }
+                }
+            }
+        };
+        #[allow(clippy::cast_precision_loss, reason = "tick positions fit easily")]
+        let points = lane
+            .points
+            .iter()
+            .map(|p| (p.at.0 as f64, p.value.clamp(0.0, 1.0)))
+            .collect();
+        lanes.push(CompiledLane {
+            target,
+            points,
+            last: f32::NAN,
+        });
+    }
+    (lanes, effects)
 }
 
 /// Compiles a project. `slot_of` gives the instrument slot of each track
@@ -301,12 +449,21 @@ pub(crate) fn compile(
                 }
             }
             notes.sort_by_key(|n| (n.start, n.key));
+            let (gain_left, gain_right) = pan_gains(gain, pan);
+            let (automation, automated_effects) = lanes(track, bpm, &effect_index);
             Some(TrackProgram {
                 slot,
                 notes,
-                gain_left: gain * (1.0 - pan).min(1.0),
-                gain_right: gain * (1.0 + pan).min(1.0),
+                gain_left,
+                gain_right,
+                gain: track.strip.gain.max(0.0),
+                pan,
+                audible,
+                current_left: gain_left,
+                current_right: gain_right,
                 effects: chain(&track.effects, bpm, &effect_index),
+                automation,
+                automated_effects,
             })
         })
         .collect();

@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::automation::{AutomationLane, AutomationTarget};
 use crate::mixer::{ChainPlace, Effect, EffectKind, LimiterSettings, MasterBus};
 use crate::song::{
     ChannelStrip, Clip, ClipContent, ClipId, EffectId, Instrument, MAX_KEY, Note, NoteId, Pattern,
@@ -282,6 +283,7 @@ impl Project {
             clips: Vec::new(),
             strip: ChannelStrip::default(),
             effects: Vec::new(),
+            automation: Vec::new(),
         }));
         id
     }
@@ -381,12 +383,19 @@ impl Project {
         }
     }
 
-    /// Removes an effect.
+    /// Removes an effect (and the automation of its settings).
     pub fn remove_effect(&mut self, id: EffectId) {
         if let Some((place, _)) = self.effect_place(id)
             && let Some(chain) = self.chain_mut(place)
         {
             chain.retain(|e| e.id != id);
+            if let ChainPlace::Track(track) = place
+                && let Some(track) = self.track_mut(track)
+            {
+                track.automation.retain(
+                    |lane| !matches!(lane.target, AutomationTarget::Effect { effect, .. } if effect == id),
+                );
+            }
         }
     }
 
@@ -398,6 +407,51 @@ impl Project {
             let effect = chain.remove(from);
             let to = to.min(chain.len());
             chain.insert(to, effect);
+        }
+    }
+
+    // ----- Automation
+
+    /// A track's lane for a setting, if it has one.
+    pub fn lane(&self, track: TrackId, target: AutomationTarget) -> Option<&AutomationLane> {
+        self.track(track)?
+            .automation
+            .iter()
+            .find(|lane| lane.target == target)
+    }
+
+    /// Gives a track a lane for a setting (nothing changes if it has one).
+    pub fn add_lane(&mut self, track: TrackId, target: AutomationTarget) {
+        if self.track(track).is_some()
+            && self.lane(track, target).is_none()
+            && let Some(track) = self.track_mut(track)
+        {
+            track.automation.push(AutomationLane::new(target));
+        }
+    }
+
+    /// Takes a lane, with its points, away from a track.
+    pub fn remove_lane(&mut self, track: TrackId, target: AutomationTarget) {
+        if self.lane(track, target).is_some()
+            && let Some(track) = self.track_mut(track)
+        {
+            track.automation.retain(|lane| lane.target != target);
+        }
+    }
+
+    /// Changes a lane's points (they are put back in time order after).
+    pub fn update_lane(
+        &mut self,
+        track: TrackId,
+        target: AutomationTarget,
+        change: impl FnOnce(&mut AutomationLane),
+    ) {
+        if self.lane(track, target).is_some()
+            && let Some(track) = self.track_mut(track)
+            && let Some(lane) = track.automation.iter_mut().find(|l| l.target == target)
+        {
+            change(lane);
+            lane.sort();
         }
     }
 

@@ -62,7 +62,7 @@ pub struct Autosaver {
     lock: Option<File>,
     jobs: Option<mpsc::Sender<Job>>,
     writer: Option<JoinHandle<()>>,
-    written_revision: Option<u64>,
+    written_version: Option<u64>,
     last_write: Option<Instant>,
     has_copy: bool,
     orphan: Option<Orphan>,
@@ -92,7 +92,7 @@ impl Autosaver {
             lock: Some(lock),
             jobs: Some(jobs),
             writer,
-            written_revision: None,
+            written_version: None,
             last_write: None,
             has_copy: false,
             orphan,
@@ -117,7 +117,14 @@ impl Autosaver {
 
     /// Called every frame: writes a copy when the song has unsaved changes
     /// that were not copied yet, and removes the copy once it is saved.
-    pub fn tick(&mut self, project: &Project, path: Option<&Path>, revision: u64, dirty: bool) {
+    /// `version` changes whenever the song does; `song` gives the song and
+    /// where it is saved, and is asked only when a copy is due.
+    pub fn tick(
+        &mut self,
+        version: u64,
+        dirty: bool,
+        song: impl FnOnce() -> (Project, Option<PathBuf>),
+    ) {
         let Some(jobs) = &self.jobs else {
             return;
         };
@@ -125,17 +132,15 @@ impl Autosaver {
             if self.has_copy {
                 let _ = jobs.send(Job::Clear);
                 self.has_copy = false;
-                self.written_revision = None;
+                self.written_version = None;
             }
             return;
         }
         let due = self.last_write.is_none_or(|at| at.elapsed() >= INTERVAL);
-        if self.written_revision != Some(revision) && due {
-            let _ = jobs.send(Job::Write(
-                Box::new(project.clone()),
-                path.map(Path::to_path_buf),
-            ));
-            self.written_revision = Some(revision);
+        if self.written_version != Some(version) && due {
+            let (project, path) = song();
+            let _ = jobs.send(Job::Write(Box::new(project), path));
+            self.written_version = Some(version);
             self.last_write = Some(Instant::now());
             self.has_copy = true;
         }
@@ -278,7 +283,9 @@ mod tests {
         // away (the system releases it) but its folder stays.
         let mut first = Autosaver::start(&root).unwrap();
         assert!(first.take_orphan().is_none());
-        first.tick(&project, Some(Path::new("/music/song")), 1, true);
+        first.tick(1, true, || {
+            (project.clone(), Some(PathBuf::from("/music/song")))
+        });
         let copy = first.folder.join(song_file());
         wait_for(&copy, true);
         let lock = first.lock.take();
@@ -303,7 +310,7 @@ mod tests {
         let root = temp_root("running");
         let project = Project::starter("P", "T");
         let mut first = Autosaver::start(&root).unwrap();
-        first.tick(&project, None, 1, true);
+        first.tick(1, true, || (project.clone(), None));
         let copy = first.folder.join(song_file());
         wait_for(&copy, true);
 
@@ -314,7 +321,7 @@ mod tests {
         );
         second.finish();
 
-        first.tick(&project, None, 1, false);
+        first.tick(1, false, || (project.clone(), None));
         wait_for(&copy, false);
         let folder = first.folder.clone();
         first.finish();

@@ -389,6 +389,7 @@ pub fn location_bar(
                 }
                 ui.label(RichText::new("›").color(p.text_weak));
                 track_menu(ui, session);
+                plugin_button(ui, session);
                 ui.label(RichText::new("›").color(p.text_weak));
                 pattern_menu(ui, session, intents);
                 if !session.is_placed() {
@@ -460,6 +461,26 @@ pub fn location_bar(
             }
         });
     });
+}
+
+/// For a plugin track, the button that opens the plugin's own window.
+fn plugin_button(ui: &mut Ui, session: &mut Session) {
+    let Some(target) = session.track_plugin(session.track_id()) else {
+        return;
+    };
+    if session.is_plugin_missing(target) || !session.has_plugin_window(target) {
+        return;
+    }
+    let open = session.is_plugin_window_open(target);
+    let label = if open {
+        text::CLOSE_PLUGIN
+    } else {
+        text::OPEN_PLUGIN
+    };
+    let hint = session.plugin_name(target);
+    if icon_button(ui, Icon::Window, label, &hint, Look::on(open), 26.0).clicked() {
+        session.toggle_plugin_window(target);
+    }
 }
 
 /// A button that opens a menu, with a small arrow.

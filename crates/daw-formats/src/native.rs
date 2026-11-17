@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The native project file: a single file that is a ZIP container holding
-//! `project.json` (the song, human-readable and versioned) and, in later
-//! phases, the audio files and saved plugin states.
+//! `project.json` (the song, human-readable and versioned), the saved
+//! settings of its plugins (`plugins/…`), and, in a later phase, its audio
+//! files.
 
 use std::fmt;
 use std::io::{Cursor, Read, Write};
@@ -18,12 +19,19 @@ use crate::atomic::write_atomically;
 /// The version of the file format this program writes. Every version ever
 /// released keeps sample files in `tests/data`, and a test proves they still
 /// open.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// The name of the song description inside the container.
 const PROJECT_ENTRY: &str = "project.json";
 /// A short note for anyone who opens the container with a ZIP tool.
 const README_ENTRY: &str = "README.txt";
+/// Where plugin settings are kept inside the container.
+const PLUGIN_FOLDER: &str = "plugins/";
+/// How `project.json` refers to a plugin's settings kept in the container.
+const STATE_FILE_KEY: &str = "$state_file";
+/// The largest plugin settings accepted (a damaged or hostile file must not
+/// exhaust memory).
+const MAX_PLUGIN_STATE: u64 = 256 * 1024 * 1024;
 
 /// The largest `project.json` accepted (a damaged or hostile file must not
 /// exhaust memory).
@@ -77,11 +85,15 @@ struct Envelope {
 
 /// The project file's bytes.
 pub fn project_to_bytes(project: &Project) -> Result<Vec<u8>, FileError> {
+    let mut value =
+        serde_json::to_value(project).map_err(|e| FileError::NotAProject(e.to_string()))?;
+    // Plugin settings move out of the description into entries of their own.
+    let mut states = Vec::new();
+    take_states(&mut value, &mut states)?;
     let envelope = Envelope {
         format_version: FORMAT_VERSION,
         generator: format!("{} {}", daw_ident::PRODUCT_NAME, env!("CARGO_PKG_VERSION")),
-        project: serde_json::to_value(project)
-            .map_err(|e| FileError::NotAProject(e.to_string()))?,
+        project: value,
     };
     let json =
         serde_json::to_vec_pretty(&envelope).map_err(|e| FileError::NotAProject(e.to_string()))?;
@@ -95,9 +107,93 @@ pub fn project_to_bytes(project: &Project) -> Result<Vec<u8>, FileError> {
         zip.write_all(readme().as_bytes())?;
         zip.start_file(PROJECT_ENTRY, options).map_err(zip_error)?;
         zip.write_all(&json)?;
+        for (name, bytes) in &states {
+            zip.start_file(name, options).map_err(zip_error)?;
+            zip.write_all(bytes)?;
+        }
         zip.finish().map_err(zip_error)?;
     }
     Ok(buffer.into_inner())
+}
+
+/// Replaces each plugin's settings in the description (`{"$state": …}`) by
+/// a reference to an entry of its own (`{"$state_file": "plugins/1.state"}`),
+/// collecting the entries.
+fn take_states(value: &mut Value, states: &mut Vec<(String, Vec<u8>)>) -> Result<(), FileError> {
+    match value {
+        Value::Object(map) => {
+            if map.len() == 1
+                && let Some(Value::String(text)) = map.get(daw_model::STATE_KEY)
+            {
+                let bytes = daw_model::base64::decode(text).map_err(FileError::NotAProject)?;
+                let name = format!("{PLUGIN_FOLDER}{}.state", states.len() + 1);
+                states.push((name.clone(), bytes));
+                map.clear();
+                map.insert(STATE_FILE_KEY.to_owned(), Value::String(name));
+                return Ok(());
+            }
+            for child in map.values_mut() {
+                take_states(child, states)?;
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                take_states(child, states)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Puts plugin settings kept in the container back into the description.
+fn restore_states<R: Read + std::io::Seek>(
+    value: &mut Value,
+    zip: &mut zip::ZipArchive<R>,
+) -> Result<(), FileError> {
+    match value {
+        Value::Object(map) => {
+            if map.len() == 1
+                && let Some(Value::String(name)) = map.get(STATE_FILE_KEY)
+            {
+                if !name.starts_with(PLUGIN_FOLDER) {
+                    return Err(FileError::NotAProject(format!(
+                        "a plugin's settings point outside the plugin folder ({name})"
+                    )));
+                }
+                let mut entry = zip.by_name(name).map_err(|_| {
+                    FileError::NotAProject(format!("a plugin's settings are missing ({name})"))
+                })?;
+                if entry.size() > MAX_PLUGIN_STATE {
+                    return Err(FileError::NotAProject(format!(
+                        "a plugin's settings are unreasonably large ({name})"
+                    )));
+                }
+                let mut bytes = Vec::new();
+                entry
+                    .by_ref()
+                    .take(MAX_PLUGIN_STATE + 1)
+                    .read_to_end(&mut bytes)?;
+                drop(entry);
+                map.clear();
+                map.insert(
+                    daw_model::STATE_KEY.to_owned(),
+                    Value::String(daw_model::base64::encode(&bytes)),
+                );
+                return Ok(());
+            }
+            for child in map.values_mut() {
+                restore_states(child, zip)?;
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                restore_states(child, zip)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn readme() -> String {
@@ -128,18 +224,26 @@ pub fn project_from_bytes(bytes: &[u8]) -> Result<Project, FileError> {
         .by_ref()
         .take(MAX_PROJECT_JSON + 1)
         .read_to_end(&mut json)?;
+    drop(entry);
     if json.len() as u64 > MAX_PROJECT_JSON {
         return Err(FileError::NotAProject(format!(
             "{PROJECT_ENTRY} is unreasonably large"
         )));
     }
-    project_from_json(&json)
+    let mut envelope: Envelope = serde_json::from_slice(&json)
+        .map_err(|e| FileError::NotAProject(format!("{PROJECT_ENTRY} cannot be read: {e}")))?;
+    restore_states(&mut envelope.project, &mut zip)?;
+    project_from_envelope(envelope)
 }
 
 /// Reads a project from the contents of `project.json`.
 pub fn project_from_json(json: &[u8]) -> Result<Project, FileError> {
     let envelope: Envelope = serde_json::from_slice(json)
         .map_err(|e| FileError::NotAProject(format!("{PROJECT_ENTRY} cannot be read: {e}")))?;
+    project_from_envelope(envelope)
+}
+
+fn project_from_envelope(envelope: Envelope) -> Result<Project, FileError> {
     if envelope.format_version > FORMAT_VERSION {
         return Err(FileError::TooNew {
             found: envelope.format_version,
@@ -165,7 +269,10 @@ fn migrate(value: Value, from: u32) -> Result<Value, FileError> {
     // owners are filled in by `repair`, so version 1 needs no rewriting;
     // the version number changed so that older copies of the program
     // refuse files whose new parts they would silently drop.
-    // Each future format change adds a step here: `3 => migrate_2_to_3(value)`.
+    // Version 3 added plugin instruments and effects (with their settings
+    // in the container) and automation lanes; again every new field has a
+    // default, so older versions need no rewriting.
+    // Each future format change adds a step here: `4 => migrate_3_to_4(value)`.
     Ok(value)
 }
 

@@ -12,15 +12,15 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use daw_dsp::effects::Effect;
-use daw_dsp::{Click, Instrument};
-use daw_model::{Region, Ticks};
+use daw_dsp::{Click, Instrument, NoteEvent, SongPosition};
+use daw_model::{Region, TICKS_PER_QUARTER, Ticks};
 
 use crate::messages::{
     Command, EngineEvent, Garbage, LiveNote, NO_TARGET, Outgoing, RECORD_ACTIVE, RECORD_COUNT_IN,
     RECORD_IDLE, Shared,
 };
-use crate::program::Program;
+use crate::plugins::EffectSlot;
+use crate::program::{LaneTarget, Program, pan_gains};
 
 /// How many instrument slots (tracks) the engine can play.
 pub const MAX_SLOTS: usize = 256;
@@ -91,6 +91,10 @@ enum Recording {
 
 /// The audio thread's side of the engine. Call [`EngineProcessor::process`]
 /// from the sound card's callback (or in a loop, for offline rendering).
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent switches: playing, the two metronome settings, settling gains"
+)]
 pub struct EngineProcessor {
     sample_rate: f64,
     max_block: usize,
@@ -106,6 +110,9 @@ pub struct EngineProcessor {
     playing: bool,
     position: f64,
     play_started_at: f64,
+    /// Volume and pan take their values at once in the next block that plays
+    /// the song (after starting or moving), instead of gliding to them.
+    settle_gains: bool,
     recording: Recording,
     recorded_held: [Option<(Ticks, f32)>; 128],
     metronome_playback: bool,
@@ -119,8 +126,10 @@ pub struct EngineProcessor {
     click_left: Vec<f32>,
     click_right: Vec<f32>,
     events: Vec<Scheduled>,
+    /// The song's notes of one stretch, as instruments take them.
+    notes: Vec<NoteEvent>,
     /// Every effect, by its table entry (chains refer to entries).
-    effects: Vec<Option<Box<Effect>>>,
+    effects: Vec<Option<EffectSlot>>,
     /// The loudest output of each slot's track in this block.
     meter_peaks: Vec<f32>,
     /// Garbage that could not be sent yet because the queue was full.
@@ -151,6 +160,7 @@ impl EngineProcessor {
             playing: false,
             position: 0.0,
             play_started_at: 0.0,
+            settle_gains: true,
             recording: Recording::Idle,
             recorded_held: [None; 128],
             metronome_playback: false,
@@ -163,6 +173,7 @@ impl EngineProcessor {
             click_left: vec![0.0; max_block],
             click_right: vec![0.0; max_block],
             events: vec![NO_EVENT; MAX_EVENTS],
+            notes: Vec::with_capacity(MAX_EVENTS),
             effects: (0..MAX_EFFECTS).map(|_| None).collect(),
             meter_peaks: vec![0.0; MAX_SLOTS],
             pending: None,
@@ -342,7 +353,8 @@ impl EngineProcessor {
                 if slot < MAX_SLOTS {
                     self.slots[slot] = SlotState::new();
                     let old = std::mem::replace(&mut self.instruments[slot], instrument);
-                    if let Some(old) = old {
+                    if let Some(mut old) = old {
+                        old.retire();
                         self.discard(Garbage::Instrument(old));
                     }
                 }
@@ -356,7 +368,8 @@ impl EngineProcessor {
             Command::Effect { index, effect } => {
                 if index < MAX_EFFECTS {
                     let old = std::mem::replace(&mut self.effects[index], effect);
-                    if let Some(old) = old {
+                    if let Some(mut old) = old {
+                        old.retire();
                         self.discard(Garbage::Effect(old));
                     }
                 }
@@ -365,6 +378,7 @@ impl EngineProcessor {
                 if !self.playing {
                     self.playing = true;
                     self.play_started_at = self.position;
+                    self.settle_gains = true;
                     self.reset_cursors();
                 }
             }
@@ -375,6 +389,7 @@ impl EngineProcessor {
                 self.release_song_notes();
                 self.position = at;
                 self.play_started_at = at;
+                self.settle_gains = true;
                 self.reset_cursors();
             }
             Command::Metronome {
@@ -560,15 +575,27 @@ impl EngineProcessor {
                 }
             }
         }
-        // New settings for every effect in the program's chains.
+        // New settings for every built-in effect in the program's chains.
         for effect in program
             .tracks
             .iter()
             .flat_map(|t| t.effects.iter())
             .chain(program.master_effects.iter())
         {
-            if let Some(Some(instance)) = self.effects.get_mut(effect.index) {
-                instance.set_params(&effect.params);
+            if let (Some(Some(instance)), Some(params)) =
+                (self.effects.get_mut(effect.index), &effect.params)
+            {
+                instance.set_params(params);
+            }
+        }
+        // Gains glide on from where the old program left them.
+        let mut program = program;
+        if let Some(old) = &self.program {
+            for track in &mut program.tracks {
+                if let Some(previous) = old.tracks.iter().find(|t| t.slot == track.slot) {
+                    track.current_left = previous.current_left;
+                    track.current_right = previous.current_right;
+                }
             }
         }
         let tracks = program.tracks.len();
@@ -753,12 +780,108 @@ impl EngineProcessor {
         }
     }
 
+    /// Where the song is at `tick`, for plugins that follow it.
+    fn song_position(&self, tick: f64, playing: bool) -> SongPosition {
+        let Some(program) = &self.program else {
+            return SongPosition::default();
+        };
+        #[allow(clippy::cast_possible_truncation, reason = "tick positions fit easily")]
+        let at = Ticks(tick.max(0.0) as i64);
+        let signature = program.meter.signature_at(at);
+        let bar = program.meter.position(at).bar;
+        #[allow(clippy::cast_precision_loss, reason = "tick positions fit easily")]
+        let quarter = TICKS_PER_QUARTER as f64;
+        #[allow(clippy::cast_precision_loss, reason = "tick positions fit easily")]
+        let bar_start = program.meter.bar_start(bar).0 as f64 / quarter;
+        let seconds_per_tick =
+            program.tempo.seconds_at(tick + 1.0) - program.tempo.seconds_at(tick);
+        #[allow(clippy::cast_possible_truncation, reason = "a frame count")]
+        let frames = (program.tempo.seconds_at(tick) * self.sample_rate) as i64;
+        SongPosition {
+            playing,
+            tempo: if seconds_per_tick > 0.0 {
+                60.0 / (seconds_per_tick * quarter)
+            } else {
+                120.0
+            },
+            beats: tick / quarter,
+            bar_start,
+            bar,
+            numerator: signature.numerator,
+            denominator: signature.denominator,
+            frames,
+        }
+    }
+
+    /// Applies a track's automation at `tick`: plugin parameters, effect
+    /// settings. Returns the gains its volume and pan call for.
+    fn automate(&mut self, index: usize, slot: usize, tick: f64) -> Option<(f32, f32)> {
+        let program = self.program.as_deref_mut()?;
+        let track = program.tracks.get_mut(index)?;
+        if track.automation.is_empty() {
+            return None;
+        }
+        let mut gain = track.gain;
+        let mut pan = track.pan;
+        let mut volume_or_pan = false;
+        let mut effects_changed = false;
+        for lane in &mut track.automation {
+            let value = lane.value_at(tick);
+            let changed = value.to_bits() != lane.last.to_bits();
+            lane.last = value;
+            match lane.target {
+                LaneTarget::Volume => {
+                    gain = daw_model::volume_gain(value);
+                    volume_or_pan = true;
+                }
+                LaneTarget::Pan => {
+                    pan = daw_model::value_pan(value);
+                    volume_or_pan = true;
+                }
+                LaneTarget::BuiltinEffect { .. } => effects_changed |= changed,
+                LaneTarget::PluginEffect { index, param } if changed => {
+                    if let Some(Some(effect)) = self.effects.get_mut(index) {
+                        effect.set_parameter(param, f64::from(value));
+                    }
+                }
+                LaneTarget::Instrument { param } if changed => {
+                    if let Some(Some(instrument)) = self.instruments.get_mut(slot) {
+                        instrument.set_parameter(param, f64::from(value));
+                    }
+                }
+                LaneTarget::PluginEffect { .. } | LaneTarget::Instrument { .. } => {}
+            }
+        }
+        if effects_changed {
+            for (position, automated) in track.automated_effects.iter().enumerate() {
+                let mut kind = automated.base.clone();
+                for lane in &track.automation {
+                    if let LaneTarget::BuiltinEffect { effect, param } = lane.target
+                        && effect == position
+                    {
+                        kind.set_param(param, lane.last);
+                    }
+                }
+                if let (Some(params), Some(Some(instance))) = (
+                    crate::program::effect_params(&kind, automated.bpm),
+                    self.effects.get_mut(automated.index),
+                ) {
+                    instance.set_params(&params);
+                }
+            }
+        }
+        volume_or_pan.then(|| pan_gains(if track.audible { gain } else { 0.0 }, pan))
+    }
+
     /// Renders every instrument for `len` frames at `offset` into the mix,
     /// playing the song between the two tick positions if given.
+    #[allow(clippy::too_many_lines, reason = "one track after another, in order")]
     fn render(&mut self, offset: usize, len: usize, song: Option<(f64, f64)>) {
         if len == 0 {
             return;
         }
+        let position =
+            self.song_position(song.map_or(self.position, |(from, _)| from), song.is_some());
         for slot in 0..MAX_SLOTS {
             if self.instruments[slot].is_none() {
                 continue;
@@ -771,16 +894,26 @@ impl EngineProcessor {
                 (Some((from, to)), Some(index)) => self.schedule(index, from, to, len),
                 _ => 0,
             };
-            let (gain_left, gain_right, has_effects) = match (&self.program, track_index) {
+            let automated = match (song, track_index) {
+                (Some((from, _)), Some(index)) => self.automate(index, slot, from),
+                _ => None,
+            };
+            let settle = self.settle_gains && song.is_some();
+            let (start_gains, target_gains, has_effects) = match (&self.program, track_index) {
                 (Some(program), Some(index)) => {
                     let track = &program.tracks[index];
+                    let target = automated.unwrap_or((track.gain_left, track.gain_right));
                     (
-                        track.gain_left,
-                        track.gain_right,
+                        if settle {
+                            target
+                        } else {
+                            (track.current_left, track.current_right)
+                        },
+                        target,
                         track.effects.iter().any(|e| e.enabled),
                     )
                 }
-                _ => (1.0, 1.0, false),
+                _ => ((1.0, 1.0), (1.0, 1.0), false),
             };
             let Some(instrument) = self.instruments[slot].as_mut() else {
                 continue;
@@ -789,48 +922,69 @@ impl EngineProcessor {
             // A track with effects keeps running them: their tails (reverb,
             // echoes) go on after the instrument falls silent.
             if !sounding && !has_effects {
+                // Silent: its volume and pan are simply where they should be
+                // when it next sounds.
+                if let (Some(program), Some(index)) = (self.program.as_deref_mut(), track_index) {
+                    let track = &mut program.tracks[index];
+                    (track.current_left, track.current_right) = target_gains;
+                }
                 continue;
             }
             let events = &mut self.events[..count];
             events.sort_unstable_by_key(|e| (e.offset, e.on));
-            let left = &mut self.scratch_left[..len];
-            let right = &mut self.scratch_right[..len];
-            let mut cursor = 0;
+            self.notes.clear();
             for event in events.iter() {
-                let at = event.offset.min(len);
-                if at > cursor {
-                    instrument.render(&mut left[cursor..at], &mut right[cursor..at]);
-                    cursor = at;
-                }
-                if event.on {
-                    instrument.note_on(event.key, event.velocity);
-                } else {
-                    instrument.note_off(event.key);
+                if self.notes.len() < self.notes.capacity() {
+                    self.notes.push(NoteEvent {
+                        offset: event.offset.min(len),
+                        key: event.key,
+                        velocity: event.velocity,
+                        on: event.on,
+                    });
                 }
             }
-            if cursor < len {
-                if sounding {
-                    instrument.render(&mut left[cursor..], &mut right[cursor..]);
-                } else {
-                    left[cursor..].fill(0.0);
-                    right[cursor..].fill(0.0);
-                }
+            let left = &mut self.scratch_left[..len];
+            let right = &mut self.scratch_right[..len];
+            instrument.set_position(&position);
+            if sounding {
+                instrument.render_block(&self.notes, left, right);
+            } else {
+                left.fill(0.0);
+                right.fill(0.0);
             }
             if has_effects && let (Some(program), Some(index)) = (&self.program, track_index) {
                 for effect in program.tracks[index].effects.iter().filter(|e| e.enabled) {
                     if let Some(Some(instance)) = self.effects.get_mut(effect.index) {
+                        instance.set_position(&position);
                         instance.process(left, right);
                     }
                 }
             }
+            // Volume and pan, gliding over the block from where they were.
+            let (from_left, from_right) = start_gains;
+            let (to_left, to_right) = target_gains;
+            #[allow(clippy::cast_precision_loss, reason = "block sizes are small")]
+            let step = 1.0 / len as f32;
             let mut peak = self.meter_peaks[slot];
             for i in 0..len {
+                #[allow(clippy::cast_precision_loss, reason = "block sizes are small")]
+                let t = (i + 1) as f32 * step;
+                let gain_left = from_left + (to_left - from_left) * t;
+                let gain_right = from_right + (to_right - from_right) * t;
                 let (l, r) = (left[i] * gain_left, right[i] * gain_right);
                 peak = peak.max(l.abs()).max(r.abs());
                 self.mix_left[offset + i] += l;
                 self.mix_right[offset + i] += r;
             }
             self.meter_peaks[slot] = peak;
+            if let (Some(program), Some(index)) = (self.program.as_deref_mut(), track_index) {
+                let track = &mut program.tracks[index];
+                track.current_left = to_left;
+                track.current_right = to_right;
+            }
+        }
+        if song.is_some() {
+            self.settle_gains = false;
         }
         if let Some((from, to)) = song {
             let metronome = match self.recording {

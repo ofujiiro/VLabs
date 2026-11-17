@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 
 use daw_devices::{AudioOutput, MidiInputs, MidiMessage, OutputMode};
 use daw_engine::MidiSender;
-use daw_ui::{Request, Settings, Workspace, text};
+use daw_plugin_host::scan::{self, Scanner};
+use daw_ui::{PluginSearch, Request, Settings, Workspace, text};
 
 use crate::paths::Paths;
 use crate::recovery::Autosaver;
@@ -21,8 +22,10 @@ const SETTINGS_DELAY: Duration = Duration::from_secs(2);
 
 /// Everything the window runs with.
 pub struct App {
-    workspace: Workspace,
+    // The sound output stops first: plugins' audio halves are dropped before
+    // their main halves (in the workspace's engine).
     audio: AudioOutput,
+    workspace: Workspace,
     midi: Option<MidiInputs>,
     midi_notes: mpsc::Receiver<(u8, bool)>,
     known_midi: Vec<String>,
@@ -31,6 +34,8 @@ pub struct App {
     last_device_check: Option<Instant>,
     saved_settings: Settings,
     settings_changed_at: Option<Instant>,
+    /// Plugins being looked for, in the background.
+    plugin_scan: Option<Scanner>,
 }
 
 /// What [`App::new`] needs.
@@ -95,7 +100,7 @@ impl App {
             }
         });
 
-        Self {
+        let mut app = Self {
             workspace,
             audio,
             midi: Some(midi),
@@ -106,6 +111,53 @@ impl App {
             last_device_check: None,
             saved_settings: settings,
             settings_changed_at: None,
+            plugin_scan: None,
+        };
+        app.find_plugins();
+        app
+    }
+
+    /// Starts looking for plugins in the usual folders (in the background;
+    /// what was learnt before is remembered).
+    fn find_plugins(&mut self) {
+        let Ok(program) = std::env::current_exe() else {
+            let done = PluginSearch {
+                done: true,
+                ..PluginSearch::default()
+            };
+            self.workspace.session_mut().set_plugins(Vec::new(), done);
+            return;
+        };
+        let cache = self.paths.as_ref().map(|paths| {
+            let _ = std::fs::create_dir_all(&paths.data);
+            paths.plugin_cache()
+        });
+        self.plugin_scan = Some(Scanner::start(program, cache, scan::default_folders()));
+    }
+
+    /// Passes what the plugin search found to the song.
+    fn follow_plugin_search(&mut self) {
+        let Some(scanner) = &self.plugin_scan else {
+            return;
+        };
+        let (checked, total) = scanner.progress();
+        let done = scanner.is_done();
+        let findings = scanner.findings();
+        let search = PluginSearch {
+            done,
+            checked,
+            total,
+            problems: findings
+                .problems
+                .iter()
+                .map(|(path, reason)| format!("{}: {reason}", path.display()))
+                .collect(),
+        };
+        self.workspace
+            .session_mut()
+            .set_plugins(findings.plugins, search);
+        if done {
+            self.plugin_scan = None;
         }
     }
 
@@ -171,16 +223,24 @@ impl eframe::App for App {
             self.workspace.session_mut().show_outside_note(key, down);
         }
         self.check_devices();
+        self.follow_plugin_search();
         self.workspace.ui(ui);
         let requests = self.workspace.take_requests();
+        if requests.contains(&Request::FindPlugins) && self.plugin_scan.is_none() {
+            self.find_plugins();
+        }
         if let Some(autosaver) = &mut self.autosaver {
-            let session = self.workspace.session();
-            autosaver.tick(
-                session.project(),
-                session.path(),
-                session.document().revision(),
-                session.is_dirty(),
-            );
+            let session = self.workspace.session_mut();
+            let version = session.document().version();
+            let dirty = session.is_dirty();
+            autosaver.tick(version, dirty, || {
+                // Plugins' settings live in the plugins until copied.
+                session.capture_plugin_states();
+                (
+                    session.project().clone(),
+                    session.path().map(std::path::Path::to_path_buf),
+                )
+            });
             // Once decided, the work found after a crash is deleted: either
             // the person declined it, or it is now the open song and has
             // just been autosaved here.

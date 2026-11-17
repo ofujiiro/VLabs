@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use daw_engine::PluginKind;
 use daw_model::{EffectId, Note, PatternId, Project, TrackId};
 use egui::{Button, Event, Key, Modal, Panel, RichText, ThemePreference, Ui, ViewportCommand};
 
@@ -16,7 +17,7 @@ use crate::effect_ui::EffectWindows;
 use crate::export::ExportFormat;
 use crate::keyboard_panel::{self, KeyboardPanel};
 use crate::keys::{BindError, Command, KeyLabels, Keymap, LayoutFamily, Shortcut, note_offset};
-use crate::mixer::{MIXER_HEIGHT, MixerPanel};
+use crate::mixer::{MIXER_HEIGHT, MixerPanel, format_name};
 use crate::piano_roll::PianoRoll;
 use crate::session::{Session, View};
 use crate::settings::{LabelChoice, Settings, ThemeChoice};
@@ -44,8 +45,10 @@ pub enum Intent {
     RenameTrack(TrackId),
     /// Ask for a pattern's new name.
     RenamePattern(PatternId),
-    /// Open an effect's window.
+    /// Open an effect's window (a plugin effect's own window).
     OpenEffect(EffectId),
+    /// Choose the instrument of a new track.
+    ChooseInstrument,
 }
 
 /// What a rename dialog renames.
@@ -64,6 +67,8 @@ pub enum Request {
     /// The person continued with the work found after a crash: it is the
     /// open song now (with unsaved changes).
     RecoveryAccepted,
+    /// Look for plugins again (some may have been installed since).
+    FindPlugins,
 }
 
 /// What to do once unsaved changes have been dealt with.
@@ -94,6 +99,9 @@ enum Dialog {
         format: ExportFormat,
     },
     Exporting,
+    Instruments {
+        search: String,
+    },
 }
 
 /// The whole window.
@@ -322,6 +330,9 @@ impl Workspace {
             || (self.settings.show_mixer && self.mixer.is_moving())
         {
             ctx.request_repaint();
+        } else if self.session.any_plugin_window_open() || !self.session.plugin_search().done {
+            // Plugin windows are looked after between frames.
+            ctx.request_repaint_after(Duration::from_millis(15));
         } else {
             ctx.request_repaint_after(Duration::from_millis(300));
         }
@@ -473,7 +484,20 @@ impl Workspace {
                     });
                 }
             }
-            Intent::OpenEffect(id) => self.effects.open(id),
+            Intent::OpenEffect(id) => match self.session.effect_plugin(id) {
+                Some(target)
+                    if !self.session.is_plugin_missing(target)
+                        && self.session.has_plugin_window(target) =>
+                {
+                    self.session.show_plugin_window(target);
+                }
+                _ => self.effects.open(id),
+            },
+            Intent::ChooseInstrument => {
+                self.dialog = Some(Dialog::Instruments {
+                    search: String::new(),
+                });
+            }
         }
     }
 
@@ -953,6 +977,11 @@ impl Workspace {
                 }
                 Dialog::Export { format }
             }
+            Dialog::Instruments { search } => {
+                let (search, close) = self.instrument_chooser(ctx, search);
+                keep = !close;
+                Dialog::Instruments { search }
+            }
             Dialog::Exporting => {
                 let progress = self.session.export_progress();
                 if progress.is_none() {
@@ -977,6 +1006,93 @@ impl Workspace {
         if let Some(pending) = then {
             self.carry_out(ctx, pending);
         }
+    }
+
+    /// The instrument chooser: the included instruments, then the plugins
+    /// found on this computer, with a search field. Returns the search text
+    /// and whether the chooser closes.
+    fn instrument_chooser(&mut self, ctx: &egui::Context, mut search: String) -> (String, bool) {
+        let mut close = false;
+        let plugins = self.session.plugins_of(PluginKind::Instrument);
+        let found = self.session.plugin_search().clone();
+        let response = modal("instruments", ctx).show(ctx, |ui| {
+            ui.set_width(460.0);
+            ui.heading(text::INSTRUMENTS_TITLE);
+            ui.add_space(8.0);
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut search)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(text::SEARCH),
+            );
+            if !field.has_focus() && !field.lost_focus() {
+                field.request_focus();
+            }
+            ui.add_space(8.0);
+            let needle = search.trim().to_lowercase();
+            let wanted = |name: &str, detail: &str| {
+                needle.is_empty()
+                    || name.to_lowercase().contains(&needle)
+                    || detail.to_lowercase().contains(&needle)
+            };
+            egui::ScrollArea::vertical()
+                .max_height(380.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    let included = [
+                        (text::ADD_PIANO, text::ADD_PIANO_HINT, false),
+                        (text::ADD_DRUMS, text::ADD_DRUMS_HINT, true),
+                    ];
+                    let included: Vec<_> = included
+                        .into_iter()
+                        .filter(|(name, hint, _)| wanted(name, hint))
+                        .collect();
+                    if !included.is_empty() {
+                        ui.label(RichText::new(text::INCLUDED).weak());
+                        for (name, hint, drums) in included {
+                            if choice_row(ui, name, hint) {
+                                if drums {
+                                    self.session.add_drum_track();
+                                } else {
+                                    self.session.add_piano_track();
+                                }
+                                close = true;
+                            }
+                        }
+                        ui.add_space(8.0);
+                    }
+                    ui.label(RichText::new(text::PLUGINS).weak());
+                    let mut shown = 0;
+                    for info in &plugins {
+                        let detail = text::plugin_detail(&info.vendor, format_name(info));
+                        if !wanted(&info.name, &detail) {
+                            continue;
+                        }
+                        shown += 1;
+                        if choice_row(ui, &info.name, &detail) {
+                            self.session.add_plugin_track(info);
+                            close = true;
+                        }
+                    }
+                    search_state(ui, &found, plugins.is_empty(), shown);
+                });
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button(text::CANCEL).clicked() {
+                    close = true;
+                }
+                if ui
+                    .add_enabled(found.done, Button::new(text::LOOK_AGAIN))
+                    .on_hover_text(text::LOOK_AGAIN_HINT)
+                    .clicked()
+                {
+                    self.requests.push(Request::FindPlugins);
+                }
+            });
+        });
+        if response.should_close() {
+            close = true;
+        }
+        (search, close)
     }
 
     fn shortcuts_window(
@@ -1055,6 +1171,37 @@ impl Workspace {
             close = true;
         }
         (capturing, message, close)
+    }
+}
+
+/// A row of the instrument chooser: a name, and in weak text on the right
+/// who made it or what it is.
+fn choice_row(ui: &mut Ui, name: &str, detail: &str) -> bool {
+    ui.add(
+        Button::new(RichText::new(name).strong())
+            .shortcut_text(detail)
+            .min_size(egui::vec2(ui.available_width(), 30.0)),
+    )
+    .clicked()
+}
+
+/// Under the plugin list: the search still running, nothing found, nothing
+/// matching, and files that could not be opened.
+fn search_state(ui: &mut Ui, found: &crate::session::PluginSearch, none: bool, shown: usize) {
+    if !found.done {
+        ui.label(text::looking_for_plugins(found.checked, found.total));
+    } else if none {
+        ui.label(RichText::new(text::NO_PLUGINS_FOUND).weak());
+    } else if shown == 0 {
+        ui.label(RichText::new(text::NOTHING_MATCHES).weak());
+    }
+    if !found.problems.is_empty() {
+        ui.label(
+            RichText::new(text::unreadable_plugins(found.problems.len()))
+                .small()
+                .weak(),
+        )
+        .on_hover_text(found.problems.join("\n"));
     }
 }
 

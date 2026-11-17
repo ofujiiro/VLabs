@@ -4,21 +4,97 @@
 
 mod library;
 mod messages;
+mod plugins;
 mod processor;
 mod program;
 
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use daw_dsp::effects::Effect as EffectInstance;
-use daw_model::{EffectId, EffectKind, Instrument as InstrumentSpec, Project, Ticks, TrackId};
+use daw_model::{
+    EffectId, EffectKind, Instrument as InstrumentSpec, PluginSetup, PluginState, Project, Ticks,
+    TrackId,
+};
+use daw_plugin_host::{AudioConfig, LoadedPlugin};
 
+pub use daw_plugin_host::{Format as PluginFileFormat, Kind as PluginKind, ParamInfo, PluginInfo};
 pub use library::SoundLibrary;
 pub use messages::EngineEvent;
+pub use plugins::PluginTarget;
 pub use processor::{EngineProcessor, MAX_EFFECTS, MAX_SLOTS};
 pub use program::PlaybackScope;
 
-use messages::{Command, LiveNote, NO_TARGET, Outgoing, RECORD_ACTIVE, RECORD_COUNT_IN, Shared};
+use messages::{
+    Command, Garbage, LiveNote, NO_TARGET, Outgoing, RECORD_ACTIVE, RECORD_COUNT_IN, Shared,
+};
+use plugins::{EffectSlot, PluginEffect, PluginInstrument, Plugins, Silence};
+
+/// Something the engine could not do, for the interface to put into words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Problem {
+    /// A sound bundled with the program is missing (a plain sound plays
+    /// instead).
+    MissingSound(String),
+    /// A sound could not be read (a plain sound plays instead): which, and
+    /// why.
+    UnreadableSound {
+        /// Which sound.
+        sound: String,
+        /// Why, as the system or the file reader put it.
+        reason: String,
+    },
+    /// More tracks than can play at once: at most this many.
+    TooManyTracks(usize),
+    /// More effects than can run at once: at most this many.
+    TooManyEffects(usize),
+    /// A plugin of the song is not installed on this computer.
+    PluginMissing(String),
+    /// A plugin could not be started: which, and why.
+    PluginFailed {
+        /// Which plugin.
+        plugin: String,
+        /// Why, as the plugin or the system put it.
+        reason: String,
+    },
+    /// A plugin's settings could not be given back to it, or taken from it.
+    PluginSettings {
+        /// Which plugin.
+        plugin: String,
+        /// Why, as the plugin put it.
+        reason: String,
+    },
+}
+
+/// How a song refers to a plugin found on this computer.
+pub fn plugin_ref(info: &PluginInfo) -> daw_model::PluginRef {
+    daw_model::PluginRef {
+        format: match info.format {
+            daw_plugin_host::Format::Clap => daw_model::PluginFormat::Clap,
+            daw_plugin_host::Format::Vst3 => daw_model::PluginFormat::Vst3,
+        },
+        id: info.id.clone(),
+        name: info.name.clone(),
+        vendor: info.vendor.clone(),
+        path: info.path.to_string_lossy().into_owned(),
+    }
+}
+
+/// How long after loading a plugin the changes it reports are taken as part
+/// of loading it.
+const PLUGIN_SETTLING: Duration = Duration::from_secs(2);
+
+/// What the song's plugins reported since the last look.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PluginNews {
+    /// A plugin's settings changed in its editor: the song has unsaved
+    /// changes.
+    pub changed: bool,
+    /// Parameters the person moved in a plugin's editor.
+    pub touched: Vec<(PluginTarget, u32)>,
+}
 
 /// Room in the queue from the interface to the audio thread.
 const COMMAND_QUEUE: usize = 4096;
@@ -109,8 +185,18 @@ pub struct Engine {
     /// Which effect (and of which kind) each effect table entry holds.
     effects: Vec<Option<(EffectId, EffectKind)>>,
     compiled: Option<(u64, PlaybackScope)>,
-    problems: Vec<String>,
+    problems: Vec<Problem>,
     midi: Arc<MidiSender>,
+    /// The main-thread halves of the song's plugins.
+    plugins: Plugins,
+    /// Plugins of the song that could not be loaded (not installed here).
+    missing: HashSet<PluginTarget>,
+    /// Try loading the missing plugins again at the next sync (more
+    /// plugins were found).
+    retry_missing: bool,
+    /// When each plugin was loaded: just after, the changes it reports are
+    /// about taking its settings, not changes made by the person.
+    loaded_at: HashMap<PluginTarget, Instant>,
 }
 
 impl Engine {
@@ -142,6 +228,10 @@ impl Engine {
             midi: Arc::new(MidiSender {
                 producer: Mutex::new(live_tx),
             }),
+            plugins: Plugins::default(),
+            missing: HashSet::new(),
+            retry_missing: false,
+            loaded_at: HashMap::new(),
         };
         (engine, processor)
     }
@@ -177,7 +267,9 @@ impl Engine {
             if let Some((track, _)) = &self.slots[slot]
                 && project.track(*track).is_none()
             {
+                let track = *track;
                 self.slots[slot] = None;
+                self.plugins.retire(PluginTarget::Instrument(track));
                 self.send(Command::Instrument {
                     slot,
                     instrument: None,
@@ -190,40 +282,44 @@ impl Engine {
                 .slots
                 .iter()
                 .position(|s| s.as_ref().is_some_and(|(id, _)| *id == track.id));
-            let up_to_date = current.is_some_and(|slot| {
-                self.slots[slot]
-                    .as_ref()
-                    .is_some_and(|(_, spec)| *spec == track.instrument)
-            });
+            let retry =
+                self.retry_missing && self.missing.contains(&PluginTarget::Instrument(track.id));
+            let up_to_date = !retry
+                && current.is_some_and(|slot| {
+                    self.slots[slot]
+                        .as_ref()
+                        .is_some_and(|(_, spec)| *spec == track.instrument)
+                });
             if up_to_date {
                 continue;
             }
             // Same sound source, other settings (a drum pad's tune, say):
-            // the playing instrument takes them without being rebuilt.
+            // the playing instrument takes them without being rebuilt. A
+            // plugin keeps playing as it is (its settings were just captured
+            // from it).
             if let Some(slot) = current
+                && !retry
                 && self.slots[slot]
                     .as_ref()
                     .is_some_and(|(_, spec)| spec.same_source(&track.instrument))
-                && let Some(settings) = library::instrument_settings(&track.instrument)
             {
-                self.slots[slot] = Some((track.id, track.instrument.clone()));
-                self.send(Command::InstrumentSettings {
-                    slot,
-                    settings: Box::new(settings),
-                });
-                continue;
+                let settings = library::instrument_settings(&track.instrument);
+                if settings.is_some() || track.instrument.plugin().is_some() {
+                    self.slots[slot] = Some((track.id, track.instrument.clone()));
+                    if let Some(settings) = settings {
+                        self.send(Command::InstrumentSettings {
+                            slot,
+                            settings: Box::new(settings),
+                        });
+                    }
+                    continue;
+                }
             }
             let Some(slot) = current.or_else(|| self.slots.iter().position(Option::is_none)) else {
-                self.problems
-                    .push(format!("too many tracks: at most {MAX_SLOTS} can play"));
+                self.problems.push(Problem::TooManyTracks(MAX_SLOTS));
                 continue;
             };
-            let (instrument, problem) = self
-                .library
-                .build(&track.instrument, self.config.sample_rate);
-            if let Some(problem) = problem {
-                self.problems.push(problem);
-            }
+            let instrument = self.build_instrument(track);
             self.slots[slot] = Some((track.id, track.instrument.clone()));
             self.send(Command::Instrument {
                 slot,
@@ -232,6 +328,15 @@ impl Engine {
         }
 
         self.sync_effects(project);
+        self.retry_missing = false;
+        self.missing.retain(|target| match *target {
+            PluginTarget::Instrument(track) => project
+                .track(track)
+                .is_some_and(|t| t.instrument.plugin().is_some()),
+            PluginTarget::Effect(id) => project
+                .effect(id)
+                .is_some_and(|e| matches!(e.kind, EffectKind::Plugin(_))),
+        });
 
         let view = program::scoped(project, scope);
         let slots = &self.slots;
@@ -252,6 +357,31 @@ impl Engine {
         self.send(Command::Program(Box::new(program)));
     }
 
+    /// A track's instrument, built (or loaded) anew. Whatever played for the
+    /// track before goes: a plugin is retired.
+    fn build_instrument(&mut self, track: &daw_model::Track) -> Box<dyn daw_dsp::Instrument> {
+        let target = PluginTarget::Instrument(track.id);
+        self.plugins.retire(target);
+        self.missing.remove(&target);
+        match &track.instrument {
+            InstrumentSpec::Plugin(setup) => match self.load_plugin(target, setup) {
+                Ok((instance, processor)) => Box::new(PluginInstrument::new(processor, instance)),
+                Err(problem) => {
+                    self.problems.push(problem);
+                    self.missing.insert(target);
+                    Box::new(Silence)
+                }
+            },
+            spec => {
+                let (instrument, problem) = self.library.build(spec, self.config.sample_rate);
+                if let Some(problem) = problem {
+                    self.problems.push(problem);
+                }
+                instrument
+            }
+        }
+    }
+
     /// Creates the effects new in the project and removes the ones gone
     /// from it. (Their settings travel with the program.)
     fn sync_effects(&mut self, project: &Project) {
@@ -264,11 +394,15 @@ impl Engine {
             .collect();
         for index in 0..MAX_EFFECTS {
             let gone = self.effects[index].as_ref().is_some_and(|(id, kind)| {
-                !all.iter()
-                    .any(|(other, other_kind)| other == id && kind.same_kind(other_kind))
+                (self.retry_missing && self.missing.contains(&PluginTarget::Effect(*id)))
+                    || !all
+                        .iter()
+                        .any(|(other, other_kind)| other == id && kind.same_kind(other_kind))
             });
             if gone {
-                self.effects[index] = None;
+                if let Some((id, _)) = self.effects[index].take() {
+                    self.plugins.retire(PluginTarget::Effect(id));
+                }
                 self.send(Command::Effect {
                     index,
                     effect: None,
@@ -281,16 +415,34 @@ impl Engine {
                 continue;
             }
             let Some(index) = self.effects.iter().position(Option::is_none) else {
-                self.problems
-                    .push(format!("too many effects: at most {MAX_EFFECTS} can run"));
+                self.problems.push(Problem::TooManyEffects(MAX_EFFECTS));
                 break;
             };
-            let params = program::effect_params(kind, bpm);
-            let instance = EffectInstance::new(&params, self.config.sample_rate);
+            let target = PluginTarget::Effect(id);
+            self.missing.remove(&target);
+            let slot = match kind {
+                EffectKind::Plugin(setup) => match self.load_plugin(target, setup) {
+                    Ok((instance, processor)) => Some(EffectSlot::Plugin(Box::new(
+                        PluginEffect::new(processor, instance),
+                    ))),
+                    Err(problem) => {
+                        // Left out of its chain (the sound passes by it).
+                        self.problems.push(problem);
+                        self.missing.insert(target);
+                        None
+                    }
+                },
+                builtin => program::effect_params(builtin, bpm).map(|params| {
+                    EffectSlot::Builtin(Box::new(EffectInstance::new(
+                        &params,
+                        self.config.sample_rate,
+                    )))
+                }),
+            };
             self.effects[index] = Some((id, kind.clone()));
             self.send(Command::Effect {
                 index,
-                effect: Some(Box::new(instance)),
+                effect: slot,
             });
         }
     }
@@ -298,6 +450,250 @@ impl Engine {
     /// Forces the next [`Engine::sync`] to rebuild, even at the same revision.
     pub fn invalidate(&mut self) {
         self.compiled = None;
+    }
+
+    // ----- Plugins
+
+    /// Makes the plugins found on this computer available to songs. Plugins
+    /// a song needs that were missing are looked for again at the next
+    /// [`Engine::sync`].
+    pub fn set_plugins(&mut self, plugins: Vec<PluginInfo>) {
+        self.library.register_plugins(plugins);
+        if !self.missing.is_empty() {
+            self.retry_missing = true;
+            self.compiled = None;
+        }
+    }
+
+    /// The plugins found on this computer.
+    pub fn plugins(&self) -> &[PluginInfo] {
+        self.library.plugins()
+    }
+
+    /// Whether a plugin of the song could not be loaded (it is not
+    /// installed on this computer, or failed to start).
+    pub fn is_plugin_missing(&self, target: PluginTarget) -> bool {
+        self.missing.contains(&target)
+    }
+
+    /// Another song is about to be played: its plugins are loaded afresh,
+    /// with their own settings (a track of the new song may have the same
+    /// identity and plugin as one of the old).
+    pub fn unload_plugins(&mut self) {
+        for slot in 0..MAX_SLOTS {
+            if let Some((track, spec)) = &self.slots[slot]
+                && spec.plugin().is_some()
+            {
+                let track = *track;
+                self.slots[slot] = None;
+                self.plugins.retire(PluginTarget::Instrument(track));
+                self.send(Command::Instrument {
+                    slot,
+                    instrument: None,
+                });
+            }
+        }
+        for index in 0..MAX_EFFECTS {
+            if let Some((id, EffectKind::Plugin(_))) = &self.effects[index] {
+                let id = *id;
+                self.effects[index] = None;
+                self.plugins.retire(PluginTarget::Effect(id));
+                self.send(Command::Effect {
+                    index,
+                    effect: None,
+                });
+            }
+        }
+        self.missing.clear();
+        self.compiled = None;
+    }
+
+    /// Loads a plugin for a place in the song, from its saved settings.
+    fn load_plugin(
+        &mut self,
+        target: PluginTarget,
+        setup: &PluginSetup,
+    ) -> Result<(u64, daw_plugin_host::PluginProcessor), Problem> {
+        let name = &setup.plugin.name;
+        let info = self
+            .library
+            .find_plugin(&setup.plugin)
+            .ok_or_else(|| Problem::PluginMissing(name.clone()))?;
+        let LoadedPlugin {
+            mut handle,
+            processor,
+        } = daw_plugin_host::load(
+            &info,
+            AudioConfig {
+                sample_rate: self.config.sample_rate,
+                max_block: self.config.max_block,
+            },
+        )
+        .map_err(|reason| Problem::PluginFailed {
+            plugin: name.clone(),
+            reason,
+        })?;
+        if let Some(state) = &setup.state
+            && let Err(reason) = handle.load_state(state.bytes())
+        {
+            self.problems.push(Problem::PluginSettings {
+                plugin: name.clone(),
+                reason,
+            });
+        }
+        let instance = self.plugins.next_instance();
+        self.plugins.live.insert(target, (instance, handle));
+        self.loaded_at.insert(target, Instant::now());
+        Ok((instance, processor))
+    }
+
+    /// The plugins' housekeeping (callbacks, timers, their editors' windows),
+    /// and what they reported. Call every frame.
+    pub fn plugin_idle(&mut self) -> PluginNews {
+        let mut news = PluginNews::default();
+        self.loaded_at
+            .retain(|_, at| at.elapsed() < PLUGIN_SETTLING);
+        for (target, (_, handle)) in &mut self.plugins.live {
+            handle.idle();
+            // Many plugins report a change just after taking their saved
+            // settings; nobody can have changed anything in them yet.
+            let settling = self.loaded_at.contains_key(target);
+            news.changed |= handle.take_changed() && !settling;
+            if let Some(param) = handle.take_touched_param() {
+                news.touched.push((*target, param));
+            }
+        }
+        news
+    }
+
+    /// Whether a place in the song has a loaded plugin.
+    pub fn has_plugin(&self, target: PluginTarget) -> bool {
+        self.plugins.live.contains_key(&target)
+    }
+
+    /// Whether a plugin has an editor of its own.
+    pub fn plugin_has_editor(&mut self, target: PluginTarget) -> bool {
+        self.plugins
+            .live
+            .get_mut(&target)
+            .is_some_and(|(_, handle)| handle.has_editor())
+    }
+
+    /// Opens a plugin's editor in its own window titled `title`.
+    pub fn open_plugin_editor(&mut self, target: PluginTarget, title: &str) -> Result<(), String> {
+        match self.plugins.live.get_mut(&target) {
+            Some((_, handle)) => handle.open_editor(title),
+            None => Err("this plugin is not loaded".to_owned()),
+        }
+    }
+
+    /// Closes a plugin's editor.
+    pub fn close_plugin_editor(&mut self, target: PluginTarget) {
+        if let Some((_, handle)) = self.plugins.live.get_mut(&target) {
+            handle.close_editor();
+        }
+    }
+
+    /// Whether a plugin's editor is open.
+    pub fn is_plugin_editor_open(&self, target: PluginTarget) -> bool {
+        self.plugins
+            .live
+            .get(&target)
+            .is_some_and(|(_, handle)| handle.is_editor_open())
+    }
+
+    /// Whether any plugin's editor is open (the window then keeps drawing,
+    /// so the editors are serviced).
+    pub fn any_plugin_editor_open(&self) -> bool {
+        self.plugins
+            .live
+            .values()
+            .any(|(_, handle)| handle.is_editor_open())
+    }
+
+    /// A plugin's parameters.
+    pub fn plugin_params(&mut self, target: PluginTarget) -> Vec<ParamInfo> {
+        self.plugins
+            .live
+            .get_mut(&target)
+            .map_or_else(Vec::new, |(_, handle)| handle.params())
+    }
+
+    /// A plugin parameter's current value, as a fraction of its range.
+    pub fn plugin_param_value(&mut self, target: PluginTarget, id: u32) -> Option<f64> {
+        self.plugins
+            .live
+            .get_mut(&target)
+            .and_then(|(_, handle)| handle.param_value(id))
+    }
+
+    /// How a plugin writes a value of one of its parameters.
+    pub fn plugin_param_text(
+        &mut self,
+        target: PluginTarget,
+        id: u32,
+        value: f64,
+    ) -> Option<String> {
+        self.plugins
+            .live
+            .get_mut(&target)
+            .and_then(|(_, handle)| handle.param_text(id, value))
+    }
+
+    /// Whether any loaded plugin's settings differ from those `project`
+    /// keeps for it. (Many plugins report a change just after taking their
+    /// saved settings back; comparing tells a real change from that.)
+    pub fn plugins_differ_from(&mut self, project: &Project) -> bool {
+        self.plugins.live.iter_mut().any(|(target, (_, handle))| {
+            let stored = match *target {
+                PluginTarget::Instrument(track) => project
+                    .track(track)
+                    .and_then(|t| t.instrument.plugin())
+                    .and_then(|setup| setup.state.as_ref()),
+                PluginTarget::Effect(id) => match project.effect(id).map(|e| &e.kind) {
+                    Some(EffectKind::Plugin(setup)) => setup.state.as_ref(),
+                    _ => None,
+                },
+            };
+            match (stored, handle.save_state()) {
+                (Some(stored), Ok(now)) => stored.bytes() != now.as_slice(),
+                _ => true,
+            }
+        })
+    }
+
+    /// Writes every loaded plugin's current settings into `project` (before
+    /// saving or exporting it). Returns problems met.
+    pub fn capture_plugin_states(&mut self, project: &mut Project) -> Vec<Problem> {
+        let mut problems = Vec::new();
+        for (target, (_, handle)) in &mut self.plugins.live {
+            let bytes = match handle.save_state() {
+                Ok(bytes) => bytes,
+                Err(reason) => {
+                    problems.push(Problem::PluginSettings {
+                        plugin: handle.info().name.clone(),
+                        reason,
+                    });
+                    continue;
+                }
+            };
+            let state = PluginState::new(bytes);
+            match *target {
+                PluginTarget::Instrument(track) => {
+                    if let Some(t) = project.track_mut(track)
+                        && let InstrumentSpec::Plugin(setup) = &mut t.instrument
+                    {
+                        setup.state = Some(state);
+                    }
+                }
+                PluginTarget::Effect(id) => project.update_effect(id, |effect| {
+                    if let EffectKind::Plugin(setup) = &mut effect.kind {
+                        setup.state = Some(state);
+                    }
+                }),
+            }
+        }
+        problems
     }
 
     fn slot_of(&self, track: TrackId) -> Option<usize> {
@@ -384,7 +780,19 @@ impl Engine {
         while let Ok(message) = self.outgoing.pop() {
             match message {
                 Outgoing::Event(event) => events.push(event),
-                Outgoing::Garbage(garbage) => drop(garbage),
+                Outgoing::Garbage(garbage) => {
+                    // A plugin's audio half came back: drop it, then its
+                    // main half.
+                    let instance = match &garbage {
+                        Garbage::Instrument(instrument) => instrument.plugin_instance(),
+                        Garbage::Effect(effect) => effect.plugin_instance(),
+                        _ => None,
+                    };
+                    drop(garbage);
+                    if let Some(instance) = instance {
+                        self.plugins.returned(instance);
+                    }
+                }
             }
         }
         events
@@ -392,7 +800,7 @@ impl Engine {
 
     /// Problems found while preparing instruments (missing sounds, for
     /// instance) since the last call.
-    pub fn take_problems(&mut self) -> Vec<String> {
+    pub fn take_problems(&mut self) -> Vec<Problem> {
         std::mem::take(&mut self.problems)
     }
 
@@ -439,8 +847,10 @@ impl Engine {
 /// Renders a project offline, block by block, through exactly the same
 /// processing as live playback (for exporting).
 pub struct OfflineRender {
-    engine: Engine,
+    // The audio half goes first: a plugin's audio half is dropped before
+    // its main half.
     processor: EngineProcessor,
+    engine: Engine,
     buffer: Vec<f32>,
     frames: u64,
 }
@@ -461,7 +871,7 @@ impl OfflineRender {
     }
 
     /// Problems met while preparing the instruments (a missing sound).
-    pub fn take_problems(&mut self) -> Vec<String> {
+    pub fn take_problems(&mut self) -> Vec<Problem> {
         self.engine.take_problems()
     }
 
@@ -478,6 +888,7 @@ impl OfflineRender {
             }
             done += n;
             self.engine.poll();
+            self.engine.plugin_idle();
         }
         self.frames += left.len() as u64;
     }

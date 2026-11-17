@@ -41,6 +41,85 @@ pub enum EffectKind {
     Delay(DelaySettings),
     /// Limiter.
     Limiter(LimiterSettings),
+    /// A third-party plugin effect.
+    Plugin(crate::plugin::PluginSetup),
+}
+
+/// A setting of a built-in effect that can change over the song: its range,
+/// and whether it moves in equal ratios (frequencies, times).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectParam {
+    /// The lowest value.
+    pub min: f32,
+    /// The highest value.
+    pub max: f32,
+    /// Whether the scale is logarithmic.
+    pub log: bool,
+}
+
+const fn lin(min: f32, max: f32) -> EffectParam {
+    EffectParam {
+        min,
+        max,
+        log: false,
+    }
+}
+
+const fn log(min: f32, max: f32) -> EffectParam {
+    EffectParam {
+        min,
+        max,
+        log: true,
+    }
+}
+
+const EQ_PARAMS: [EffectParam; 7] = [
+    lin(-15.0, 15.0),
+    log(40.0, 500.0),
+    lin(-15.0, 15.0),
+    log(200.0, 8000.0),
+    log(0.3, 6.0),
+    lin(-15.0, 15.0),
+    log(1500.0, 16_000.0),
+];
+const COMPRESSOR_PARAMS: [EffectParam; 6] = [
+    lin(-60.0, 0.0),
+    log(1.0, 20.0),
+    log(0.1, 100.0),
+    log(10.0, 1000.0),
+    lin(0.0, 24.0),
+    lin(0.0, 24.0),
+];
+const REVERB_PARAMS: [EffectParam; 5] = [
+    lin(0.0, 1.0),
+    lin(0.0, 1.0),
+    lin(0.0, 1.0),
+    lin(0.0, 1.0),
+    lin(0.0, 100.0),
+];
+const DELAY_PARAMS: [EffectParam; 3] = [lin(0.0, 0.95), lin(0.0, 1.0), log(1000.0, 20_000.0)];
+const LIMITER_PARAMS: [EffectParam; 3] = [lin(0.0, 18.0), lin(-12.0, 0.0), log(10.0, 1000.0)];
+
+impl EffectParam {
+    /// A value as a fraction of the range.
+    pub fn fraction(&self, value: f32) -> f32 {
+        let fraction = if self.log && self.min > 0.0 {
+            (value / self.min).ln() / (self.max / self.min).ln()
+        } else {
+            (value - self.min) / (self.max - self.min)
+        };
+        fraction.clamp(0.0, 1.0)
+    }
+
+    /// A fraction of the range as a value.
+    pub fn value(&self, fraction: f32) -> f32 {
+        let fraction = fraction.clamp(0.0, 1.0);
+        if self.log && self.min > 0.0 {
+            self.min * (self.max / self.min).powf(fraction)
+        } else {
+            self.min + fraction * (self.max - self.min)
+        }
+    }
 }
 
 impl EffectKind {
@@ -55,9 +134,74 @@ impl EffectKind {
         ]
     }
 
-    /// Whether two settings are for the same kind of effect.
+    /// Whether two settings are for the same kind of effect (for plugins:
+    /// the same plugin).
     pub fn same_kind(&self, other: &Self) -> bool {
-        std::mem::discriminant(self) == std::mem::discriminant(other)
+        match (self, other) {
+            (Self::Plugin(a), Self::Plugin(b)) => a.plugin == b.plugin,
+            _ => std::mem::discriminant(self) == std::mem::discriminant(other),
+        }
+    }
+
+    /// The settings of a built-in effect that can change over the song, in
+    /// order (a plugin lists its own parameters instead).
+    pub fn params(&self) -> &'static [EffectParam] {
+        match self {
+            Self::Eq(_) => &EQ_PARAMS,
+            Self::Compressor(_) => &COMPRESSOR_PARAMS,
+            Self::Reverb(_) => &REVERB_PARAMS,
+            Self::Delay(_) => &DELAY_PARAMS,
+            Self::Limiter(_) => &LIMITER_PARAMS,
+            Self::Plugin(_) => &[],
+        }
+    }
+
+    /// The setting a built-in effect's parameter number refers to.
+    fn field(&mut self, index: usize) -> Option<&mut f32> {
+        Some(match (self, index) {
+            (Self::Eq(e), 0) => &mut e.low_gain_db,
+            (Self::Eq(e), 1) => &mut e.low_hz,
+            (Self::Eq(e), 2) => &mut e.mid_gain_db,
+            (Self::Eq(e), 3) => &mut e.mid_hz,
+            (Self::Eq(e), 4) => &mut e.mid_q,
+            (Self::Eq(e), 5) => &mut e.high_gain_db,
+            (Self::Eq(e), 6) => &mut e.high_hz,
+            (Self::Compressor(c), 0) => &mut c.threshold_db,
+            (Self::Compressor(c), 1) => &mut c.ratio,
+            (Self::Compressor(c), 2) => &mut c.attack_ms,
+            (Self::Compressor(c), 3) => &mut c.release_ms,
+            (Self::Compressor(c), 4) => &mut c.knee_db,
+            (Self::Compressor(c), 5) => &mut c.makeup_db,
+            (Self::Reverb(r), 0) => &mut r.mix,
+            (Self::Reverb(r), 1) => &mut r.size,
+            (Self::Reverb(r), 2) => &mut r.damping,
+            (Self::Reverb(r), 3) => &mut r.width,
+            (Self::Reverb(r), 4) => &mut r.pre_delay_ms,
+            (Self::Delay(d), 0) => &mut d.feedback,
+            (Self::Delay(d), 1) => &mut d.mix,
+            (Self::Delay(d), 2) => &mut d.tone_hz,
+            (Self::Limiter(l), 0) => &mut l.gain_db,
+            (Self::Limiter(l), 1) => &mut l.ceiling_db,
+            (Self::Limiter(l), 2) => &mut l.release_ms,
+            _ => return None,
+        })
+    }
+
+    /// A built-in effect's setting, as a fraction of its range.
+    pub fn param(&self, index: usize) -> Option<f32> {
+        let spec = *self.params().get(index)?;
+        let mut copy = self.clone();
+        copy.field(index).map(|v| spec.fraction(*v))
+    }
+
+    /// Changes a built-in effect's setting from a fraction of its range.
+    pub fn set_param(&mut self, index: usize, fraction: f32) {
+        let Some(&spec) = self.params().get(index) else {
+            return;
+        };
+        if let Some(field) = self.field(index) {
+            *field = spec.value(fraction);
+        }
     }
 }
 

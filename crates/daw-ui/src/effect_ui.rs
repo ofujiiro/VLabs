@@ -68,7 +68,7 @@ impl EffectWindows {
                     .map_or_else(String::new, |t| t.name.clone()),
                 _ => text::MASTER.to_owned(),
             };
-            let title = text::effect_title(text::effect_name(&effect.kind), &place);
+            let title = text::effect_title(&text::effect_name(&effect.kind), &place);
             let mut open = true;
             #[allow(clippy::cast_precision_loss, reason = "a small count")]
             let offset = index as f32 * 24.0;
@@ -91,6 +91,31 @@ impl EffectWindows {
     }
 }
 
+/// A plugin effect's controls are in its own window: a button opens it.
+fn plugin_controls(ui: &mut Ui, session: &mut Session, id: EffectId) {
+    let Some(target) = session.effect_plugin(id) else {
+        return;
+    };
+    if session.is_plugin_missing(target) {
+        let p = Palette::of(ui.ctx());
+        ui.label(
+            RichText::new(text::plugin_track(&session.plugin_name(target), true))
+                .color(p.text_weak),
+        );
+    } else if session.has_plugin_window(target) {
+        let label = if session.is_plugin_window_open(target) {
+            text::CLOSE_PLUGIN
+        } else {
+            text::OPEN_PLUGIN
+        };
+        if ui.button(label).clicked() {
+            session.toggle_plugin_window(target);
+        }
+    } else {
+        ui.label(text::NO_PLUGIN_WINDOW);
+    }
+}
+
 /// The contents of an effect's window.
 fn editor(ui: &mut Ui, session: &mut Session, id: EffectId, kind: &EffectKind, enabled: bool) {
     let p = Palette::of(ui.ctx());
@@ -109,6 +134,7 @@ fn editor(ui: &mut Ui, session: &mut Session, id: EffectId, kind: &EffectKind, e
         EffectKind::Reverb(r) => reverb_controls(ui, &mut gesture, r),
         EffectKind::Delay(d) => delay_controls(ui, &mut gesture, d),
         EffectKind::Limiter(l) => limiter_controls(ui, &mut gesture, l),
+        EffectKind::Plugin(_) => plugin_controls(ui, session, id),
     }
     if gesture.started {
         session.begin_gesture(text::EDIT_CHANGE_EFFECT);

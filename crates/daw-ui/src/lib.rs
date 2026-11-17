@@ -21,6 +21,6 @@ pub mod workspace;
 
 pub use export::ExportFormat;
 pub use keys::{Command, KeyLabels, Keymap, LayoutFamily, Shortcut};
-pub use session::{Grid, Session, View};
+pub use session::{Grid, LaneChoice, PluginSearch, Session, View};
 pub use settings::{LabelChoice, Settings, ThemeChoice};
 pub use workspace::{Host, Intent, Request, Workspace};

@@ -11,6 +11,7 @@ on:
     paths:
       - "spikes/**"
       - "crates/daw-rt/**"
+      - "crates/daw-plugin-host/**"
       - ".github/workflows/spikes.yml"
       - ".github/scripts/**"
       - "Cargo.lock"
@@ -169,19 +170,23 @@ jobs:
         if: runner.os == 'Windows'
         run: target\debug\spike-plugin-host.exe "fixtures\surge\Surge XT.vst3" --editor 5 --out spike-output
 
-      - name: The program's plugin host and scanner (Linux, virtual X11 screen)
+      - name: The program's plugins, automation and scanner (Linux, virtual X11 screen)
         if: runner.os == 'Linux'
         run: |
           export VLABS_TEST_PLUGINS="$PWD/fixtures"
           xvfb-run -a -s "-screen 0 1600x1200x24" cargo test -p daw-plugin-host --test reference --locked -- --test-threads 1 --nocapture
           cargo test -p daw-app --test plugins --locked -- --nocapture
+          cargo test -p daw-engine --test plugins --locked -- --test-threads 1 --nocapture
+          cargo test -p daw-ui --test interface --locked -- --test-threads 1
 
-      - name: The program's plugin host and scanner (Windows)
+      - name: The program's plugins, automation and scanner (Windows)
         if: runner.os == 'Windows'
         run: |
           $env:VLABS_TEST_PLUGINS = "$PWD\fixtures"
           cargo test -p daw-plugin-host --test reference --locked -- --test-threads 1 --nocapture
           cargo test -p daw-app --test plugins --locked -- --nocapture
+          cargo test -p daw-engine --test plugins --locked -- --test-threads 1 --nocapture
+          cargo test -p daw-ui --test interface --locked -- --test-threads 1
 
       - name: Keep the renders and screenshots
         if: always()

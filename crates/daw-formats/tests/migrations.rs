@@ -17,8 +17,9 @@ use std::path::PathBuf;
 
 use daw_formats::{FORMAT_VERSION, load_project, save_project};
 use daw_model::{
-    ACOUSTIC_KIT, ChainPlace, DEFAULT_VELOCITY, EffectKind, EqSettings, Instrument, Note, NoteId,
-    Project, Ticks,
+    ACOUSTIC_KIT, AutomationLane, AutomationPoint, AutomationTarget, ChainPlace, DEFAULT_VELOCITY,
+    EffectKind, EqSettings, Instrument, Note, NoteId, PluginFormat, PluginRef, PluginSetup,
+    PluginState, Project, Ticks,
 };
 
 fn data_folder() -> PathBuf {
@@ -27,8 +28,23 @@ fn data_folder() -> PathBuf {
         .join("data")
 }
 
+/// The plugin of the version 3 sample, with settings made of these bytes.
+fn sample_plugin() -> PluginSetup {
+    PluginSetup {
+        plugin: PluginRef {
+            format: PluginFormat::Clap,
+            id: "org.example.synth".to_owned(),
+            name: "Example Synth".to_owned(),
+            vendor: "Example".to_owned(),
+            path: "/plugins/Example Synth.clap".to_owned(),
+        },
+        state: Some(PluginState::new((0..=255).collect())),
+    }
+}
+
 /// The project every sample file contains (version 2 added the drum
-/// track, the pad setting and the effects).
+/// track, the pad setting and the effects; version 3 a plugin track with
+/// saved settings, a plugin effect and automation lanes).
 fn reference_project() -> Project {
     let mut project = Project::starter("Pattern 1", "Piano");
     let (_, pattern) = project.first_pattern().unwrap();
@@ -56,6 +72,23 @@ fn reference_project() -> Project {
             ..EqSettings::default()
         }),
     );
+    let synth = project.add_track("Synth", Instrument::Plugin(sample_plugin()));
+    project.add_effect(
+        ChainPlace::Track(synth),
+        EffectKind::Plugin(sample_plugin()),
+    );
+    if let Some(track) = project.track_mut(synth) {
+        let mut lane = AutomationLane::new(AutomationTarget::Instrument { param: 7 });
+        lane.insert(AutomationPoint {
+            at: Ticks::ZERO,
+            value: 0.25,
+        });
+        lane.insert(AutomationPoint {
+            at: Ticks::WHOLE,
+            value: 0.75,
+        });
+        track.automation.push(lane);
+    }
     "Format sample".clone_into(&mut project.title);
     project.tempo.set(Ticks::quarters(8), 90.0);
     let triplet = Ticks::note_value(1, 12);
@@ -122,6 +155,22 @@ fn every_released_format_version_still_opens() {
                 path.display()
             );
         }
+        if version >= 3 {
+            let synth = project
+                .tracks
+                .iter()
+                .find(|t| t.instrument.plugin().is_some())
+                .unwrap_or_else(|| panic!("{} lost its plugin track", path.display()));
+            let setup = synth.instrument.plugin().unwrap();
+            assert_eq!(setup, &sample_plugin(), "the plugin and its settings");
+            assert!(
+                matches!(&synth.effects[0].kind, EffectKind::Plugin(p) if *p == sample_plugin()),
+                "the plugin effect and its settings"
+            );
+            assert_eq!(synth.automation.len(), 1);
+            let value = synth.automation[0].value_at(half_way());
+            assert!((value.unwrap() - 0.5).abs() < 1e-6, "{}", path.display());
+        }
         assert_eq!(project.title, "Format sample", "{}", path.display());
         assert_eq!(
             project.tempo.bpm_at(Ticks::quarters(9)),
@@ -153,4 +202,46 @@ fn every_released_format_version_still_opens() {
         found >= FORMAT_VERSION as usize,
         "a sample file is missing for some format version (found {found})"
     );
+}
+
+/// Half way between the sample lane's points (at 0 and one bar).
+fn half_way() -> f64 {
+    #[allow(clippy::cast_precision_loss, reason = "a tick position")]
+    let half = (Ticks::WHOLE.0 / 2) as f64;
+    half
+}
+
+#[test]
+fn plugin_settings_are_kept_as_entries_of_their_own() {
+    let path = std::env::temp_dir().join(format!("plugin-states-{}.song", std::process::id()));
+    save_project(&reference_project(), &path).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let names: Vec<String> = zip
+        .file_names()
+        .filter_map(Result::ok)
+        .map(std::borrow::Cow::into_owned)
+        .collect();
+    assert!(
+        names.iter().filter(|n| n.starts_with("plugins/")).count() == 2,
+        "one entry per plugin: {names:?}"
+    );
+    let mut json = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("project.json").unwrap(), &mut json).unwrap();
+    assert!(
+        !json.contains("$state\""),
+        "no settings inside the description"
+    );
+    assert!(json.contains("$state_file"));
+    let project = load_project(&path).unwrap();
+    assert_eq!(project, reference_project_after_load(&project));
+    std::fs::remove_file(path).ok();
+}
+
+/// The reference project as loading gives it back (identifiers repaired).
+fn reference_project_after_load(loaded: &Project) -> Project {
+    let mut expected = reference_project();
+    expected.repair_id_counter();
+    let _ = loaded;
+    expected
 }

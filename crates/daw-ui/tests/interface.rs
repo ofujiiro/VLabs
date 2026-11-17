@@ -17,9 +17,14 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use daw_dsp::drums::PadSound;
-use daw_engine::{Engine, EngineConfig, EngineProcessor, SoundLibrary};
-use daw_model::{ChainPlace, EffectKind, Ticks};
-use daw_ui::{Host, KeyLabels, LayoutFamily, Session, Settings, View, Workspace, text};
+use daw_engine::{
+    Engine, EngineConfig, EngineProcessor, PluginFileFormat, PluginInfo, PluginKind, PluginTarget,
+    SoundLibrary,
+};
+use daw_model::{AutomationPoint, AutomationTarget, ChainPlace, EffectKind, Ticks};
+use daw_ui::{
+    Host, KeyLabels, LayoutFamily, PluginSearch, Session, Settings, View, Workspace, text,
+};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -796,4 +801,259 @@ fn tracks_and_patterns_are_renamed_in_a_dialog() {
         f.session().document().undo_label(),
         Some(text::EDIT_RENAME_PATTERN)
     );
+}
+
+// ----- Phase 3: plugins and automation
+
+/// Plugins as the search would report them (made up: they cannot load).
+fn made_up_plugins() -> Vec<PluginInfo> {
+    let plugin = |name: &str, kind| PluginInfo {
+        format: PluginFileFormat::Clap,
+        path: PathBuf::from(format!("/nowhere/{name}.clap")),
+        id: format!("org.example.{}", name.to_lowercase().replace(' ', "-")),
+        name: name.to_owned(),
+        vendor: "Example Audio".to_owned(),
+        version: "1.0".to_owned(),
+        kind,
+    };
+    vec![
+        plugin("Cloud Synth", PluginKind::Instrument),
+        plugin("Space Echo", PluginKind::Effect),
+    ]
+}
+
+fn finished_search() -> PluginSearch {
+    PluginSearch {
+        done: true,
+        ..PluginSearch::default()
+    }
+}
+
+#[test]
+fn instruments_are_chosen_from_a_list_that_includes_plugins() {
+    let mut f = new_song();
+    f.workspace_mut()
+        .session_mut()
+        .set_plugins(made_up_plugins(), finished_search());
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    f.harness
+        .get_by_label(&format!("+ {}", text::ADD_INSTRUMENT))
+        .click();
+    f.harness.run_steps(3);
+    f.harness.get_by_label(text::INSTRUMENTS_TITLE);
+    f.harness.get_by_label_contains(text::ADD_PIANO_HINT);
+    assert!(
+        f.harness.query_by_label_contains("Space Echo").is_none(),
+        "effects are not offered as instruments"
+    );
+    // Typing narrows the list.
+    f.harness.event(Event::Text("cloud".to_owned()));
+    f.harness.run_steps(2);
+    assert!(
+        f.harness
+            .query_by_label_contains(text::ADD_PIANO_HINT)
+            .is_none(),
+        "the piano does not match"
+    );
+    f.harness.get_by_label_contains("Cloud Synth").click();
+    f.harness.run_steps(3);
+    assert!(
+        f.harness.query_by_label(text::INSTRUMENTS_TITLE).is_none(),
+        "the chooser closed"
+    );
+    let synth = f.session().project().tracks.last().unwrap().clone();
+    assert_eq!(f.session().project().tracks.len(), 3);
+    assert_eq!(synth.name, "Cloud Synth", "the track is named after it");
+    assert!(synth.instrument.plugin().is_some());
+    // It is not really there: the person is told.
+    assert!(
+        f.session()
+            .is_plugin_missing(PluginTarget::Instrument(synth.id))
+    );
+    f.harness
+        .get_by_label_contains("\"Cloud Synth\" could not be started");
+}
+
+#[test]
+fn a_lane_added_from_the_track_header_is_drawn_on_with_the_mouse() {
+    let mut f = new_song();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    let song = f.harness.get_by_label(text::SONG_VIEW).rect();
+    let piano = f.session().project().tracks[1].id;
+    // The piano's Automation button offers its settings; choose Volume.
+    f.harness
+        .get_all_by_label(text::AUTOMATION)
+        .nth(1)
+        .unwrap()
+        .click();
+    f.harness.run_steps(3);
+    f.harness.get_by_label(text::VOLUME).click();
+    f.harness.run_steps(3);
+    let lane = f
+        .session()
+        .project()
+        .lane(piano, AutomationTarget::Volume)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        lane.points.len(),
+        1,
+        "it starts flat, at the present volume"
+    );
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_ADD_LANE)
+    );
+
+    // A click low in the lane, a few bars in, adds a point there (Alt: not
+    // moved to the nearest beat).
+    let remove = f.harness.get_by_label(text::REMOVE_LANE).rect();
+    let spot = Pos2::new(song.left() + 236.0 + 320.0, remove.center().y + 14.0);
+    f.harness.event(Event::ModifiersChanged(Modifiers::ALT));
+    f.click(spot, Modifiers::ALT);
+    f.harness.event(Event::ModifiersChanged(Modifiers::NONE));
+    f.harness.run_steps(2);
+    let lane = f
+        .session()
+        .project()
+        .lane(piano, AutomationTarget::Volume)
+        .unwrap()
+        .clone();
+    assert_eq!(lane.points.len(), 2, "a second point");
+    assert!(
+        lane.points[1].at > Ticks::ZERO && lane.points[1].value < lane.points[0].value,
+        "later and lower: a fade"
+    );
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_ADD_POINT)
+    );
+
+    // A right-click on it takes it away; undo brings it back.
+    f.harness.hover_at(spot);
+    f.harness.step();
+    f.press(spot, PointerButton::Secondary, true, Modifiers::NONE);
+    f.harness.step();
+    f.press(spot, PointerButton::Secondary, false, Modifiers::NONE);
+    f.harness.run_steps(2);
+    let points = |f: &Fixture| {
+        f.session()
+            .project()
+            .lane(piano, AutomationTarget::Volume)
+            .map_or(0, |l| l.points.len())
+    };
+    assert_eq!(points(&f), 1, "removed");
+    f.key(Key::Z, Key::Z, true, Modifiers::COMMAND);
+    f.key(Key::Z, Key::Z, false, Modifiers::COMMAND);
+    assert_eq!(points(&f), 2, "undo brings it back");
+
+    // The lane's own button removes it.
+    f.harness.get_by_label(text::REMOVE_LANE).click();
+    f.harness.run_steps(2);
+    assert!(
+        f.session()
+            .project()
+            .lane(piano, AutomationTarget::Volume)
+            .is_none()
+    );
+}
+
+/// A reference plugin (see `CLAUDE.md`), when `VLABS_TEST_PLUGINS` names
+/// the folder that holds them.
+fn reference_plugin(file: &str, kind: PluginKind) -> Option<PluginInfo> {
+    let folder = PathBuf::from(std::env::var_os("VLABS_TEST_PLUGINS")?);
+    daw_plugin_host::scan::describe(daw_plugin_host::Format::Clap, &folder.join(file))
+        .ok()?
+        .into_iter()
+        .find(|p| p.kind == kind)
+}
+
+#[test]
+fn a_plugin_track_keeps_its_settings_when_the_song_is_saved_and_opened() {
+    let Some(surge) = reference_plugin("surge/Surge XT.clap", PluginKind::Instrument) else {
+        return;
+    };
+    let effects = reference_plugin("surge/Surge XT Effects.clap", PluginKind::Effect);
+    let mut f = new_song();
+    let plugins: Vec<PluginInfo> = std::iter::once(surge.clone()).chain(effects).collect();
+    f.workspace_mut()
+        .session_mut()
+        .set_plugins(plugins, finished_search());
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    f.harness
+        .get_by_label(&format!("+ {}", text::ADD_INSTRUMENT))
+        .click();
+    f.harness.run_steps(3);
+    f.harness.get_by_label_contains(&surge.name).click();
+    f.harness.run_steps(3);
+    let track = f.session().project().tracks.last().unwrap().id;
+    let target = PluginTarget::Instrument(track);
+    assert!(f.session().engine().has_plugin(target), "the plugin loaded");
+
+    // Turn its volume down: through a lane, as the song plays.
+    let volume = f
+        .workspace_mut()
+        .session_mut()
+        .engine_mut()
+        .plugin_params(target)
+        .into_iter()
+        .find(|p| p.name.to_lowercase().contains("global volume"))
+        .unwrap()
+        .id;
+    let lane = AutomationTarget::Instrument { param: volume };
+    let session = f.workspace_mut().session_mut();
+    session.add_lane(track, lane);
+    session.move_lane_point(
+        track,
+        lane,
+        0,
+        AutomationPoint {
+            at: Ticks::ZERO,
+            value: 0.2,
+        },
+    );
+    session.play();
+    for _ in 0..4 {
+        f.tick();
+    }
+    f.workspace_mut().session_mut().stop();
+    f.workspace_mut().session_mut().remove_lane(track, lane);
+    f.tick();
+
+    // Save, start a new song, open the saved one again.
+    let path = std::env::temp_dir().join(format!(
+        "interface-plugin-{}.{}",
+        std::process::id(),
+        daw_ident::PROJECT_FILE_EXTENSION
+    ));
+    f.workspace_mut().session_mut().save_as(&path).unwrap();
+    f.workspace_mut().session_mut().new_song();
+    f.tick();
+    assert!(!f.session().engine().has_plugin(target));
+    f.workspace_mut().session_mut().open(&path).unwrap();
+    f.tick();
+    let track = f
+        .session()
+        .project()
+        .tracks
+        .iter()
+        .find(|t| t.instrument.plugin().is_some())
+        .unwrap()
+        .id;
+    let target = PluginTarget::Instrument(track);
+    let restored = f
+        .workspace_mut()
+        .session_mut()
+        .engine_mut()
+        .plugin_param_value(target, volume)
+        .unwrap();
+    assert!(
+        (restored - 0.2).abs() < 0.01,
+        "the volume came back turned down: {restored}"
+    );
+    assert!(!f.session().is_dirty(), "opening a song changes nothing");
+    std::fs::remove_file(path).ok();
 }

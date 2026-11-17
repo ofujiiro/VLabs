@@ -46,6 +46,10 @@ pub enum Icon {
     ChevronDown,
     /// A small arrow pointing up.
     ChevronUp,
+    /// A window with a title bar: a plugin's own window.
+    Window,
+    /// A line through points: automation.
+    Automation,
 }
 
 /// Draws an icon into `rect` with `color`.
@@ -194,6 +198,30 @@ pub fn paint(painter: &Painter, icon: Icon, rect: Rect, color: Color32) {
                 pos2(c.x + w, c.y - dy * 0.5),
             ];
             painter.add(Shape::line(points, stroke));
+        }
+        Icon::Window => {
+            let r = Rect::from_center_size(c, vec2(s * 0.66, s * 0.54));
+            let thin = Stroke::new(stroke.width * 0.8, color);
+            painter.rect_stroke(r, CornerRadius::same(2), thin, StrokeKind::Middle);
+            painter.rect_filled(
+                Rect::from_min_max(r.min, pos2(r.right(), r.top() + s * 0.13)),
+                CornerRadius::same(2),
+                color,
+            );
+        }
+        Icon::Automation => {
+            let w = s * 0.33;
+            let points = [
+                pos2(c.x - w, c.y + w * 0.55),
+                pos2(c.x - w * 0.25, c.y - w * 0.45),
+                pos2(c.x + w * 0.35, c.y + w * 0.2),
+                pos2(c.x + w, c.y - w * 0.6),
+            ];
+            let thin = Stroke::new(stroke.width * 0.8, color);
+            painter.add(Shape::line(points.to_vec(), thin));
+            for point in points {
+                painter.circle_filled(point, s * 0.07, color);
+            }
         }
     }
 }

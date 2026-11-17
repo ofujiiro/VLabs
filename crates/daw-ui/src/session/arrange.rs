@@ -12,7 +12,7 @@ use super::{Session, View, first_focus, placement};
 use crate::text;
 
 /// Bars a new piano pattern lasts.
-const PIANO_BARS: u32 = 4;
+pub(super) const PIANO_BARS: u32 = 4;
 /// The shortest song the timeline shows, in bars.
 const MIN_SONG_BARS: u32 = 4;
 
@@ -181,7 +181,7 @@ impl Session {
     }
 
     /// `base`, or `base 2`, `base 3`… whichever no track uses yet.
-    fn unique_track_name(&self, base: &str) -> String {
+    pub(super) fn unique_track_name(&self, base: &str) -> String {
         let taken = |name: &str| self.project().tracks.iter().any(|t| t.name == name);
         if !taken(base) {
             return base.to_owned();
@@ -211,6 +211,8 @@ impl Session {
         if self.project().tracks.len() <= 1 || self.project().track(track).is_none() {
             return;
         }
+        // Undoing brings its plugin back with the settings it has now.
+        self.capture_plugin_states();
         self.doc
             .edit(text::EDIT_REMOVE_TRACK, |p| p.remove_track(track));
         self.current.remove(&track);
@@ -241,7 +243,7 @@ impl Session {
             .track(track)
             .and_then(|t| match &t.instrument {
                 Instrument::Drums { kit, .. } => Some(kit.as_str()),
-                Instrument::SoundFont { .. } => None,
+                Instrument::SoundFont { .. } | Instrument::Plugin(_) => None,
             });
         if current.is_none_or(|k| k == kit) {
             return;
@@ -259,7 +261,7 @@ impl Session {
     pub fn kit(&self, track: TrackId) -> Option<&str> {
         match &self.project().track(track)?.instrument {
             Instrument::Drums { kit, .. } => Some(kit),
-            Instrument::SoundFont { .. } => None,
+            Instrument::SoundFont { .. } | Instrument::Plugin(_) => None,
         }
     }
 

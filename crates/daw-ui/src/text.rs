@@ -560,26 +560,182 @@ pub const MOVE_LATER: &str = "Move down the chain";
 pub const LEVEL: &str = "Level";
 
 /// The name of an effect.
-pub fn effect_name(kind: &daw_model::EffectKind) -> &'static str {
+pub fn effect_name(kind: &daw_model::EffectKind) -> String {
     use daw_model::EffectKind as K;
     match kind {
-        K::Eq(_) => "EQ",
-        K::Compressor(_) => "Compressor",
-        K::Reverb(_) => "Reverb",
-        K::Delay(_) => "Delay",
-        K::Limiter(_) => "Limiter",
+        K::Eq(_) => "EQ".to_owned(),
+        K::Compressor(_) => "Compressor".to_owned(),
+        K::Reverb(_) => "Reverb".to_owned(),
+        K::Delay(_) => "Delay".to_owned(),
+        K::Limiter(_) => "Limiter".to_owned(),
+        K::Plugin(setup) => setup.plugin.name.clone(),
     }
 }
 
 /// What an effect does, in a few words.
-pub fn effect_description(kind: &daw_model::EffectKind) -> &'static str {
+pub fn effect_description(kind: &daw_model::EffectKind) -> String {
     use daw_model::EffectKind as K;
     match kind {
-        K::Eq(_) => "Shape the tone: more or less bass, middle and treble",
-        K::Compressor(_) => "Even out the loudness: quiet parts up, loud parts down",
-        K::Reverb(_) => "Put the sound in a room",
-        K::Delay(_) => "Echoes in time with the song",
-        K::Limiter(_) => "Keep peaks from distorting, and make it louder",
+        K::Eq(_) => "Shape the tone: more or less bass, middle and treble".to_owned(),
+        K::Compressor(_) => "Even out the loudness: quiet parts up, loud parts down".to_owned(),
+        K::Reverb(_) => "Put the sound in a room".to_owned(),
+        K::Delay(_) => "Echoes in time with the song".to_owned(),
+        K::Limiter(_) => "Keep peaks from distorting, and make it louder".to_owned(),
+        K::Plugin(setup) => plugin_by(&setup.plugin.vendor),
+    }
+}
+
+/// The name of a built-in effect's setting that can change over the song
+/// (in the order of [`daw_model::EffectKind::params`]).
+pub fn effect_param_name(kind: &daw_model::EffectKind, index: usize) -> &'static str {
+    use daw_model::EffectKind as K;
+    let names: &[&str] = match kind {
+        K::Eq(_) => &[
+            "Bass",
+            "Bass frequency",
+            "Middle",
+            "Middle frequency",
+            "Middle width",
+            "Treble",
+            "Treble frequency",
+        ],
+        K::Compressor(_) => &[THRESHOLD, RATIO, ATTACK, RELEASE, KNEE, MAKEUP],
+        K::Reverb(_) => &[AMOUNT, ROOM_SIZE, DAMPING, STEREO_WIDTH, PRE_DELAY],
+        K::Delay(_) => &[REPEATS, AMOUNT, TONE],
+        K::Limiter(_) => &[DRIVE, CEILING, RELEASE],
+        K::Plugin(_) => &[],
+    };
+    names.get(index).copied().unwrap_or("")
+}
+
+/// A built-in effect's setting as people read it ("+3.0 dB", "1.2 kHz").
+pub fn effect_param_value(kind: &daw_model::EffectKind, index: usize, value: f32) -> String {
+    use daw_model::EffectKind as K;
+    match (kind, index) {
+        (K::Eq(_), 0 | 2 | 5) | (K::Compressor(_), 0 | 4 | 5) | (K::Limiter(_), 0 | 1) => db(value),
+        (K::Eq(_), 1 | 3 | 6) | (K::Delay(_), 2) => hz(value),
+        (K::Eq(_), 4) => q(value),
+        (K::Compressor(_), 1) => ratio(value),
+        (K::Compressor(_), 2 | 3) | (K::Reverb(_), 4) | (K::Limiter(_), 2) => ms(value),
+        _ => percent(value),
+    }
+}
+
+/// Something the engine could not do, in words.
+pub fn problem(problem: &daw_engine::Problem) -> String {
+    use daw_engine::Problem as P;
+    match problem {
+        P::MissingSound(name) => {
+            format!("The sound \"{name}\" is missing from the program; a plain sound plays instead")
+        }
+        P::UnreadableSound { sound, reason } => {
+            format!("Could not read the sound {sound}; a plain sound plays instead ({reason})")
+        }
+        P::TooManyTracks(most) => format!("Too many tracks: at most {most} can play"),
+        P::TooManyEffects(most) => format!("Too many effects: at most {most} can run"),
+        P::PluginMissing(name) => {
+            format!("The plugin \"{name}\" is not installed on this computer")
+        }
+        P::PluginFailed { plugin, reason } => {
+            format!("The plugin \"{plugin}\" could not be started ({reason})")
+        }
+        P::PluginSettings { plugin, reason } => {
+            format!("The plugin \"{plugin}\" did not take its saved settings ({reason})")
+        }
+    }
+}
+
+// Plugins.
+pub const ADD_INSTRUMENT: &str = "Instrument…";
+pub const ADD_INSTRUMENT_HINT: &str =
+    "Add a track with another instrument: the included ones, or a plugin";
+pub const INSTRUMENTS_TITLE: &str = "Choose an instrument";
+pub const SEARCH: &str = "Search";
+pub const INCLUDED: &str = "Included";
+pub const PLUGINS: &str = "Plugins";
+pub const NO_PLUGINS_FOUND: &str =
+    "No plugins found yet. CLAP and VST3 plugins installed in the usual folders appear here.";
+pub const NOTHING_MATCHES: &str = "Nothing matches";
+pub const LOOK_AGAIN: &str = "Look again";
+pub const LOOK_AGAIN_HINT: &str = "Look for plugins installed since the program started";
+pub const OPEN_PLUGIN: &str = "Open the plugin's window";
+pub const CLOSE_PLUGIN: &str = "Close the plugin's window";
+pub const NO_PLUGIN_WINDOW: &str = "This plugin has no window of its own.";
+pub const PARAMETER: &str = "Parameter";
+pub const PLUGIN_MISSING: &str = "not available";
+pub const PLUGIN_EFFECT_HINT: &str = "Click to open its window · right-click for more";
+
+/// While plugins are being looked for.
+pub fn looking_for_plugins(checked: usize, total: usize) -> String {
+    if total == 0 {
+        "Looking for plugins…".to_owned()
+    } else {
+        format!("Looking for plugins… ({checked} of {total})")
+    }
+}
+
+/// Plugin files that could not be read.
+pub fn unreadable_plugins(count: usize) -> String {
+    if count == 1 {
+        "1 plugin file could not be opened".to_owned()
+    } else {
+        format!("{count} plugin files could not be opened")
+    }
+}
+
+/// Who made a plugin, and its format: "Surge Synth Team · CLAP".
+pub fn plugin_detail(vendor: &str, format: &str) -> String {
+    if vendor.is_empty() {
+        format.to_owned()
+    } else {
+        format!("{vendor} · {format}")
+    }
+}
+
+/// A plugin, by its maker.
+pub fn plugin_by(vendor: &str) -> String {
+    if vendor.is_empty() {
+        "A plugin".to_owned()
+    } else {
+        format!("A plugin by {vendor}")
+    }
+}
+
+/// What a plugin track plays, under its name.
+pub fn plugin_track(name: &str, missing: bool) -> String {
+    if missing {
+        format!("{name} ({PLUGIN_MISSING})")
+    } else {
+        name.to_owned()
+    }
+}
+
+/// The title of a plugin's window: the plugin, then where it is.
+pub fn plugin_window_title(plugin: &str, place: &str) -> String {
+    format!("{plugin} — {place}")
+}
+
+// Automation.
+pub const AUTOMATION: &str = "Automation";
+pub const AUTOMATION_HINT: &str =
+    "Make a setting change over the song: it is drawn on a lane under the track";
+pub const LANE_HINT: &str = "Click to add a point · drag to move · right-click to remove";
+pub const REMOVE_LANE: &str = "Remove this lane";
+pub const LAST_MOVED: &str = "Last moved in the plugin";
+pub const SEARCH_SETTINGS: &str = "Search settings";
+pub const AUTOMATED_HINT: &str = "Follows its automation lane while the song plays";
+pub const EDIT_ADD_LANE: &str = "add automation lane";
+pub const EDIT_REMOVE_LANE: &str = "remove automation lane";
+pub const EDIT_ADD_POINT: &str = "add automation point";
+pub const EDIT_MOVE_POINT: &str = "move automation point";
+pub const EDIT_REMOVE_POINT: &str = "remove automation point";
+
+/// A lane's name: the setting, after what it belongs to ("Reverb · Amount").
+pub fn lane_name(owner: &str, setting: &str) -> String {
+    if owner.is_empty() {
+        setting.to_owned()
+    } else {
+        format!("{owner} · {setting}")
     }
 }
 

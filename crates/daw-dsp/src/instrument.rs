@@ -34,6 +34,100 @@ pub trait Instrument: Send {
     fn apply_settings(&mut self, settings: &InstrumentSettings) {
         let _ = settings;
     }
+
+    /// Renders a block in which notes start and end at the given frames
+    /// (sorted). The usual way splits the block at each note; plugins take
+    /// the whole block with its notes in one go.
+    fn render_block(&mut self, notes: &[NoteEvent], left: &mut [f32], right: &mut [f32]) {
+        let len = left.len().min(right.len());
+        let mut cursor = 0;
+        for note in notes {
+            let at = note.offset.min(len);
+            if at > cursor {
+                self.render(&mut left[cursor..at], &mut right[cursor..at]);
+                cursor = at;
+            }
+            if note.on {
+                self.note_on(note.key, note.velocity);
+            } else {
+                self.note_off(note.key);
+            }
+        }
+        if cursor < len {
+            self.render(&mut left[cursor..len], &mut right[cursor..len]);
+        }
+    }
+
+    /// Changes one of the instrument's parameters (plugins), as a fraction
+    /// of its range, from the next block on.
+    fn set_parameter(&mut self, id: u32, value: f64) {
+        let _ = (id, value);
+    }
+
+    /// Where the song is, given before each block (for instruments that
+    /// follow the tempo).
+    fn set_position(&mut self, position: &SongPosition) {
+        let _ = position;
+    }
+
+    /// Called on the audio thread just before the instrument is handed back
+    /// to be dropped elsewhere (a plugin stops processing here).
+    fn retire(&mut self) {}
+
+    /// For a plugin: which loaded plugin this is, so the rest of it can be
+    /// found when this part comes back from the audio thread.
+    fn plugin_instance(&self) -> Option<u64> {
+        None
+    }
+}
+
+/// A note starting or ending at a frame within a block.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NoteEvent {
+    /// The frame within the block.
+    pub offset: usize,
+    /// The MIDI key.
+    pub key: u8,
+    /// How hard (for a start), from 0 to 1.
+    pub velocity: f32,
+    /// A start (`true`) or an end.
+    pub on: bool,
+}
+
+/// Where the song is, for instruments and effects that follow it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SongPosition {
+    /// Whether the song is playing.
+    pub playing: bool,
+    /// Beats per minute.
+    pub tempo: f64,
+    /// The position in quarter notes from the start.
+    pub beats: f64,
+    /// Where the current bar starts, in quarter notes.
+    pub bar_start: f64,
+    /// The current bar, from 0.
+    pub bar: u32,
+    /// The time signature.
+    pub numerator: u8,
+    /// The time signature.
+    pub denominator: u8,
+    /// The position in frames from the start.
+    pub frames: i64,
+}
+
+impl Default for SongPosition {
+    fn default() -> Self {
+        Self {
+            playing: false,
+            tempo: 120.0,
+            beats: 0.0,
+            bar_start: 0.0,
+            bar: 0,
+            numerator: 4,
+            denominator: 4,
+            frames: 0,
+        }
+    }
 }
 
 /// Settings an instrument takes while playing.

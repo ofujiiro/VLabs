@@ -35,6 +35,12 @@ impl Paths {
     pub fn recovery(&self) -> PathBuf {
         self.data.join("recovery")
     }
+
+    /// What is known about the plugins on this computer, so they are not
+    /// opened again at every start.
+    pub fn plugin_cache(&self) -> PathBuf {
+        self.data.join("plugins.json")
+    }
 }
 
 /// The folder name: lower case on Linux, as is usual there; the product

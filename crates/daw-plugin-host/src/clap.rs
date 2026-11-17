@@ -750,7 +750,10 @@ impl AudioSide for ClapAudio {
         clippy::cast_possible_truncation,
         reason = "frame counts within one block"
     )]
-    #[allow(clippy::too_many_lines, reason = "one processing call, prepared in order")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one processing call, prepared in order"
+    )]
     fn process(
         &mut self,
         transport: &Transport,

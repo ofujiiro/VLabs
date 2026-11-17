@@ -6,11 +6,13 @@
 
 use std::collections::HashMap;
 
-use daw_model::{ChainPlace, Effect, EffectId, EffectKind, TrackId};
+use daw_engine::PluginKind;
+use daw_model::{AutomationTarget, ChainPlace, Effect, EffectId, EffectKind, TrackId};
 use egui::{
     Align, Button, CornerRadius, Layout, Rect, RichText, Sense, Stroke, Ui, UiBuilder, pos2, vec2,
 };
 
+use crate::icons::{Icon, Look, icon_button};
 use crate::session::MAX_GAIN;
 use crate::session::Session;
 use crate::text;
@@ -153,7 +155,37 @@ fn strip_ui(ui: &mut Ui, session: &mut Session, strip: &StripInfo, intents: &mut
                 } else {
                     p.text
                 });
-                let response = ui.add(Button::new(name).frame(false).truncate());
+                let plugin = track.and_then(|t| session.track_plugin(t));
+                let response = ui
+                    .horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        // A plugin instrument's window opens from here.
+                        let window = plugin.filter(|&target| {
+                            !session.is_plugin_missing(target) && session.has_plugin_window(target)
+                        });
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if let Some(target) = window {
+                                let open = session.is_plugin_window_open(target);
+                                let label = if open {
+                                    text::CLOSE_PLUGIN
+                                } else {
+                                    text::OPEN_PLUGIN
+                                };
+                                let hint = session.plugin_name(target);
+                                if icon_button(ui, Icon::Window, label, &hint, Look::on(open), 20.0)
+                                    .clicked()
+                                {
+                                    session.toggle_plugin_window(target);
+                                }
+                            }
+                            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                ui.add(Button::new(name).frame(false).truncate())
+                            })
+                            .inner
+                        })
+                        .inner
+                    })
+                    .inner;
                 ui.painter().hline(
                     response.rect.x_range(),
                     response.rect.bottom() + 1.0,
@@ -182,10 +214,11 @@ fn strip_ui(ui: &mut Ui, session: &mut Session, strip: &StripInfo, intents: &mut
                             })
                             .inner
                             .on_hover_text(format!(
-                                "{}: {}\n{}",
+                                "{}: {}\n{}{}",
                                 text::PAN,
                                 text::pan(pan),
-                                text::PAN_HINT
+                                text::PAN_HINT,
+                                automated_note(session.is_automated(track, AutomationTarget::Pan)),
                             ));
                         gesture.add(&response);
                         if response.double_clicked() {
@@ -217,10 +250,13 @@ fn strip_ui(ui: &mut Ui, session: &mut Session, strip: &StripInfo, intents: &mut
                         })
                         .inner
                         .on_hover_text(format!(
-                            "{}: {}\n{}",
+                            "{}: {}\n{}{}",
                             text::VOLUME,
                             text::db(db),
-                            text::VOLUME_HINT
+                            text::VOLUME_HINT,
+                            automated_note(track.is_some_and(|t| {
+                                session.is_automated(t, AutomationTarget::Volume)
+                            })),
                         ));
                     gesture.add(&response);
                     if response.double_clicked() {
@@ -296,17 +332,30 @@ fn effects_ui(ui: &mut Ui, session: &mut Session, strip: &StripInfo, intents: &m
             let count = strip.effects.len();
             for (index, effect) in strip.effects.iter().enumerate() {
                 let dot = if effect.enabled { "●" } else { "○" };
+                let plugin = session.effect_plugin(effect.id);
+                let missing = plugin.is_some_and(|target| session.is_plugin_missing(target));
                 let label = format!("{dot} {}", text::effect_name(&effect.kind));
-                let color = if effect.enabled { p.text } else { p.text_weak };
+                let color = if effect.enabled && !missing {
+                    p.text
+                } else {
+                    p.text_weak
+                };
+                let hint = if missing {
+                    text::PLUGIN_MISSING
+                } else if plugin.is_some() {
+                    text::PLUGIN_EFFECT_HINT
+                } else {
+                    text::EFFECT_HINT
+                };
                 let response = ui
                     .add(
                         Button::new(RichText::new(label).color(color).size(size::SMALL))
+                            .truncate()
                             .min_size(vec2(ui.available_width(), row_height - 2.0)),
                     )
                     .on_hover_text(format!(
-                        "{}\n{}",
+                        "{}\n{hint}",
                         text::effect_description(&effect.kind),
-                        text::EFFECT_HINT
                     ));
                 if response.clicked() {
                     intents.push(Intent::OpenEffect(effect.id));
@@ -339,7 +388,65 @@ fn effects_ui(ui: &mut Ui, session: &mut Session, strip: &StripInfo, intents: &m
             );
             ui.add_space(2.0);
         }
+        plugin_effects(ui, session, strip, intents);
     });
+}
+
+/// The plugin effects in the Add menu, after the built-in ones.
+fn plugin_effects(
+    ui: &mut Ui,
+    session: &mut Session,
+    strip: &StripInfo,
+    intents: &mut Vec<Intent>,
+) {
+    let p = Palette::of(ui.ctx());
+    let plugins = session.plugins_of(PluginKind::Effect);
+    let search = session.plugin_search().clone();
+    if !plugins.is_empty() || !search.done {
+        ui.separator();
+        ui.label(RichText::new(text::PLUGINS).strong());
+    }
+    egui::ScrollArea::vertical()
+        .id_salt("plugin-effects")
+        .max_height(220.0)
+        .show(ui, |ui| {
+            for info in &plugins {
+                let detail = text::plugin_detail(&info.vendor, format_name(info));
+                let row = Button::new(&info.name)
+                    .shortcut_text(detail)
+                    .min_size(vec2(ui.available_width(), 24.0));
+                if ui.add(row).clicked() {
+                    if let Some(id) = session.add_plugin_effect(strip.place, info) {
+                        intents.push(Intent::OpenEffect(id));
+                    }
+                    ui.close();
+                }
+            }
+        });
+    if !search.done {
+        ui.label(
+            RichText::new(text::looking_for_plugins(search.checked, search.total))
+                .small()
+                .color(p.text_weak),
+        );
+    }
+}
+
+/// A plugin's format, as people know it.
+pub(crate) fn format_name(info: &daw_engine::PluginInfo) -> &'static str {
+    match info.format {
+        daw_engine::PluginFileFormat::Clap => "CLAP",
+        daw_engine::PluginFileFormat::Vst3 => "VST3",
+    }
+}
+
+/// The note added to a control's hint when a lane moves it.
+fn automated_note(automated: bool) -> String {
+    if automated {
+        format!("\n{}", text::AUTOMATED_HINT)
+    } else {
+        String::new()
+    }
 }
 
 /// The right-click menu of an effect.

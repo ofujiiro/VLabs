@@ -42,6 +42,11 @@ pub struct Document {
     revision: u64,
     /// The revision that was last saved, if any.
     saved_revision: Option<u64>,
+    /// Settings kept outside the project (a plugin's, inside the plugin)
+    /// changed since the last save.
+    changed_outside: bool,
+    /// How many times settings kept outside the project changed.
+    outside_changes: u64,
 }
 
 impl Document {
@@ -54,6 +59,8 @@ impl Document {
             gesture: None,
             revision: 0,
             saved_revision: Some(0),
+            changed_outside: false,
+            outside_changes: 0,
         }
     }
 
@@ -236,11 +243,33 @@ impl Document {
     /// Records that the current state has been saved.
     pub fn mark_saved(&mut self) {
         self.saved_revision = Some(self.revision);
+        self.changed_outside = false;
     }
 
     /// Whether there are changes that have not been saved.
     pub fn is_dirty(&self) -> bool {
-        self.saved_revision != Some(self.revision)
+        self.changed_outside || self.saved_revision != Some(self.revision)
+    }
+
+    /// Settings the project keeps a copy of changed where they live (a
+    /// plugin's, in its own editor): the song has unsaved changes, though
+    /// the project itself has not changed (and there is nothing to undo).
+    pub fn mark_changed_outside(&mut self) {
+        self.changed_outside = true;
+        self.outside_changes += 1;
+    }
+
+    /// Brings copies of outside settings in the project up to date (a
+    /// plugin's settings, before saving): not an undo step, and not a
+    /// change the engine needs to hear about.
+    pub fn refresh(&mut self, change: impl FnOnce(&mut Project)) {
+        change(&mut self.project);
+    }
+
+    /// A number that changes whenever there is something new to save: the
+    /// project changed, or settings it keeps a copy of did.
+    pub fn version(&self) -> u64 {
+        self.revision + self.outside_changes
     }
 
     /// How many steps can be undone.

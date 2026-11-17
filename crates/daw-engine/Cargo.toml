@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 daw-dsp.workspace = true
 daw-model.workspace = true
+daw-plugin-host.workspace = true
 daw-rt.workspace = true
 rtrb.workspace = true
 

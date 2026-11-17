@@ -2,18 +2,25 @@
 
 #![doc = include_str!("../README.md")]
 
+mod automation;
 mod document;
 mod mixer;
+mod plugin;
 mod project;
 mod quantize;
 mod song;
 mod time;
 
+pub use automation::{
+    AutomationLane, AutomationPoint, AutomationTarget, gain_volume, pan_value, value_pan,
+    volume_gain,
+};
 pub use document::{Document, HISTORY_LIMIT};
 pub use mixer::{
-    ChainPlace, CompressorSettings, DelaySettings, DelayTime, Effect, EffectKind, EqSettings,
-    LimiterSettings, MasterBus, ReverbSettings,
+    ChainPlace, CompressorSettings, DelaySettings, DelayTime, Effect, EffectKind, EffectParam,
+    EqSettings, LimiterSettings, MasterBus, ReverbSettings,
 };
+pub use plugin::{PluginFormat, PluginRef, PluginSetup, PluginState, STATE_KEY, base64};
 pub use project::Project;
 pub use quantize::quantize_starts;
 pub use song::{

@@ -5,18 +5,21 @@
 //! files. The views call these methods; tests call them directly.
 //!
 //! The song-level operations (views, tracks, patterns, clips) are in
-//! `arrange`, the mixer and the effects in `mixing`.
+//! `arrange`, the mixer and the effects in `mixing`, plugins and
+//! automation in `plugins`.
 
 mod arrange;
 mod mixing;
+mod plugins;
 
 pub use mixing::MAX_GAIN;
+pub use plugins::{LaneChoice, PluginSearch};
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use daw_engine::{Engine, EngineEvent, PlaybackScope, RecordState};
+use daw_engine::{Engine, EngineEvent, PlaybackScope, PluginTarget, RecordState};
 use daw_model::{
     ClipContent, ClipId, Document, MAX_KEY, MeterMap, Note, NoteId, Pattern, PatternId, Project,
     Region, TEMPO_RANGE, TICKS_PER_WHOLE, Ticks, TimeSignature, TrackId,
@@ -200,6 +203,12 @@ pub struct Session {
     awaiting_stop: bool,
     take_finished: bool,
     status: Option<(String, Instant)>,
+    /// Where the search for plugins stands.
+    plugin_search: PluginSearch,
+    /// The plugin parameter last moved in a plugin's window.
+    last_moved: Option<(PluginTarget, u32)>,
+    /// Plugin parameters' names, by plugin identity and parameter.
+    param_names: HashMap<(String, u32), String>,
 }
 
 impl Session {
@@ -252,6 +261,9 @@ impl Session {
             awaiting_stop: false,
             take_finished: false,
             status: None,
+            plugin_search: PluginSearch::default(),
+            last_moved: None,
+            param_names: HashMap::new(),
         };
         session.selection_revision = session.doc.revision();
         session.sync_engine();
@@ -426,8 +438,9 @@ impl Session {
         for event in self.engine.poll() {
             self.handle_engine_event(event);
         }
+        self.plugin_idle();
         for problem in self.engine.take_problems() {
-            self.set_status(problem);
+            self.set_status(text::problem(&problem));
         }
         if self.doc.revision() != self.selection_revision {
             self.selection_revision = self.doc.revision();
@@ -910,6 +923,8 @@ impl Session {
 
     /// Undoes the last step.
     pub fn undo(&mut self) {
+        // The step undone may bring a plugin back: with its latest settings.
+        self.capture_plugin_states();
         match self.doc.undo() {
             Some(label) => self.set_status(text::undone(&label)),
             None => self.set_status(text::NOTHING_TO_UNDO),
@@ -918,6 +933,7 @@ impl Session {
 
     /// Redoes the last undone step.
     pub fn redo(&mut self) {
+        self.capture_plugin_states();
         match self.doc.redo() {
             Some(label) => self.set_status(text::redone(&label)),
             None => self.set_status(text::NOTHING_TO_REDO),
@@ -1290,6 +1306,7 @@ impl Session {
     /// Saves to a new file, which becomes the song's file.
     pub fn save_as(&mut self, path: &Path) -> Result<(), String> {
         let path = with_extension(path);
+        self.capture_plugin_states();
         match daw_formats::save_project(self.project(), &path) {
             Ok(()) => {
                 self.doc.mark_saved();
@@ -1311,6 +1328,9 @@ impl Session {
         self.release_keys();
         self.engine.stop();
         self.engine.panic();
+        // The new song's plugins start with their own settings.
+        self.engine.unload_plugins();
+        self.last_moved = None;
         let project = editable(project);
         let (track, pattern) = first_focus(&project);
         self.doc = if saved {
@@ -1379,6 +1399,7 @@ impl Session {
             return;
         }
         let path = crate::export::with_wav_extension(path);
+        self.capture_plugin_states();
         self.export = Some(Export::start(
             self.project().clone(),
             self.engine.library().clone(),

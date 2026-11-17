@@ -5,10 +5,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 
-use daw_dsp::effects::Effect;
 use daw_dsp::{Instrument, InstrumentSettings};
 use daw_model::Ticks;
 
+use crate::plugins::EffectSlot;
 use crate::program::Program;
 
 /// From the interface to the audio thread.
@@ -28,7 +28,7 @@ pub(crate) enum Command {
     /// Puts an effect into the effect table (or empties the entry).
     Effect {
         index: usize,
-        effect: Option<Box<Effect>>,
+        effect: Option<EffectSlot>,
     },
     Play,
     Stop,
@@ -116,21 +116,15 @@ pub(crate) enum Garbage {
         reason = "held only so it is dropped on the interface thread"
     )]
     Program(Box<Program>),
-    #[allow(
-        dead_code,
-        reason = "held only so it is dropped on the interface thread"
-    )]
+    /// An instrument (a plugin's audio half lets its main half go too).
     Instrument(Box<dyn Instrument>),
     #[allow(
         dead_code,
         reason = "held only so it is dropped on the interface thread"
     )]
     Settings(Box<InstrumentSettings>),
-    #[allow(
-        dead_code,
-        reason = "held only so it is dropped on the interface thread"
-    )]
-    Effect(Box<Effect>),
+    /// An effect (a plugin's audio half lets its main half go too).
+    Effect(EffectSlot),
 }
 
 /// Recording states, as stored in [`Shared::recording`].

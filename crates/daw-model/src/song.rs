@@ -161,6 +161,8 @@ pub enum Instrument {
         #[serde(default)]
         pads: Vec<PadSetting>,
     },
+    /// A third-party plugin instrument.
+    Plugin(crate::plugin::PluginSetup),
 }
 
 impl Instrument {
@@ -186,11 +188,21 @@ impl Instrument {
         matches!(self, Self::Drums { .. })
     }
 
+    /// The plugin, if this is a plugin instrument.
+    pub fn plugin(&self) -> Option<&crate::plugin::PluginSetup> {
+        match self {
+            Self::Plugin(setup) => Some(setup),
+            _ => None,
+        }
+    }
+
     /// Whether two instruments make their sound from the same source, so
     /// only settings differ (they can change while sound plays).
     pub fn same_source(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Drums { kit: a, .. }, Self::Drums { kit: b, .. }) => a == b,
+            // A plugin's settings live in the plugin while it plays.
+            (Self::Plugin(a), Self::Plugin(b)) => a.plugin == b.plugin,
             _ => self == other,
         }
     }
@@ -203,7 +215,7 @@ impl Instrument {
                 .find(|p| p.key == key)
                 .copied()
                 .unwrap_or_else(|| PadSetting::new(key)),
-            Self::SoundFont { .. } => PadSetting::new(key),
+            Self::SoundFont { .. } | Self::Plugin(_) => PadSetting::new(key),
         }
     }
 
@@ -347,4 +359,7 @@ pub struct Track {
     /// The effect chain, in order.
     #[serde(default)]
     pub effects: Vec<crate::mixer::Effect>,
+    /// Settings that change over the song.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub automation: Vec<crate::automation::AutomationLane>,
 }
