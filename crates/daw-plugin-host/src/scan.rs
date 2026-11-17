@@ -194,6 +194,9 @@ pub struct Findings {
     pub plugins: Vec<PluginInfo>,
     /// Files that could not be described, with the reason.
     pub problems: Vec<(PathBuf, String)>,
+    /// How many files had to be opened (in a separate run of the program)
+    /// because the cache did not know them, or they changed.
+    pub opened: usize,
 }
 
 /// Scanning in the background.
@@ -297,9 +300,13 @@ fn scan(
     let mut entries = Vec::with_capacity(files.len());
     for (format, path) in files {
         let (size, modified) = stamp(&path);
-        let entry = match cached.get(&(format, path.clone())) {
-            Some(entry) if entry.size == size && entry.modified == modified => entry.clone(),
-            _ => CacheEntry {
+        let known = cached
+            .get(&(format, path.clone()))
+            .filter(|entry| entry.size == size && entry.modified == modified);
+        let opened = known.is_none();
+        let entry = match known {
+            Some(entry) => entry.clone(),
+            None => CacheEntry {
                 format,
                 path: path.clone(),
                 size,
@@ -308,6 +315,7 @@ fn scan(
             },
         };
         if let Ok(mut findings) = findings.lock() {
+            findings.opened += usize::from(opened);
             match &entry.result {
                 Ok(plugins) => findings.plugins.extend(plugins.iter().cloned()),
                 Err(problem) => findings.problems.push((path.clone(), problem.clone())),

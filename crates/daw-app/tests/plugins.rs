@@ -73,12 +73,25 @@ fn the_reference_plugins_are_found_and_remembered() {
     }
     assert!(findings.problems.is_empty(), "{:?}", findings.problems);
 
-    // The next start reads what was found from the cache.
+    assert_eq!(findings.opened, 6, "every file was opened once");
+
+    // The next start reads what was found from the cache: no plugin is
+    // opened again.
+    let remembered = std::fs::read_to_string(&cache).unwrap_or_default();
     let started = Instant::now();
-    let mut again = Scanner::start(program(), Some(cache), vec![fixtures]);
+    let mut again = Scanner::start(program(), Some(cache.clone()), vec![fixtures]);
     again.wait();
     let second = started.elapsed();
-    eprintln!("first scan {first:?}, from the cache {second:?}");
-    assert_eq!(again.findings().plugins, findings.plugins);
-    assert!(second < first / 2, "the second start is quicker");
+    let found_again = again.findings();
+    eprintln!(
+        "first scan {first:?} (opened {}), from the cache {second:?} (opened {})",
+        findings.opened, found_again.opened
+    );
+    assert_eq!(found_again.plugins, findings.plugins);
+    assert_eq!(
+        found_again.opened,
+        0,
+        "plugins already known are not opened again; the cache was:\n{remembered}\nand is now:\n{}",
+        std::fs::read_to_string(&cache).unwrap_or_default()
+    );
 }
