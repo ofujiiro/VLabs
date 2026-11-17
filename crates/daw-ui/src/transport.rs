@@ -143,6 +143,8 @@ fn transport_buttons(
     let recording = session.is_recording();
     let (label, look) = if recording {
         (text::STOP_RECORDING, Look::Recording)
+    } else if session.audio_track_in_focus() && session.view() == View::Song {
+        (text::RECORD_SOUND, Look::Normal)
     } else {
         (text::RECORD, Look::Normal)
     };

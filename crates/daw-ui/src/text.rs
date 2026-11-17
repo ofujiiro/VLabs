@@ -139,6 +139,8 @@ pub fn command_name(command: crate::keys::Command) -> &'static str {
         C::ToggleMixer => "Show or hide the mixer",
         C::SwitchView => "Switch between the song and the pattern",
         C::Export => "Export as WAV",
+        C::Split => "Split the clip at the play position",
+        C::ImportAudio => "Import audio",
     }
 }
 pub const ABOUT: &str = "About";
@@ -941,6 +943,7 @@ pub const LOADING_SOUND: &str = "Loading…";
 pub const DROP_HERE: &str = "Drop sound files to import them";
 pub const AUDIO_HINT: &str = "Press Record to record from the microphone, or drop sound files here";
 pub const LAST_INSTRUMENT: &str = "A song keeps at least one instrument track";
+pub const INPUT_LEVEL_HINT: &str = "How loud the microphone is: keep it out of the red";
 pub const RECORDING_SKIPPED: &str =
     "The computer fell behind while recording: parts of the take are silent.";
 

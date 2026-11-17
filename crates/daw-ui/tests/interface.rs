@@ -34,6 +34,7 @@ use egui_kittest::kittest::Queryable;
 struct FakeHost {
     save_to: Arc<Mutex<Option<PathBuf>>>,
     export_to: Arc<Mutex<Option<PathBuf>>>,
+    audio: Arc<Mutex<Vec<PathBuf>>>,
     asked: Arc<Mutex<u32>>,
 }
 
@@ -51,6 +52,11 @@ impl Host for FakeHost {
     fn choose_export_file(&mut self, _suggested_name: &str) -> Option<PathBuf> {
         *self.asked.lock().unwrap() += 1;
         self.export_to.lock().unwrap().clone()
+    }
+
+    fn choose_audio_files(&mut self) -> Vec<PathBuf> {
+        *self.asked.lock().unwrap() += 1;
+        self.audio.lock().unwrap().clone()
     }
 }
 
@@ -1111,4 +1117,187 @@ fn a_song_with_a_plugin_track_exports_with_its_sound() {
         "the plugin's note is in the file: {loudest}"
     );
     std::fs::remove_file(path).ok();
+}
+
+// ----- Audio (phase 4)
+
+/// A WAV file of `seconds` of a tone, at 48 kHz.
+fn tone_file(name: &str, seconds: f64) -> PathBuf {
+    let folder = std::env::temp_dir().join(format!(
+        "interface-audio-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    ));
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join(name);
+    let mut writer = daw_formats::wav::WavWriter::create_with_channels(
+        &path,
+        daw_formats::wav::WavFormat::Pcm16,
+        48_000,
+        1,
+    )
+    .unwrap();
+    let samples: Vec<f32> = (0..(seconds * 48_000.0) as usize)
+        .map(|i| (i as f32 * 0.06).sin() * 0.5)
+        .collect();
+    writer.write_interleaved(&samples).unwrap();
+    writer.finish().unwrap();
+    path
+}
+
+impl Fixture {
+    /// Draws frames until the sound files are read.
+    fn wait_for_audio(&mut self) {
+        let start = std::time::Instant::now();
+        while self.session().is_loading_audio() {
+            assert!(start.elapsed() < std::time::Duration::from_secs(30));
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            self.harness.run_steps(1);
+        }
+        self.harness.run_steps(2);
+    }
+
+    /// Presses at `from`, moves to `to` in steps, releases.
+    fn drag(&mut self, from: Pos2, to: Pos2, modifiers: Modifiers) {
+        self.harness.hover_at(from);
+        self.harness.step();
+        self.press(from, PointerButton::Primary, true, modifiers);
+        self.harness.step();
+        for i in 1..=8 {
+            self.harness.hover_at(from + (to - from) * (i as f32 / 8.0));
+            self.harness.step();
+        }
+        self.press(to, PointerButton::Primary, false, modifiers);
+        self.harness.run_steps(2);
+    }
+
+    fn right_click(&mut self, pos: Pos2) {
+        self.harness.hover_at(pos);
+        self.harness.step();
+        self.press(pos, PointerButton::Secondary, true, Modifiers::NONE);
+        self.harness.step();
+        self.press(pos, PointerButton::Secondary, false, Modifiers::NONE);
+        self.harness.run_steps(3);
+    }
+
+    /// Where a tick is drawn in the song view, as it is first shown: the
+    /// whole song (at least four bars) and two bars more fill the timeline.
+    fn song_x(&self, tick: Ticks) -> f32 {
+        let song = self.harness.get_by_label(text::SONG_VIEW).rect();
+        let timeline_left = song.left() + 236.0;
+        let width = song.width() - 236.0;
+        let length = self.session().song_length() + self.session().project().meter.bar_start(2);
+        let per_point = length.0 as f64 / f64::from(width - 16.0);
+        timeline_left + (tick.0 as f64 / per_point) as f32
+    }
+
+    /// The top of a track's row in the song view (no lanes open).
+    fn row_top(&self, index: usize) -> f32 {
+        let song = self.harness.get_by_label(text::SONG_VIEW).rect();
+        song.top() + 28.0 + 64.0 * index as f32
+    }
+}
+
+#[test]
+fn sound_files_are_imported_from_the_menu_onto_a_track_of_their_own() {
+    let mut f = new_song();
+    *f.host.audio.lock().unwrap() = vec![tone_file("Guitar.wav", 2.0)];
+    f.harness.get_by_label(text::MENU).click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label_contains(text::IMPORT_AUDIO).click();
+    f.harness.run_steps(2);
+    f.wait_for_audio();
+    assert_eq!(f.session().view(), View::Song, "the song comes on screen");
+    let track = f.session().project().tracks.last().unwrap().clone();
+    assert!(track.instrument.is_audio());
+    assert_eq!(track.name, "Guitar");
+    assert_eq!(track.clips.len(), 1);
+    assert_eq!(track.clips[0].start, Ticks::ZERO, "at the play position");
+    assert_eq!(f.session().document().undo_label(), Some(text::EDIT_IMPORT));
+    // Ctrl+I asks for files too.
+    let asked = *f.host.asked.lock().unwrap();
+    f.key(Key::I, Key::I, true, Modifiers::COMMAND);
+    f.key(Key::I, Key::I, false, Modifiers::COMMAND);
+    assert_eq!(*f.host.asked.lock().unwrap(), asked + 1);
+}
+
+#[test]
+fn the_audio_button_adds_a_track_that_records_sound() {
+    let mut f = new_song();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    f.harness
+        .get_by_label(&format!("+ {}", text::ADD_AUDIO))
+        .click();
+    f.harness.run_steps(3);
+    let track = f.session().project().tracks.last().unwrap().id;
+    assert!(f.session().is_audio_track(track));
+    assert_eq!(f.session().focused_track(), track, "in focus");
+    // The record button now records sound.
+    f.harness.get_by_label(text::RECORD_SOUND);
+}
+
+#[test]
+fn audio_clips_are_trimmed_faded_and_split_with_the_mouse() {
+    let mut f = new_song();
+    f.workspace_mut().session_mut().import_audio(
+        vec![tone_file("Loop.wav", 2.0)],
+        None,
+        Ticks::ZERO,
+    );
+    f.wait_for_audio();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(3);
+    let track = f.session().project().tracks.last().unwrap().id;
+    let clip = f.session().project().track(track).unwrap().clips[0].id;
+    let top = f.row_top(2);
+    let middle = top + 34.0;
+
+    // The left end, dragged one beat later: trimmed on the beat, the sound
+    // staying where it was.
+    let from = Pos2::new(f.song_x(Ticks::ZERO) + 3.0, middle);
+    let to = Pos2::new(f.song_x(Ticks::QUARTER) + 1.0, middle);
+    f.drag(from, to, Modifiers::NONE);
+    let c = *f.session().project().clip(clip).unwrap().1;
+    assert_eq!(c.start, Ticks::QUARTER, "trimmed to the beat");
+    assert!(matches!(
+        c.content,
+        daw_model::ClipContent::Audio { offset: 24_000, .. }
+    ));
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_TRIM_CLIP)
+    );
+
+    // The handle at the top right, dragged left: a fade out.
+    let end = f.song_x(c.end());
+    let handle = Pos2::new(end - 5.0, top + 4.0 + 5.0);
+    f.drag(handle, handle - vec2(40.0, 0.0), Modifiers::NONE);
+    let (fade_in, fade_out) = f.session().clip_fades(clip).unwrap();
+    assert!(fade_in == 0.0 && fade_out > 0.1, "{fade_in} {fade_out}");
+    assert_eq!(f.session().document().undo_label(), Some(text::EDIT_FADE));
+
+    // Right-click in the middle: Split here.
+    let inside = Pos2::new(f.song_x(Ticks::QUARTER * 3), middle);
+    f.right_click(inside);
+    f.harness.get_by_label(text::SPLIT_HERE).click();
+    f.harness.run_steps(2);
+    assert_eq!(f.session().project().track(track).unwrap().clips.len(), 2);
+
+    // Ctrl+B splits the selected clip at the play position.
+    let second = f.session().selected_clip().unwrap();
+    f.workspace_mut()
+        .session_mut()
+        .locate_song(Ticks::QUARTER * 3 + Ticks::QUARTER / 2);
+    f.tick();
+    f.key(Key::B, Key::B, true, Modifiers::COMMAND);
+    f.key(Key::B, Key::B, false, Modifiers::COMMAND);
+    assert_eq!(f.session().project().track(track).unwrap().clips.len(), 3);
+    assert_ne!(
+        f.session().selected_clip(),
+        Some(second),
+        "the new part is selected"
+    );
 }

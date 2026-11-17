@@ -13,22 +13,30 @@
 //! - the wheel scrolls, Shift+wheel scrolls in time, Ctrl+wheel zooms; hold
 //!   Alt while dragging to move by beats instead of bars;
 //! - a track's automation lanes sit under it (decision 0016): click a lane
-//!   to add a point, drag a point to move it, right-click it to remove it.
+//!   to add a point, drag a point to move it, right-click it to remove it;
+//! - audio clips (decision 0017) show their waveform: drag either end to
+//!   trim (on beats; exactly with Alt), drag the small handles at their top
+//!   corners to fade in or out, drag one to another audio track; click an
+//!   empty spot of an audio track to start recording from there; drop sound
+//!   files on the view to import them.
 
+use std::path::PathBuf;
+
+use daw_dsp::audio::Peaks;
 use daw_dsp::drums::PadSound;
 use daw_engine::PluginTarget;
 use daw_model::{
-    AutomationPoint, AutomationTarget, Clip, ClipId, Instrument, Pattern, Project, Region, Ticks,
-    TrackId,
+    AutomationPoint, AutomationTarget, Clip, ClipContent, ClipId, Instrument, Pattern, Project,
+    Region, Ticks, TrackId,
 };
 use egui::{
-    Align, Align2, Button, CornerRadius, CursorIcon, FontId, Label, Layout as EguiLayout,
-    PointerButton, PopupCloseBehavior, Pos2, Rect, Response, RichText, Sense, Shape, Stroke,
-    StrokeKind, TextEdit, Ui, UiBuilder, pos2, vec2,
+    Align, Align2, Button, Color32, CornerRadius, CursorIcon, FontId, Label, Layout as EguiLayout,
+    Mesh, PointerButton, PopupCloseBehavior, Pos2, Rect, Response, RichText, Sense, Shape, Slider,
+    Stroke, StrokeKind, TextEdit, Ui, UiBuilder, pos2, vec2,
 };
 
 use crate::icons::{Icon, Look, icon_button};
-use crate::session::{LaneChoice, Session};
+use crate::session::{LaneChoice, Session, SoundState};
 use crate::step_grid::PAD_ORDER;
 use crate::text;
 use crate::theme::{Palette, size, track_color};
@@ -43,9 +51,13 @@ const LANE_MARGIN: f32 = 7.0;
 /// How close to an automation point the pointer must be to take it.
 const POINT_GRAB: f32 = 7.0;
 const ADD_ROW_HEIGHT: f32 = 80.0;
-/// How close to a clip's right end the pointer must be to resize it.
+/// How close to a clip's end the pointer must be to trim or resize it.
 const EDGE_GRAB: f32 = 8.0;
 const DRAG_THRESHOLD: f32 = 4.0;
+/// How close to a fade handle the pointer must be to take it.
+const FADE_GRAB: f32 = 7.0;
+/// How far fade handles sit inside a clip's top corners.
+const HANDLE_INSET: f32 = 5.0;
 
 /// What a mouse drag is doing.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -61,6 +73,10 @@ enum Drag {
     },
     /// Changing a clip's length.
     Resize { clip: ClipId },
+    /// Moving a clip's start, what it plays staying where it is.
+    TrimStart { clip: ClipId },
+    /// Changing an audio clip's fade in, or out.
+    Fade { clip: ClipId, out: bool },
     /// Along the ruler: a click moves the play position, a drag loops.
     Ruler {
         anchor: Ticks,
@@ -91,6 +107,8 @@ pub struct SongView {
     /// The clip a right-click menu is open for.
     menu_clip: Option<ClipId>,
     menu_at: Pos2,
+    /// Where "Split here" splits: the moment right-clicked.
+    menu_split: Ticks,
     scrolled_at: f64,
     /// The settings offered while a track's lane chooser is open.
     lane_menu: Option<(TrackId, Vec<LaneChoice>)>,
@@ -108,6 +126,7 @@ impl Default for SongView {
             fitted: false,
             menu_clip: None,
             menu_at: Pos2::ZERO,
+            menu_split: Ticks::ZERO,
             scrolled_at: f64::NEG_INFINITY,
             lane_menu: None,
             lane_search: String::new(),
@@ -256,6 +275,7 @@ impl SongView {
             self.fitted = true;
         }
         self.handle_view_input(ui, &layout);
+        self.take_dropped_files(ui, session, &layout);
         let most = (content - layout.timeline.height() + 8.0).max(0.0);
         self.top = self.top.clamp(0.0, most);
         self.left_tick = self.left_tick.max(0.0);
@@ -272,6 +292,54 @@ impl SongView {
         self.paint_ruler(ui, session, &layout);
         self.headers(ui, session, &layout, intents);
         self.clip_menu(ui, session);
+        if ui.input(|i| !i.raw.hovered_files.is_empty()) {
+            let painter = ui.painter_at(layout.timeline);
+            painter.rect_filled(
+                layout.timeline,
+                CornerRadius::ZERO,
+                p.accent.gamma_multiply(0.12),
+            );
+            painter.text(
+                layout.timeline.center(),
+                Align2::CENTER_CENTER,
+                text::DROP_HERE,
+                FontId::proportional(size::HEADING),
+                p.text,
+            );
+        }
+    }
+
+    /// Sound files dropped on the view: on the audio track under the
+    /// pointer at its beat, or on new tracks (at the play position if the
+    /// pointer is not over the tracks).
+    fn take_dropped_files(&mut self, ui: &Ui, session: &mut Session, layout: &Layout) {
+        let files: Vec<PathBuf> = ui.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path().to_path_buf())
+                .collect()
+        });
+        if files.is_empty() {
+            return;
+        }
+        let pointer = ui
+            .input(|i| i.pointer.latest_pos())
+            .filter(|p| layout.timeline.contains(*p));
+        let (track, at) = match pointer {
+            Some(pos) => {
+                let track = layout
+                    .row_at(pos.y)
+                    .filter(|r| r.kind == RowKind::Track && session.is_audio_track(r.track))
+                    .map(|r| r.track);
+                (
+                    track,
+                    Self::snap_nearest(session, self.x_to_tick(layout, pos.x), true),
+                )
+            }
+            None => (None, session.song_position()),
+        };
+        session.import_audio(files, track, at);
     }
 
     /// Whether a drag is in progress.
@@ -341,6 +409,61 @@ impl SongView {
             meter.signature_at(at).bar_length()
         };
         at.max(Ticks::ZERO).round_to(unit)
+    }
+
+    /// Where a dragged clip edge lands: on bars for patterns (beats with
+    /// Alt), on beats for sound (exactly where the pointer is with Alt).
+    fn snap_edge(session: &Session, at: Ticks, alt: bool, audio: bool) -> Ticks {
+        match (audio, alt) {
+            (true, true) => at.max(Ticks::ZERO),
+            (true, false) => Self::snap_nearest(session, at, true),
+            (false, fine) => Self::snap_nearest(session, at, fine),
+        }
+    }
+
+    /// Where an audio clip's fade handles are on screen: at the end of its
+    /// fade in and the start of its fade out, near its top.
+    fn fade_handles(
+        &self,
+        layout: &Layout,
+        session: &Session,
+        clip: &Clip,
+        rect: Rect,
+    ) -> Option<(Pos2, Pos2)> {
+        let (fade_in, fade_out) = session.clip_fades(clip.id)?;
+        let project = session.project();
+        let in_end = if fade_in > 0.0 {
+            clip.start + project.ticks_for(clip.start, f64::from(fade_in))
+        } else {
+            clip.start
+        };
+        let out_seconds = project.tempo.seconds_at(clip.end()) - f64::from(fade_out);
+        let out_start = Ticks(project.tempo.ticks_at(out_seconds).round() as i64);
+        let (left, right) = (rect.left() + HANDLE_INSET, rect.right() - HANDLE_INSET);
+        let y = rect.top() + HANDLE_INSET;
+        let x = |tick: Ticks| self.tick_to_x(layout, tick).clamp(left, right.max(left));
+        Some((pos2(x(in_end), y), pos2(x(out_start), y)))
+    }
+
+    /// The fade handle of a clip under a point: `Some(true)` for the fade
+    /// out, `Some(false)` for the fade in.
+    fn fade_handle_at(
+        &self,
+        layout: &Layout,
+        session: &Session,
+        clip: ClipId,
+        rect: Rect,
+        pos: Pos2,
+    ) -> Option<bool> {
+        let (_, c) = session.project().clip(clip)?;
+        let (fade_in, fade_out) = self.fade_handles(layout, session, c, rect)?;
+        if pos.distance(fade_out) <= FADE_GRAB {
+            Some(true)
+        } else if pos.distance(fade_in) <= FADE_GRAB {
+            Some(false)
+        } else {
+            None
+        }
     }
 
     fn clip_rect(&self, layout: &Layout, row: usize, clip: &Clip) -> Rect {
@@ -518,9 +641,15 @@ impl SongView {
                 };
             } else if let Some((clip, _, rect)) = self.clip_at(layout, session, pos) {
                 session.select_clip(Some(clip));
-                if pos.x >= rect.right() - EDGE_GRAB {
+                if let Some(out) = self.fade_handle_at(layout, session, clip, rect, pos) {
+                    session.begin_gesture(text::EDIT_FADE);
+                    self.drag = Drag::Fade { clip, out };
+                } else if pos.x >= rect.right() - EDGE_GRAB {
                     session.begin_gesture(text::EDIT_RESIZE_CLIP);
                     self.drag = Drag::Resize { clip };
+                } else if pos.x <= rect.left() + EDGE_GRAB && rect.width() >= 3.0 * EDGE_GRAB {
+                    session.begin_gesture(text::EDIT_TRIM_CLIP);
+                    self.drag = Drag::TrimStart { clip };
                 } else if let Some(start) = session.project().clip(clip).map(|(_, c)| c.start) {
                     session.begin_gesture(text::EDIT_MOVE_CLIP);
                     self.drag = Drag::Move {
@@ -534,6 +663,15 @@ impl SongView {
                 && let RowKind::Lane(target) = row.kind
             {
                 self.press_lane(layout, session, &row, target, pos, alt);
+            } else if let Some(row) = layout.row_at(pos.y)
+                && session.is_audio_track(row.track)
+            {
+                // An audio track has no pattern to place: the play position
+                // moves there, so Record starts from it.
+                session.focus_track(row.track);
+                session.select_clip(None);
+                let at = Self::snap_edge(session, self.x_to_tick(layout, pos.x), alt, true);
+                session.locate_song(at);
             } else if let Some(row) = layout.row_at(pos.y) {
                 let track = row.track;
                 let at = Self::snap(session, self.x_to_tick(layout, pos.x), alt);
@@ -565,6 +703,12 @@ impl SongView {
                 session.select_clip(Some(clip));
                 self.menu_clip = Some(clip);
                 self.menu_at = pos;
+                let audio = session
+                    .project()
+                    .clip(clip)
+                    .is_some_and(|(_, c)| c.is_audio());
+                self.menu_split =
+                    Self::snap_edge(session, self.x_to_tick(layout, pos.x), alt, audio);
             } else {
                 self.menu_clip = None;
             }
@@ -581,6 +725,16 @@ impl SongView {
             } if any_down => {
                 let moved = moved || pos.distance(origin) > DRAG_THRESHOLD;
                 if moved {
+                    // Sound can go to another audio track, where it fits.
+                    if let Some(row) = layout.row_at(pos.y)
+                        && row.kind == RowKind::Track
+                        && session.project().clip(clip).is_some_and(|(t, c)| {
+                            t != row.track && c.is_audio() && session.is_audio_track(row.track)
+                        })
+                        && !overlaps_on(session, row.track, clip, None, None)
+                    {
+                        session.move_clip_to_track(clip, row.track);
+                    }
                     let start =
                         Self::snap_nearest(session, self.x_to_tick(layout, pos.x) - grab, alt);
                     if !overlaps(session, clip, start, None) {
@@ -595,13 +749,47 @@ impl SongView {
                 };
             }
             Drag::Resize { clip } if any_down => {
-                if let Some((_, c)) = session.project().clip(clip) {
+                if let Some((_, c)) = session.project().clip(clip).map(|(t, c)| (t, *c)) {
                     let start = c.start;
-                    let end = Self::snap_nearest(session, self.x_to_tick(layout, pos.x), alt);
-                    let beat = session.project().meter.signature_at(start).beat_length();
-                    let length = (end - start).max(beat);
+                    let x = self.x_to_tick(layout, pos.x);
+                    let end = Self::snap_edge(session, x, alt, c.is_audio());
+                    let shortest = if c.is_audio() && alt {
+                        Ticks(1)
+                    } else {
+                        session.project().meter.signature_at(start).beat_length()
+                    };
+                    let length = (end - start).max(shortest);
                     if !overlaps(session, clip, start, Some(length)) {
                         session.resize_clip(clip, length);
+                    }
+                }
+            }
+            Drag::TrimStart { clip } if any_down => {
+                if let Some((_, c)) = session.project().clip(clip).map(|(t, c)| (t, *c)) {
+                    let end = c.end();
+                    let x = self.x_to_tick(layout, pos.x);
+                    let shortest = if c.is_audio() && alt {
+                        Ticks(1)
+                    } else {
+                        session.project().meter.signature_at(c.start).beat_length()
+                    };
+                    let start = Self::snap_edge(session, x, alt, c.is_audio()).min(end - shortest);
+                    if !overlaps(session, clip, start, Some(end - start)) {
+                        session.trim_clip_start(clip, start);
+                    }
+                }
+            }
+            Drag::Fade { clip, out } if any_down => {
+                if let Some((_, c)) = session.project().clip(clip).map(|(t, c)| (t, *c)) {
+                    let (fade_in, fade_out) = session.clip_fades(clip).unwrap_or_default();
+                    let at = self.x_to_tick(layout, pos.x).clamp(c.start, c.end());
+                    #[allow(clippy::cast_possible_truncation, reason = "seconds")]
+                    if out {
+                        let seconds = session.project().seconds_between(at, c.end()) as f32;
+                        session.set_clip_fades(clip, fade_in, seconds);
+                    } else {
+                        let seconds = session.project().seconds_between(c.start, at) as f32;
+                        session.set_clip_fades(clip, seconds, fade_out);
                     }
                 }
             }
@@ -668,7 +856,18 @@ impl SongView {
                 _ => None,
             });
             let icon = match self.clip_at(layout, session, pos) {
-                Some((_, _, rect)) if pos.x >= rect.right() - EDGE_GRAB => {
+                Some((clip, _, rect))
+                    if self
+                        .fade_handle_at(layout, session, clip, rect, pos)
+                        .is_some() =>
+                {
+                    CursorIcon::PointingHand
+                }
+                Some((_, _, rect))
+                    if pos.x >= rect.right() - EDGE_GRAB
+                        || (pos.x <= rect.left() + EDGE_GRAB
+                            && rect.width() >= 3.0 * EDGE_GRAB) =>
+                {
                     CursorIcon::ResizeHorizontal
                 }
                 Some(_) => CursorIcon::Grab,
@@ -689,8 +888,10 @@ impl SongView {
             Drag::Point { .. } | Drag::Move { moved: true, .. }
         ) {
             ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
-        } else if matches!(self.drag, Drag::Resize { .. }) {
+        } else if matches!(self.drag, Drag::Resize { .. } | Drag::TrimStart { .. }) {
             ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
+        } else if matches!(self.drag, Drag::Fade { .. }) {
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         }
     }
 
@@ -720,8 +921,23 @@ impl SongView {
             if band.bottom() < layout.timeline.top() || band.top() > layout.timeline.bottom() {
                 continue;
             }
+            let empty_audio = row.kind == RowKind::Track
+                && session
+                    .project()
+                    .track(row.track)
+                    .is_some_and(|t| t.instrument.is_audio() && t.clips.is_empty())
+                && session.live_take().is_none_or(|l| l.track != row.track);
+            if empty_audio {
+                painter.text(
+                    pos2(layout.timeline.left() + 16.0, band.center().y),
+                    Align2::LEFT_CENTER,
+                    text::AUDIO_HINT,
+                    FontId::proportional(size::SMALL),
+                    p.text_weak.gamma_multiply(0.8),
+                );
+            }
             match row.kind {
-                RowKind::Track if row.track == session.track_id() => {
+                RowKind::Track if row.track == session.focused_track() => {
                     painter.rect_filled(band, CornerRadius::ZERO, p.grid_dark_row);
                 }
                 RowKind::Track => {}
@@ -876,6 +1092,9 @@ impl SongView {
                         p.text,
                     );
                 }
+                if clip.is_audio() {
+                    self.paint_audio_clip(ui, &painter, layout, session, rect, clip, color);
+                }
                 let stroke = if selected {
                     Stroke::new(2.0, p.selected)
                 } else {
@@ -884,6 +1103,7 @@ impl SongView {
                 painter.rect_stroke(rect, CornerRadius::same(6), stroke, StrokeKind::Inside);
             }
         }
+        self.paint_live_take(&painter, layout, session);
         // The play position.
         let x = self.tick_to_x(layout, session.song_position());
         if x >= layout.timeline.left() && x <= layout.timeline.right() {
@@ -894,6 +1114,241 @@ impl SongView {
             };
             painter.vline(x, layout.timeline.y_range(), Stroke::new(1.5, color));
         }
+    }
+
+    /// An audio clip's inside: its name, its waveform (at its volume), its
+    /// fades and their handles.
+    #[allow(clippy::too_many_arguments, reason = "the parts of one drawing")]
+    fn paint_audio_clip(
+        &self,
+        ui: &Ui,
+        painter: &egui::Painter,
+        layout: &Layout,
+        session: &Session,
+        rect: Rect,
+        clip: &Clip,
+        color: Color32,
+    ) {
+        let p = Palette::of(ui.ctx());
+        let ClipContent::Audio {
+            audio,
+            offset,
+            gain,
+            fade_in,
+            fade_out,
+        } = clip.content
+        else {
+            return;
+        };
+        let Some(file) = session.project().audio_file(audio) else {
+            return;
+        };
+        let area = Rect::from_min_max(
+            pos2(rect.left(), rect.top() + 20.0),
+            pos2(rect.right(), rect.bottom() - 4.0),
+        );
+        let label = match session.sound_state(&file.file) {
+            SoundState::Ready(peaks) => {
+                if area.height() >= 4.0 {
+                    let start_frame = file.seconds_in(offset) * f64::from(peaks.sample_rate());
+                    self.paint_waveform(
+                        painter,
+                        layout,
+                        session,
+                        area,
+                        clip.start,
+                        start_frame,
+                        &peaks,
+                        gain,
+                        color.gamma_multiply(0.95),
+                    );
+                }
+                file.name.clone()
+            }
+            SoundState::Loading => format!("{} · {}", file.name, text::LOADING_SOUND),
+            SoundState::Failed(_) => format!("⚠ {}", file.name),
+        };
+        painter.text(
+            rect.left_top() + vec2(14.0, 4.0),
+            Align2::LEFT_TOP,
+            label,
+            FontId::proportional(size::SMALL),
+            p.text,
+        );
+        self.paint_fades(
+            painter,
+            layout,
+            session,
+            area,
+            clip,
+            (fade_in, fade_out),
+            p.text,
+        );
+        if let Some((a, b)) = self.fade_handles(layout, session, clip, rect) {
+            let hover = ui.input(|i| i.pointer.hover_pos());
+            for handle in [a, b] {
+                let near = hover.is_some_and(|h| h.distance(handle) <= FADE_GRAB);
+                let side = if near { 4.5 } else { 3.5 };
+                painter.rect_filled(
+                    Rect::from_center_size(handle, vec2(side * 2.0, side * 2.0)),
+                    CornerRadius::same(2),
+                    if near { p.selected } else { p.text },
+                );
+            }
+        }
+    }
+
+    /// The waveform of sound summed up in `peaks`, from frame `start_frame`
+    /// at tick `start`, in `area` (one line of loudness per pixel).
+    #[allow(clippy::too_many_arguments, reason = "the parts of one drawing")]
+    fn paint_waveform(
+        &self,
+        painter: &egui::Painter,
+        layout: &Layout,
+        session: &Session,
+        area: Rect,
+        start: Ticks,
+        start_frame: f64,
+        peaks: &Peaks,
+        gain: f32,
+        color: Color32,
+    ) {
+        let tempo = &session.project().tempo;
+        let rate = f64::from(peaks.sample_rate());
+        let start_seconds = tempo.seconds_at(start);
+        let frame_at = |x: f32| {
+            let seconds = tempo.seconds_at(self.x_to_tick(layout, x)) - start_seconds;
+            (start_frame + seconds * rate).max(0.0) as usize
+        };
+        let (mid, half) = (area.center().y, area.height() / 2.0 - 1.0);
+        let right = area.right().min(layout.timeline.right());
+        let mut x = area.left().max(layout.timeline.left()).floor();
+        let mut from = frame_at(x);
+        let stroke = Stroke::new(1.0, color);
+        while x < right {
+            let to = frame_at(x + 1.0).max(from + 1);
+            if let Some((low, high)) = peaks.range(from, to) {
+                let high = (high * gain).clamp(-1.0, 1.0);
+                let low = (low * gain).clamp(-1.0, 1.0);
+                let top = mid - high * half;
+                let bottom = (mid - low * half).max(top + 1.0);
+                painter.line_segment([pos2(x + 0.5, top), pos2(x + 0.5, bottom)], stroke);
+            }
+            from = to;
+            x += 1.0;
+        }
+    }
+
+    /// The fade curves over an audio clip, with the faded part shaded.
+    #[allow(clippy::too_many_arguments, reason = "the parts of one drawing")]
+    fn paint_fades(
+        &self,
+        painter: &egui::Painter,
+        layout: &Layout,
+        session: &Session,
+        area: Rect,
+        clip: &Clip,
+        (fade_in, fade_out): (f32, f32),
+        color: Color32,
+    ) {
+        let tempo = &session.project().tempo;
+        let start = tempo.seconds_at(clip.start);
+        let end = tempo.seconds_at(clip.end());
+        for (seconds, out) in [(fade_in, false), (fade_out, true)] {
+            if seconds <= 0.0 {
+                continue;
+            }
+            let seconds = f64::from(seconds);
+            let steps = 24;
+            let curve: Vec<Pos2> = (0..=steps)
+                .map(|i| {
+                    let u = f64::from(i) / f64::from(steps);
+                    let at = if out {
+                        end - seconds + u * seconds
+                    } else {
+                        start + u * seconds
+                    };
+                    let tick = Ticks(tempo.ticks_at(at).round() as i64);
+                    // Equal power: the level rises (or falls) along a sine.
+                    let level = if out { 1.0 - u } else { u };
+                    let gain = (std::f64::consts::FRAC_PI_2 * level).sin() as f32;
+                    pos2(
+                        self.tick_to_x(layout, tick),
+                        area.bottom() - gain * area.height(),
+                    )
+                })
+                .collect();
+            // The faded part: between the curve and the clip's top.
+            let corner = if out {
+                pos2(curve[steps as usize].x, area.top())
+            } else {
+                pos2(curve[0].x, area.top())
+            };
+            let mut mesh = Mesh::default();
+            let shade = Color32::from_black_alpha(70);
+            mesh.colored_vertex(corner, shade);
+            for point in &curve {
+                mesh.colored_vertex(*point, shade);
+            }
+            for i in 1..=steps {
+                mesh.add_triangle(0, i, i + 1);
+            }
+            painter.add(Shape::mesh(mesh));
+            painter.add(Shape::line(
+                curve,
+                Stroke::new(1.5, color.gamma_multiply(0.8)),
+            ));
+        }
+    }
+
+    /// The take being recorded: from where recording started to the play
+    /// position, with its waveform so far.
+    fn paint_live_take(&self, painter: &egui::Painter, layout: &Layout, session: &Session) {
+        let Some(live) = session.live_take() else {
+            return;
+        };
+        let Some(row) = session
+            .project()
+            .tracks
+            .iter()
+            .position(|t| t.id == live.track)
+        else {
+            return;
+        };
+        let p = Palette::of(painter.ctx());
+        let top = layout.row_top(row);
+        let end = session.song_position().max(live.start);
+        let left = self.tick_to_x(layout, live.start);
+        let rect = Rect::from_min_max(
+            pos2(left, top + 4.0),
+            pos2(
+                self.tick_to_x(layout, end).max(left + 3.0),
+                top + ROW_HEIGHT - 4.0,
+            ),
+        );
+        painter.rect_filled(rect, CornerRadius::same(6), p.record.gamma_multiply(0.22));
+        if let Some(peaks) = &live.peaks {
+            let area = Rect::from_min_max(
+                pos2(rect.left(), rect.top() + 20.0),
+                pos2(rect.right(), rect.bottom() - 4.0),
+            );
+            self.paint_waveform(
+                painter, layout, session, area, live.start, 0.0, peaks, 1.0, p.record,
+            );
+        }
+        painter.text(
+            rect.left_top() + vec2(14.0, 4.0),
+            Align2::LEFT_TOP,
+            text::RECORD_SOUND,
+            FontId::proportional(size::SMALL),
+            p.text,
+        );
+        painter.rect_stroke(
+            rect,
+            CornerRadius::same(6),
+            Stroke::new(1.5, p.record),
+            StrokeKind::Inside,
+        );
     }
 
     /// Draws the pattern's notes inside a clip, once per repeat.
@@ -1137,6 +1592,13 @@ impl SongView {
                 session.add_piano_track();
             }
             if child
+                .button(format!("+ {}", text::ADD_AUDIO))
+                .on_hover_text(text::ADD_AUDIO_HINT)
+                .clicked()
+            {
+                session.add_audio_track();
+            }
+            if child
                 .button(format!("+ {}", text::ADD_INSTRUMENT))
                 .on_hover_text(text::ADD_INSTRUMENT_HINT)
                 .clicked()
@@ -1170,7 +1632,8 @@ impl SongView {
             t.strip.solo,
         );
         let count = session.project().tracks.len();
-        let focused = track == session.track_id();
+        let focused = track == session.focused_track();
+        let last_instrument = session.is_last_instrument(track);
         let background = ui.interact(
             rect.intersect(layout.headers),
             ui.scope_id().with(("track", track.0)),
@@ -1232,7 +1695,11 @@ impl SongView {
                     }
                     ui.separator();
                     if ui
-                        .add_enabled(count > 1, Button::new(text::DELETE_TRACK))
+                        .add_enabled(
+                            count > 1 && !last_instrument,
+                            Button::new(text::DELETE_TRACK),
+                        )
+                        .on_disabled_hover_text(text::LAST_INSTRUMENT)
                         .clicked()
                     {
                         session.remove_track(track);
@@ -1290,7 +1757,15 @@ impl SongView {
                     plugin_window_button(ui, session, target, 20.0);
                 }
                 ui.with_layout(EguiLayout::left_to_right(Align::Center), |ui| {
-                    ui.add(Label::new(RichText::new(kind).small().color(p.text_weak)).truncate());
+                    let recording_here = session.live_take().is_some_and(|l| l.track == track)
+                        || (session.is_recording_audio() && session.focused_track() == track);
+                    if recording_here {
+                        input_meter(ui, session.input_level());
+                    } else {
+                        ui.add(
+                            Label::new(RichText::new(kind).small().color(p.text_weak)).truncate(),
+                        );
+                    }
                 });
             });
         });
@@ -1358,23 +1833,32 @@ impl SongView {
         let Some(clip) = self.menu_clip else {
             return;
         };
-        let Some((track, pattern)) = session
-            .project()
-            .clip(clip)
-            .and_then(|(t, c)| c.pattern().map(|p| (t, p)))
-        else {
+        let Some((track, c)) = session.project().clip(clip).map(|(t, c)| (t, *c)) else {
             self.menu_clip = None;
             return;
         };
+        let split_at = self.menu_split;
         let mut close = false;
         let area = egui::Area::new(ui.scope_id().with("clip-menu"))
             .order(egui::Order::Foreground)
             .fixed_pos(self.menu_at)
             .show(ui.ctx(), |ui| {
                 egui::Frame::menu(ui.style()).show(ui, |ui| {
-                    ui.set_min_width(170.0);
-                    if ui.button(text::OPEN_PATTERN).clicked() {
+                    ui.set_min_width(190.0);
+                    if let Some(pattern) = c.pattern()
+                        && ui.button(text::OPEN_PATTERN).clicked()
+                    {
                         session.open_pattern(track, pattern);
+                        close = true;
+                    }
+                    if ui
+                        .add_enabled(
+                            split_at > c.start && split_at < c.end(),
+                            Button::new(text::SPLIT_HERE),
+                        )
+                        .clicked()
+                    {
+                        session.split_clip(clip, split_at);
                         close = true;
                     }
                     if ui.button(text::DUPLICATE_CLIP).clicked() {
@@ -1384,6 +1868,27 @@ impl SongView {
                     if ui.button(text::REMOVE_CLIP).clicked() {
                         session.remove_clip(clip);
                         close = true;
+                    }
+                    if let Some(gain) = session.clip_gain(clip) {
+                        ui.separator();
+                        let mut db = crate::widgets::gain_to_db(gain);
+                        let slider = ui
+                            .add(
+                                Slider::new(&mut db, -60.0..=12.0)
+                                    .suffix(" dB")
+                                    .fixed_decimals(1)
+                                    .text(text::CLIP_VOLUME),
+                            )
+                            .on_hover_text(text::CLIP_VOLUME_HINT);
+                        if slider.drag_started() {
+                            session.begin_gesture(text::EDIT_CLIP_VOLUME);
+                        }
+                        if slider.changed() {
+                            session.set_clip_gain(clip, crate::widgets::db_to_gain(db));
+                        }
+                        if slider.drag_stopped() {
+                            session.end_gesture();
+                        }
                     }
                 });
             });
@@ -1460,6 +1965,31 @@ fn lane_header(
     });
 }
 
+/// The input's level while recording: a bar on a decibel scale, red when
+/// it reaches full scale.
+fn input_meter(ui: &mut Ui, level: f32) {
+    let p = Palette::of(ui.ctx());
+    let (rect, response) = ui.allocate_exact_size(vec2(110.0, 8.0), Sense::hover());
+    response.on_hover_text(text::INPUT_LEVEL_HINT);
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, CornerRadius::same(3), p.grid);
+    let db = if level > 0.0 {
+        20.0 * level.log10()
+    } else {
+        -60.0
+    };
+    let fraction = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+    let color = if level >= 0.99 { p.record } else { p.accent };
+    painter.rect_filled(
+        Rect::from_min_max(
+            rect.min,
+            pos2(rect.left() + rect.width() * fraction, rect.bottom()),
+        ),
+        CornerRadius::same(3),
+        color,
+    );
+}
+
 /// The button that opens (or closes) a plugin's own window.
 fn plugin_window_button(ui: &mut Ui, session: &mut Session, target: PluginTarget, size: f32) {
     let open = session.is_plugin_window_open(target);
@@ -1477,9 +2007,25 @@ fn plugin_window_button(ui: &mut Ui, session: &mut Session, target: PluginTarget
 /// Whether a clip, moved to `start` (and given `length`), would overlap
 /// another clip on its track.
 fn overlaps(session: &Session, clip: ClipId, start: Ticks, length: Option<Ticks>) -> bool {
-    let Some((track, current)) = session.project().clip(clip) else {
+    let Some((track, _)) = session.project().clip(clip) else {
         return true;
     };
+    overlaps_on(session, track, clip, Some(start), length)
+}
+
+/// Whether a clip, on `track` at `start` (its own start if `None`) and
+/// lasting `length` (its own if `None`), would overlap another clip there.
+fn overlaps_on(
+    session: &Session,
+    track: TrackId,
+    clip: ClipId,
+    start: Option<Ticks>,
+    length: Option<Ticks>,
+) -> bool {
+    let Some((_, current)) = session.project().clip(clip) else {
+        return true;
+    };
+    let start = start.unwrap_or(current.start);
     let end = start + length.unwrap_or(current.length);
     session.project().track(track).is_some_and(|t| {
         t.clips

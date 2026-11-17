@@ -35,6 +35,10 @@ pub trait Host {
     fn choose_file_to_save(&mut self, suggested_name: &str) -> Option<PathBuf>;
     /// Asks the person where to export the song as a WAV file.
     fn choose_export_file(&mut self, suggested_name: &str) -> Option<PathBuf>;
+    /// Asks the person which sound files to import (none if they cancel).
+    fn choose_audio_files(&mut self) -> Vec<PathBuf> {
+        Vec::new()
+    }
 }
 
 /// Something a part of the window asks the window to do (open a dialog or
@@ -303,6 +307,7 @@ impl Workspace {
         if self.session.take_finished() {
             self.roll.reveal_notes();
         }
+        self.take_dropped_files(&ctx);
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(p.grid))
             .show(ui, |ui| match self.session.view() {
@@ -322,8 +327,34 @@ impl Workspace {
             self.run(&ctx, command);
         }
         self.update_title(&ctx);
+        self.schedule_repaint(&ctx);
+    }
+
+    /// Sound files dropped while a pattern is open: the song comes on
+    /// screen with them (the song view takes them itself).
+    fn take_dropped_files(&mut self, ctx: &egui::Context) {
+        if self.session.view() != View::Pattern {
+            return;
+        }
+        let dropped: Vec<PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path().to_path_buf())
+                .collect()
+        });
+        if !dropped.is_empty() {
+            ctx.input_mut(|i| i.raw.dropped_files.clear());
+            self.import(dropped);
+        }
+    }
+
+    /// Draws again soon while something moves; rarely otherwise.
+    fn schedule_repaint(&self, ctx: &egui::Context) {
         if self.session.is_playing()
             || self.session.is_recording()
+            || self.session.is_loading_audio()
+            || self.session.is_recording_audio()
             || self.is_dragging()
             || self.session.pointer_note().is_some()
             || self.session.export_progress().is_some()
@@ -587,7 +618,28 @@ impl Workspace {
                     });
                 }
             }
+            Command::ImportAudio => {
+                self.cancel_drag();
+                let files = self.host.choose_audio_files();
+                if !files.is_empty() {
+                    self.import(files);
+                }
+            }
+            // Splitting acts on clips, in the song view.
+            Command::Split => {}
         }
+    }
+
+    /// Imports sound files at the play position: on the audio track in
+    /// focus, or on new tracks. The song comes on screen.
+    fn import(&mut self, files: Vec<PathBuf>) {
+        self.session.show_song();
+        let track = self
+            .session
+            .audio_track_in_focus()
+            .then(|| self.session.focused_track());
+        let at = self.session.song_position();
+        self.session.import_audio(files, track, at);
     }
 
     /// Commands that mean something else in the song view: they act on the
@@ -608,6 +660,9 @@ impl Workspace {
             }
             Command::MoveEarlier => s.nudge_clip(-1),
             Command::MoveLater => s.nudge_clip(1),
+            Command::Split => {
+                s.split_at_play_position();
+            }
             Command::Deselect => {
                 if !self.song.cancel_drag(s) {
                     s.select_clip(None);
@@ -713,6 +768,7 @@ impl Workspace {
                 (text::OPEN, Command::Open),
                 (text::SAVE, Command::Save),
                 (text::SAVE_AS, Command::SaveAs),
+                (text::IMPORT_AUDIO, Command::ImportAudio),
                 (text::EXPORT, Command::Export),
             ] {
                 if item(ui, label, command, &self.keymap) {
