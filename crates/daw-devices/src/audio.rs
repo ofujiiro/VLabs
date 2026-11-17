@@ -2,10 +2,11 @@
 
 //! Sound output on the system's default device, with no setup.
 //!
-//! A watcher thread owns the output stream. When the device disappears or
-//! fails, it reopens the default device; when there is no device at all, a
-//! silent stand-in keeps calling the audio callback in real time, so the
-//! rest of the program (the transport, recording, meters) behaves normally.
+//! A watcher thread owns the output stream. When the device disappears,
+//! fails, or silently stops asking for sound, it reopens the default device;
+//! when there is no device at all, a silent stand-in keeps calling the audio
+//! callback in real time, so the rest of the program (the transport,
+//! recording, meters) behaves normally.
 
 #![allow(
     unsafe_code,
@@ -13,7 +14,7 @@
 )]
 
 use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -33,6 +34,10 @@ const SILENT_BLOCK: u32 = 512;
 
 /// How often the watcher checks the device.
 const WATCH_INTERVAL: Duration = Duration::from_millis(1000);
+
+/// How long a device may go without asking for sound before it is
+/// reopened (some stop without reporting an error).
+const STALL_LIMIT: Duration = Duration::from_secs(3);
 
 /// The audio callback, shared by successive streams. Only one stream runs at
 /// a time; the flag makes sure the callback is never entered twice, without
@@ -101,6 +106,8 @@ struct Shared {
     realtime: AtomicU8,
     stop: AtomicBool,
     sample_rate: u32,
+    /// How many times the device has asked for sound.
+    calls: AtomicU64,
 }
 
 impl Shared {
@@ -151,6 +158,7 @@ impl AudioOutput {
             realtime: AtomicU8::new(0),
             stop: AtomicBool::new(false),
             sample_rate,
+            calls: AtomicU64::new(0),
         });
         let watcher_shared = Arc::clone(&shared);
         let watcher = std::thread::Builder::new()
@@ -194,6 +202,8 @@ fn watch(shared: &Arc<Shared>, use_devices: bool) {
     let mut stream: Option<(cpal::Stream, Arc<AtomicBool>)> = None;
     let mut silent: Option<(JoinHandle<()>, Arc<AtomicBool>)> = None;
     let mut last_attempt: Option<Instant> = None;
+    // The device's calls as last seen, and when they last moved.
+    let mut seen = (shared.calls.load(Ordering::Relaxed), Instant::now());
     while !shared.stop.load(Ordering::Relaxed) {
         // A stream that reported a fatal error is dropped and replaced.
         if let Some((_, failed)) = &stream
@@ -202,6 +212,18 @@ fn watch(shared: &Arc<Shared>, use_devices: bool) {
             stream = None;
             shared.update(|s| {
                 s.problem = Some("the sound device stopped; looking for another".to_owned());
+            });
+        }
+        // So is one that stopped asking for sound without saying so.
+        let calls = shared.calls.load(Ordering::Relaxed);
+        if calls != seen.0 {
+            seen = (calls, Instant::now());
+        } else if stream.is_some() && seen.1.elapsed() >= STALL_LIMIT {
+            stream = None;
+            last_attempt = None;
+            seen.1 = Instant::now();
+            shared.update(|s| {
+                s.problem = Some("the sound device stopped responding; reopening it".to_owned());
             });
         }
         if stream.is_none()
@@ -216,6 +238,7 @@ fn watch(shared: &Arc<Shared>, use_devices: bool) {
                         let _ = handle.join();
                     }
                     stream = Some(opened);
+                    seen.1 = Instant::now();
                 }
                 Err(problem) => shared.update(|s| s.problem = Some(problem)),
             }
@@ -329,6 +352,7 @@ where
     let mut priority_tried = false;
     let data_callback = move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
         let _real_time = daw_rt::RtGuard::enter();
+        callback_shared.calls.fetch_add(1, Ordering::Relaxed);
         if !priority_tried {
             priority_tried = true;
             let state = match raise_priority() {
