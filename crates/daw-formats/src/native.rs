@@ -464,11 +464,11 @@ fn extract_audio<R: Read + Seek>(
     Ok(())
 }
 
-/// Moves a project's audio files from one folder into another (from the
+/// Copies a project's audio files from one folder into another (from the
 /// audio folder of a copy of the program that crashed into this one's),
 /// under new names where a name is taken already, the project changed to
 /// match. Files missing from `from` are left out; their clips stay silent.
-pub fn move_audio(project: &mut Project, from: &Path, into: &Path) -> io::Result<()> {
+pub fn copy_audio(project: &mut Project, from: &Path, into: &Path) -> io::Result<()> {
     std::fs::create_dir_all(into)?;
     let mut moved: HashMap<String, String> = HashMap::new();
     for file in &mut project.audio {
@@ -484,10 +484,7 @@ pub fn move_audio(project: &mut Project, from: &Path, into: &Path) -> io::Result
             continue;
         }
         let name = free_name(into, &file.file);
-        let target = into.join(&name);
-        if std::fs::rename(&source, &target).is_err() {
-            std::fs::copy(&source, &target)?;
-        }
+        std::fs::copy(&source, into.join(&name))?;
         moved.insert(std::mem::take(&mut file.file), name.clone());
         file.file = name;
     }
@@ -686,12 +683,13 @@ mod tests {
             b"other sound"
         );
 
-        // Moving the files of a recovered song into another folder.
+        // Copying the files of a recovered song into another folder.
         let mut recovered = again.clone();
         let moved_into = folder("moved");
-        move_audio(&mut recovered, &other, &moved_into).unwrap();
+        copy_audio(&mut recovered, &other, &moved_into).unwrap();
         assert_eq!(recovered.audio[0].file, "take-2.wav");
         assert!(moved_into.join("take-2.wav").is_file());
+        assert!(other.join("take-2.wav").is_file(), "copied, not moved");
         for path in [open, other, moved_into] {
             std::fs::remove_dir_all(path).ok();
         }

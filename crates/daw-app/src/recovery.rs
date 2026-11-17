@@ -13,6 +13,10 @@
 //! Locks are released by the system when a process ends, however it ends,
 //! so this works after crashes, power cuts and forced quits, and with
 //! several copies of the program running at once.
+//!
+//! The song's audio files live in the folder's `audio` subfolder while the
+//! program runs (decision 0017): recovery copies refer to them there, so
+//! they are written once, and a recovered song comes back with its sound.
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -28,6 +32,7 @@ const INTERVAL: Duration = Duration::from_secs(5);
 
 const LOCK_FILE: &str = "lock";
 const INFO_FILE: &str = "info.json";
+const AUDIO_FOLDER: &str = "audio";
 
 fn song_file() -> String {
     format!("song.{}", daw_ident::PROJECT_FILE_EXTENSION)
@@ -99,10 +104,22 @@ impl Autosaver {
         })
     }
 
-    /// The work found at start-up, to offer to the person.
+    /// Where this copy of the program keeps the song's audio files.
+    pub fn audio_folder(&self) -> PathBuf {
+        self.folder.join(AUDIO_FOLDER)
+    }
+
+    /// The work found at start-up, to offer to the person, with its audio
+    /// files copied into this copy's audio folder.
     pub fn take_orphan(&mut self) -> Option<(Project, Option<PathBuf>)> {
         let orphan = self.orphan.as_ref()?;
-        Some((orphan.project.clone(), orphan.path.clone()))
+        let mut project = orphan.project.clone();
+        let _ = daw_formats::copy_audio(
+            &mut project,
+            &orphan.folder.join(AUDIO_FOLDER),
+            &self.audio_folder(),
+        );
+        Some((project, orphan.path.clone()))
     }
 
     /// Deletes the work found at start-up (after the person decided: if
@@ -283,6 +300,19 @@ mod tests {
         // away (the system releases it) but its folder stays.
         let mut first = Autosaver::start(&root).unwrap();
         assert!(first.take_orphan().is_none());
+        // Its song has a recording, kept in its audio folder.
+        fs::create_dir_all(first.audio_folder()).unwrap();
+        fs::write(first.audio_folder().join("take.wav"), b"sound").unwrap();
+        let voice = project.add_audio_track("Voice");
+        let take = project.add_audio_file(daw_model::AudioFile {
+            id: daw_model::AudioId(0),
+            name: "Recording 1".to_owned(),
+            file: "take.wav".to_owned(),
+            frames: 5,
+            sample_rate: 48_000,
+            channels: 1,
+        });
+        project.add_audio_clip(voice, daw_model::Ticks::ZERO, daw_model::Ticks(10), take, 0);
         first.tick(1, true, || {
             (project.clone(), Some(PathBuf::from("/music/song")))
         });
@@ -296,6 +326,12 @@ mod tests {
         let (recovered, path) = second.take_orphan().expect("the work is offered");
         assert_eq!(recovered.title, "Recovered");
         assert_eq!(path.as_deref(), Some(Path::new("/music/song")));
+        let file = &recovered.audio[0].file;
+        assert_eq!(
+            fs::read(second.audio_folder().join(file)).unwrap(),
+            b"sound",
+            "the recording comes back with it"
+        );
         second.forget_orphan();
         second.finish();
 

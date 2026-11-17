@@ -9,6 +9,6 @@ pub mod wav;
 
 pub use atomic::{write_atomically, write_atomically_with};
 pub use native::{
-    FORMAT_VERSION, FileError, free_name, is_plain_name, load_project, move_audio,
+    FORMAT_VERSION, FileError, copy_audio, free_name, is_plain_name, load_project,
     project_from_bytes, project_from_json, project_to_bytes, save_project,
 };

@@ -83,8 +83,18 @@ fn main() {
         sample_rate: SAMPLE_RATE,
         max_block: 1024,
     };
-    let (engine, mut processor) = Engine::new(config, library);
+    let (mut engine, mut processor) = Engine::new(config, library);
     let midi_sender = engine.midi_sender();
+    // The microphone or interface feeds the engine (decision 0017); it is
+    // opened only while recording sound.
+    let input = engine
+        .take_input_port()
+        .filter(|_| !options.silent)
+        .map(|mut port| {
+            daw_devices::AudioInput::start(move |samples, channels, rate| {
+                port.push(samples, channels, rate);
+            })
+        });
     let render = move |buffer: &mut [f32], channels: usize| processor.process(buffer, channels);
     let audio = if options.silent {
         daw_devices::AudioOutput::start_silent(SAMPLE_RATE, render)
@@ -123,6 +133,7 @@ fn main() {
                 Parts {
                     workspace,
                     audio,
+                    input,
                     paths,
                     autosaver,
                     settings,

@@ -81,6 +81,8 @@ struct Shared {
     slot: CallbackSlot,
     status: Mutex<InputStatus>,
     stop: AtomicBool,
+    /// Whether the device should be open now.
+    active: AtomicBool,
     /// How many times the device has delivered sound.
     calls: AtomicU64,
     /// The delay from the microphone to the callback, in microseconds, as
@@ -101,9 +103,11 @@ pub struct AudioInput {
 }
 
 impl AudioInput {
-    /// Starts listening to the default input device; it opens a moment
-    /// later, in the background. `callback` runs on the device's thread and
-    /// must follow the real-time rules.
+    /// Sets up sound input from the default device. The device opens (a
+    /// moment later, in the background) only while the input is made active
+    /// with [`AudioInput::set_active`], so the system's "microphone in use"
+    /// sign is not lit for nothing. `callback` runs on the device's thread
+    /// and must follow the real-time rules.
     pub fn start(callback: impl FnMut(&[f32], usize, u32) + Send + 'static) -> Self {
         let shared = Arc::new(Shared {
             slot: CallbackSlot {
@@ -112,6 +116,7 @@ impl AudioInput {
             },
             status: Mutex::new(InputStatus::default()),
             stop: AtomicBool::new(false),
+            active: AtomicBool::new(false),
             calls: AtomicU64::new(0),
             latency_us: AtomicU32::new(0),
         });
@@ -121,6 +126,16 @@ impl AudioInput {
             .spawn(move || watch(&watcher_shared))
             .ok();
         Self { shared, watcher }
+    }
+
+    /// Opens the device (`true`) or closes it.
+    pub fn set_active(&self, active: bool) {
+        self.shared.active.store(active, Ordering::Relaxed);
+    }
+
+    /// Whether the input is meant to be open.
+    pub fn is_active(&self) -> bool {
+        self.shared.active.load(Ordering::Relaxed)
     }
 
     /// The state of the input now.
@@ -162,6 +177,14 @@ fn watch(shared: &Arc<Shared>) {
     let mut last_attempt: Option<Instant> = None;
     let mut seen = (shared.calls.load(Ordering::Relaxed), Instant::now());
     while !shared.stop.load(Ordering::Relaxed) {
+        if !shared.active.load(Ordering::Relaxed) {
+            if stream.take().is_some() {
+                shared.update(|s| s.device = None);
+            }
+            last_attempt = None;
+            std::thread::sleep(Duration::from_millis(50));
+            continue;
+        }
         if let Some((_, failed)) = &stream
             && failed.load(Ordering::Relaxed)
         {
@@ -293,6 +316,10 @@ mod tests {
     #[test]
     fn starting_and_stopping_never_hangs_with_or_without_a_device() {
         let input = AudioInput::start(|_, _, _| {});
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(input.status().device, None, "nothing opens until asked");
+        input.set_active(true);
+        assert!(input.is_active());
         std::thread::sleep(Duration::from_millis(300));
         let status = input.status();
         // Either a device opened, or the reason it did not is known.
