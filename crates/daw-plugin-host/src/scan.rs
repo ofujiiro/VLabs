@@ -31,6 +31,46 @@ const TIME_LIMIT: Duration = Duration::from_secs(20);
 /// How deep folders are searched.
 const MAX_DEPTH: usize = 8;
 
+/// A system plugins are built for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum System {
+    /// Windows.
+    Windows,
+    /// Linux.
+    Linux,
+    /// macOS.
+    Mac,
+}
+
+impl System {
+    /// The system this program runs on.
+    pub fn current() -> Self {
+        if cfg!(windows) {
+            Self::Windows
+        } else if cfg!(target_os = "macos") {
+            Self::Mac
+        } else {
+            Self::Linux
+        }
+    }
+}
+
+/// Why a plugin file cannot be used.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScanProblem {
+    /// The plugin is built for another system.
+    OtherSystem(System),
+    /// It took too long to answer when checked.
+    TooSlow,
+    /// It crashed when checked.
+    Crashed,
+    /// It loaded but described nothing.
+    NoAnswer,
+    /// It could not be loaded: the reason, as the system or the plugin gave
+    /// it.
+    Failed(String),
+}
+
 /// The folders plugins are installed in on this system, plus `CLAP_PATH`.
 pub fn default_folders() -> Vec<PathBuf> {
     let mut folders = Vec::new();
@@ -82,6 +122,13 @@ fn walk(folder: &Path, depth: usize, found: &mut Vec<(Format, PathBuf)>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
+        // Leftovers of zip files made on a Mac ("._name" copies of each
+        // file's Mac attributes, and the folder that holds them).
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("._") || name == "__MACOSX" {
+            continue;
+        }
         if let Some(format) = Format::of_path(&path) {
             found.push((format, path));
         } else if path.is_dir() {
@@ -90,19 +137,72 @@ fn walk(folder: &Path, depth: usize, found: &mut Vec<(Format, PathBuf)>) {
     }
 }
 
+/// The system a plugin file is built for, when it can be told without
+/// loading it: from its bundle's layout, or the first bytes of its binary.
+pub fn built_for(path: &Path) -> Option<System> {
+    if path.is_dir() {
+        let contents = path.join("Contents");
+        let has = |folder: &str| contents.join(folder).is_dir();
+        let linux = [
+            "x86_64-linux",
+            "aarch64-linux",
+            "i386-linux",
+            "armv7l-linux",
+        ];
+        let systems = [
+            (
+                System::Windows,
+                has("x86_64-win") || has("x86-win") || has("arm64-win"),
+            ),
+            (System::Linux, linux.iter().any(|f| has(f))),
+            (System::Mac, has("MacOS")),
+        ];
+        // A bundle with a binary for this system is fine, whatever else it
+        // holds.
+        if systems
+            .iter()
+            .any(|&(s, present)| present && s == System::current())
+        {
+            return Some(System::current());
+        }
+        return systems
+            .iter()
+            .find(|(_, present)| *present)
+            .map(|&(s, _)| s);
+    }
+    let mut start = [0_u8; 4];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut start))
+        .ok()?;
+    match start {
+        [b'M', b'Z', ..] => Some(System::Windows),
+        [0x7f, b'E', b'L', b'F'] => Some(System::Linux),
+        [0xfe, 0xed, 0xfa, 0xce | 0xcf]
+        | [0xce | 0xcf, 0xfa, 0xed, 0xfe]
+        | [0xca, 0xfe, 0xba, 0xbe] => Some(System::Mac),
+        _ => None,
+    }
+}
+
 /// Describes the plugins in one file, in this process. Used by the
 /// separate run of the program; the program itself calls [`Scanner`].
-pub fn describe(format: Format, path: &Path) -> Result<Vec<PluginInfo>, String> {
+pub fn describe(format: Format, path: &Path) -> Result<Vec<PluginInfo>, ScanProblem> {
+    if let Some(system) = built_for(path)
+        && system != System::current()
+    {
+        return Err(ScanProblem::OtherSystem(system));
+    }
     match format {
         Format::Clap => crate::clap::describe(path),
         Format::Vst3 => crate::vst3::describe(path),
     }
+    .map_err(ScanProblem::Failed)
 }
 
 /// What the separate run prints.
 #[derive(Serialize, Deserialize)]
 struct Description {
-    result: Result<Vec<PluginInfo>, String>,
+    result: Result<Vec<PluginInfo>, ScanProblem>,
 }
 
 /// The separate run's work: describes one file and prints the result.
@@ -122,10 +222,12 @@ pub fn describe_and_print(arguments: &[String]) {
                     crate::prepare_display();
                     describe(format, Path::new(path))
                 }
-                None => Err(format!("unknown plugin format {name}")),
+                None => Err(ScanProblem::Failed(format!("unknown plugin format {name}"))),
             }
         }
-        _ => Err("expected a format and a path".to_owned()),
+        _ => Err(ScanProblem::Failed(
+            "expected a format and a path".to_owned(),
+        )),
     };
     let line = serde_json::to_string(&Description { result }).unwrap_or_default();
     println!("{MARKER}{line}");
@@ -138,7 +240,7 @@ struct CacheEntry {
     path: PathBuf,
     size: u64,
     modified: u64,
-    result: Result<Vec<PluginInfo>, String>,
+    result: Result<Vec<PluginInfo>, ScanProblem>,
 }
 
 /// A file's size and modification time (seconds), to notice changes.
@@ -193,7 +295,7 @@ pub struct Findings {
     /// Every plugin found, sorted by name.
     pub plugins: Vec<PluginInfo>,
     /// Files that could not be described, with the reason.
-    pub problems: Vec<(PathBuf, String)>,
+    pub problems: Vec<(PathBuf, ScanProblem)>,
     /// How many files had to be opened (in a separate run of the program)
     /// because the cache did not know them, or they changed.
     pub opened: usize,
@@ -342,7 +444,7 @@ fn describe_in_child(
     program: &Path,
     format: Format,
     path: &Path,
-) -> Result<Vec<PluginInfo>, String> {
+) -> Result<Vec<PluginInfo>, ScanProblem> {
     let format_name = match format {
         Format::Clap => "clap",
         Format::Vst3 => "vst3",
@@ -355,7 +457,7 @@ fn describe_in_child(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| format!("could not check it: {e}"))?;
+        .map_err(|e| ScanProblem::Failed(e.to_string()))?;
     // Read the output as it comes, so a chatty plugin cannot fill the pipe
     // and block.
     let mut stdout = child.stdout.take();
@@ -381,7 +483,7 @@ fn describe_in_child(
     };
     let output = reader.join().unwrap_or_default();
     let Some(status) = status else {
-        return Err("it took too long to answer".to_owned());
+        return Err(ScanProblem::TooSlow);
     };
     let description = output
         .lines()
@@ -389,7 +491,7 @@ fn describe_in_child(
         .and_then(|json| serde_json::from_str::<Description>(json).ok());
     match description {
         Some(description) => description.result,
-        None if status.success() => Err("it gave no description".to_owned()),
-        None => Err("it crashed while being checked".to_owned()),
+        None if status.success() => Err(ScanProblem::NoAnswer),
+        None => Err(ScanProblem::Crashed),
     }
 }

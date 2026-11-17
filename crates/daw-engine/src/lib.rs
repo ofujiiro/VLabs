@@ -20,6 +20,7 @@ use daw_model::{
 };
 use daw_plugin_host::{AudioConfig, LoadedPlugin};
 
+pub use daw_plugin_host::scan::{ScanProblem, System as PluginSystem};
 pub use daw_plugin_host::{Format as PluginFileFormat, Kind as PluginKind, ParamInfo, PluginInfo};
 pub use library::SoundLibrary;
 pub use messages::EngineEvent;

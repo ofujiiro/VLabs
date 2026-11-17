@@ -54,7 +54,10 @@ are quick:
   and the same two folders under `%LOCALAPPDATA%\Programs\Common`;
 - anywhere listed in the `CLAP_PATH` environment variable.
 
-Windows-only plugins can be used on Linux with
+A plugin must be built for the system it runs on: a plugin made for Windows
+does not load on Linux, and the other way round. The instrument chooser lists
+the plugin files it found but cannot use, and says why. Windows-only plugins
+can be used on Linux with
 [yabridge](https://github.com/robbert-vdh/yabridge): once yabridge has set
 them up in those folders, VLabs sees them like native plugins. Most plugin
 windows need X11; on a Wayland desktop they run through XWayland, which is

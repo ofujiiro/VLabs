@@ -15,7 +15,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use daw_plugin_host::scan::Scanner;
+use daw_plugin_host::scan::{ScanProblem, Scanner, System};
 use daw_plugin_host::{Format, Kind};
 
 fn program() -> PathBuf {
@@ -38,7 +38,33 @@ fn a_broken_plugin_file_is_reported_not_fatal() {
     let findings = scanner.findings();
     assert!(findings.plugins.is_empty());
     assert_eq!(findings.problems.len(), 1, "the broken file is reported");
-    eprintln!("reported: {}", findings.problems[0].1);
+    eprintln!("reported: {:?}", findings.problems[0].1);
+    assert!(matches!(findings.problems[0].1, ScanProblem::Failed(_)));
+    let _ = std::fs::remove_dir_all(folder);
+}
+
+#[test]
+fn a_plugin_made_for_another_system_is_explained_and_mac_leftovers_are_ignored() {
+    let folder = scratch("other-system");
+    // A plugin built for another system than this one, as a zip from its
+    // maker's site might hold it (with the leftovers a Mac adds to zips).
+    let (other, start): (System, &[u8]) = if cfg!(windows) {
+        (System::Linux, b"\x7fELF\x02\x01\x01\x00")
+    } else {
+        (System::Windows, b"MZ\x90\x00\x03\x00\x00\x00")
+    };
+    std::fs::write(folder.join("Synth.vst3"), start).unwrap();
+    std::fs::write(folder.join("._Synth.vst3"), b"Mac attributes").unwrap();
+    std::fs::create_dir_all(folder.join("__MACOSX")).unwrap();
+    std::fs::write(folder.join("__MACOSX").join("._Synth.vst3"), b"more").unwrap();
+    let mut scanner = Scanner::start(program(), None, vec![folder.clone()]);
+    scanner.wait();
+    let findings = scanner.findings();
+    assert_eq!(
+        findings.problems,
+        vec![(folder.join("Synth.vst3"), ScanProblem::OtherSystem(other))],
+        "the plugin is named as made for {other:?}; the leftovers are not plugins"
+    );
     let _ = std::fs::remove_dir_all(folder);
 }
 

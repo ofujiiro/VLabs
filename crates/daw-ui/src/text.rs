@@ -683,6 +683,36 @@ pub fn unreadable_plugins(count: usize) -> String {
     }
 }
 
+/// Why a plugin file cannot be used, in words.
+pub fn scan_problem(file: &str, problem: &daw_engine::ScanProblem) -> String {
+    use daw_engine::{PluginSystem as S, ScanProblem as P};
+    let name = |system: S| match system {
+        S::Windows => "Windows",
+        S::Linux => "Linux",
+        S::Mac => "Mac",
+    };
+    let here = S::current();
+    match problem {
+        P::OtherSystem(S::Windows) if here == S::Linux => format!(
+            "{file} is made for Windows: install its Linux version (or set it up with yabridge)"
+        ),
+        P::OtherSystem(system) => format!(
+            "{file} is made for {}: install its {} version",
+            name(*system),
+            name(here)
+        ),
+        P::TooSlow => format!("{file} took too long to answer when it was checked"),
+        P::Crashed => format!("{file} crashed when it was checked"),
+        P::NoAnswer => format!("{file} has no plugins inside"),
+        P::Failed(reason) => format!("{file} could not be opened ({reason})"),
+    }
+}
+
+/// "and 4 more", after a short list.
+pub fn and_more(count: usize) -> String {
+    format!("and {count} more")
+}
+
 /// Who made a plugin, and its format: "Surge Synth Team · CLAP".
 pub fn plugin_detail(vendor: &str, format: &str) -> String {
     if vendor.is_empty() {

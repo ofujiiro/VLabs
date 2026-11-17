@@ -18,8 +18,8 @@ use std::sync::{Arc, Mutex};
 
 use daw_dsp::drums::PadSound;
 use daw_engine::{
-    Engine, EngineConfig, EngineProcessor, PluginFileFormat, PluginInfo, PluginKind, PluginTarget,
-    SoundLibrary,
+    Engine, EngineConfig, EngineProcessor, PluginFileFormat, PluginInfo, PluginKind, PluginSystem,
+    PluginTarget, ScanProblem, SoundLibrary,
 };
 use daw_model::{AutomationPoint, AutomationTarget, ChainPlace, EffectKind, Ticks};
 use daw_ui::{
@@ -832,9 +832,21 @@ fn finished_search() -> PluginSearch {
 #[test]
 fn instruments_are_chosen_from_a_list_that_includes_plugins() {
     let mut f = new_song();
+    let other = if PluginSystem::current() == PluginSystem::Windows {
+        PluginSystem::Linux
+    } else {
+        PluginSystem::Windows
+    };
+    let search = PluginSearch {
+        problems: vec![(
+            PathBuf::from("/plugins/nyasynth.vst3"),
+            ScanProblem::OtherSystem(other),
+        )],
+        ..finished_search()
+    };
     f.workspace_mut()
         .session_mut()
-        .set_plugins(made_up_plugins(), finished_search());
+        .set_plugins(made_up_plugins(), search);
     f.harness.get_by_label(text::UNTITLED).click();
     f.harness.run_steps(2);
     f.harness
@@ -843,6 +855,8 @@ fn instruments_are_chosen_from_a_list_that_includes_plugins() {
     f.harness.run_steps(3);
     f.harness.get_by_label(text::INSTRUMENTS_TITLE);
     f.harness.get_by_label_contains(text::ADD_PIANO_HINT);
+    // A plugin file made for another system is named, with why.
+    f.harness.get_by_label_contains("nyasynth.vst3 is made for");
     assert!(
         f.harness.query_by_label_contains("Space Echo").is_none(),
         "effects are not offered as instruments"

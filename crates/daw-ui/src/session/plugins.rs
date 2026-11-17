@@ -25,8 +25,8 @@ pub struct PluginSearch {
     pub checked: usize,
     /// Plugin files to look at.
     pub total: usize,
-    /// Files that could not be opened, each with the reason.
-    pub problems: Vec<String>,
+    /// Files that cannot be used, each with the reason.
+    pub problems: Vec<(std::path::PathBuf, daw_engine::ScanProblem)>,
 }
 
 /// A setting a lane can change, as the lane chooser offers it.

@@ -1185,6 +1185,9 @@ fn choice_row(ui: &mut Ui, name: &str, detail: &str) -> bool {
     .clicked()
 }
 
+/// How many plugin files that cannot be used the chooser explains in full.
+const PROBLEMS_SHOWN: usize = 3;
+
 /// Under the plugin list: the search still running, nothing found, nothing
 /// matching, and files that could not be opened.
 fn search_state(ui: &mut Ui, found: &crate::session::PluginSearch, none: bool, shown: usize) {
@@ -1195,13 +1198,39 @@ fn search_state(ui: &mut Ui, found: &crate::session::PluginSearch, none: bool, s
     } else if shown == 0 {
         ui.label(RichText::new(text::NOTHING_MATCHES).weak());
     }
-    if !found.problems.is_empty() {
+    if found.problems.is_empty() {
+        return;
+    }
+    // Each file that cannot be used, and why (a plugin made for another
+    // system is the usual reason): the first few in full.
+    ui.add_space(4.0);
+    ui.label(RichText::new(text::unreadable_plugins(found.problems.len())).small());
+    let line = |(path, problem): &(PathBuf, daw_engine::ScanProblem)| {
+        let file = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        (
+            text::scan_problem(&file, problem),
+            path.display().to_string(),
+        )
+    };
+    for problem in found.problems.iter().take(PROBLEMS_SHOWN) {
+        let (words, place) = line(problem);
+        ui.label(RichText::new(words).small().weak())
+            .on_hover_text(place);
+    }
+    if found.problems.len() > PROBLEMS_SHOWN {
+        let rest: Vec<String> = found.problems[PROBLEMS_SHOWN..]
+            .iter()
+            .map(|p| line(p).0)
+            .collect();
         ui.label(
-            RichText::new(text::unreadable_plugins(found.problems.len()))
+            RichText::new(text::and_more(found.problems.len() - PROBLEMS_SHOWN))
                 .small()
                 .weak(),
         )
-        .on_hover_text(found.problems.join("\n"));
+        .on_hover_text(rest.join("\n"));
     }
 }
 

@@ -147,11 +147,7 @@ impl App {
             done,
             checked,
             total,
-            problems: findings
-                .problems
-                .iter()
-                .map(|(path, reason)| format!("{}: {reason}", path.display()))
-                .collect(),
+            problems: findings.problems,
         };
         self.workspace
             .session_mut()
