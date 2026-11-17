@@ -9,7 +9,8 @@ Guidance for any session (human or AI) picking up this repository.
    the roadmap. It overrides everything else except a later decision record.
 2. **Read [`ROADMAP.md`](ROADMAP.md)** for where the work stands and what
    comes next.
-3. Skim [`docs/architecture.md`](docs/architecture.md) and the index of
+3. Read [`docs/HANDOVER.md`](docs/HANDOVER.md) for the latest state.
+4. Skim [`docs/architecture.md`](docs/architecture.md) and the index of
    [`docs/decisions/`](docs/decisions/README.md) before changing anything
    structural.
 
