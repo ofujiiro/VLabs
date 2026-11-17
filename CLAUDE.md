@@ -132,9 +132,13 @@ These come from the brief; tests and CI enforce most of them.
   has just appeared; click the program's own buttons (Play, Stop) rather
   than relying on keys when focus is uncertain.
 - **Reference plugins** (test fixtures only, never linked or bundled): Surge
-  XT 1.3.4 from `github.com/surge-synthesizer/releases-xt` releases
-  (`surge-xt-linux-1.3.4-pluginsonly.tar.gz`, `surge-xt-win64-1.3.4-pluginsonly.zip`).
-  CI downloads them in `spikes.yml`.
+  XT 1.3.4 (an instrument) and Surge XT Effects (an effect) from
+  `github.com/surge-synthesizer/releases-xt` releases
+  (`surge-xt-linux-1.3.4-pluginsonly.tar.gz`, `surge-xt-win64-1.3.4-pluginsonly.zip`),
+  and Dexed 0.9.8 (a second instrument) from `github.com/asb2m10/dexed`
+  releases (`dexed-0.9.8-lnx.zip`, `dexed-0.9.8-win.zip`), each in CLAP and
+  VST3. CI downloads them in `spikes.yml`; the plugin host's tests use them
+  when `VLABS_TEST_PLUGINS` names the folder that holds them.
 - Network access in the development container is restricted: crates.io,
   GitHub (git, raw files and release downloads) and the Ubuntu archive work;
   many other sites do not.
