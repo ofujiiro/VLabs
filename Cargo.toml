@@ -56,9 +56,13 @@ eframe = { version = "0.37.0", default-features = false, features = [
 egui = { version = "0.37.0", default-features = false }
 # Interface tests: drives the real interface with simulated input, no window.
 egui_kittest = { version = "0.37.0", default-features = false }
+# Ogg Vorbis decoding, for importing .ogg files.
+lewton = "0.10.2"
 libc = "0.2.191"
 libloading = "0.9.1"
 midir = "0.11.1"
+# MP3 decoding, for importing .mp3 files: a safe, pure-Rust port of minimp3.
+nanomp3 = "0.2.0"
 # Open and save dialogs: the desktop's own (Windows file dialog; on Linux the
 # XDG portal through D-Bus, or zenity).
 rfd = "0.18.0"

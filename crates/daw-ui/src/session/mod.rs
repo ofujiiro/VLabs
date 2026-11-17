@@ -1307,7 +1307,7 @@ impl Session {
     pub fn save_as(&mut self, path: &Path) -> Result<(), String> {
         let path = with_extension(path);
         self.capture_plugin_states();
-        match daw_formats::save_project(self.project(), &path) {
+        match daw_formats::save_project(self.project(), &path, None) {
             Ok(()) => {
                 self.doc.mark_saved();
                 self.set_status(text::saved(&path.display().to_string()));
@@ -1357,7 +1357,7 @@ impl Session {
 
     /// Opens a song from a file.
     pub fn open(&mut self, path: &Path) -> Result<(), String> {
-        match daw_formats::load_project(path) {
+        match daw_formats::load_project(path, None) {
             Ok(project) => {
                 self.replace(project, Some(path.to_path_buf()), true);
                 self.set_status(text::opened(&path.display().to_string()));

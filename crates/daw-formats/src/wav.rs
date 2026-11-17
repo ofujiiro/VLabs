@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Writing WAV files, for exporting songs. The sound is written as it is
-//! rendered, so a long song never has to fit in memory, into a temporary
-//! file that replaces the target only once complete.
+//! Writing WAV files, for exporting songs and keeping recordings. The sound
+//! is written as it comes, so a long song never has to fit in memory, into a
+//! temporary file that replaces the target only once complete.
 
 use std::fs::File;
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
@@ -30,13 +30,14 @@ impl WavFormat {
     }
 }
 
-/// A stereo WAV file being written.
+/// A WAV file being written: stereo, or mono.
 pub struct WavWriter {
     out: BufWriter<File>,
     temporary: PathBuf,
     target: PathBuf,
     format: WavFormat,
     sample_rate: u32,
+    channels: u16,
     frames: u64,
     noise: u32,
 }
@@ -48,6 +49,18 @@ const HEADER_BYTES: u64 = 12 + 26 + 12 + 8;
 impl WavWriter {
     /// Starts writing a stereo file at `sample_rate`.
     pub fn create(path: &Path, format: WavFormat, sample_rate: u32) -> io::Result<Self> {
+        Self::create_with_channels(path, format, sample_rate, 2)
+    }
+
+    /// Starts writing a file of `channels` channels (1 or 2) at
+    /// `sample_rate`.
+    pub fn create_with_channels(
+        path: &Path,
+        format: WavFormat,
+        sample_rate: u32,
+        channels: u16,
+    ) -> io::Result<Self> {
+        let channels = channels.clamp(1, 2);
         let name = path.file_name().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "the path has no file name")
         })?;
@@ -61,13 +74,14 @@ impl WavWriter {
             std::process::id()
         ));
         let mut out = BufWriter::new(File::create(&temporary)?);
-        write_header(&mut out, format, sample_rate, 0)?;
+        write_header(&mut out, format, sample_rate, channels, 0)?;
         Ok(Self {
             out,
             temporary,
             target: path.to_path_buf(),
             format,
             sample_rate,
+            channels,
             frames: 0,
             noise: 0x2545_f491,
         })
@@ -83,36 +97,53 @@ impl WavWriter {
         value * 2.0 - 1.0
     }
 
-    /// Appends frames (both slices the same length).
+    /// Appends frames (both slices the same length; a mono file takes the
+    /// left one).
     pub fn write(&mut self, left: &[f32], right: &[f32]) -> io::Result<()> {
         for (&l, &r) in left.iter().zip(right) {
-            for sample in [l, r] {
-                let sample = if sample.is_finite() { sample } else { 0.0 };
-                match self.format {
-                    WavFormat::Pcm16 => {
-                        // Triangular dither of one step hides the rounding.
-                        let (a, b) = (self.random(), self.random());
-                        let dither = f32::midpoint(a, b);
-                        #[allow(clippy::cast_possible_truncation, reason = "clamped to 16 bits")]
-                        let value = (sample * 32_767.0 + dither)
-                            .round()
-                            .clamp(-32_768.0, 32_767.0) as i16;
-                        self.out.write_all(&value.to_le_bytes())?;
-                    }
-                    WavFormat::Pcm24 => {
-                        #[allow(clippy::cast_possible_truncation, reason = "clamped to 24 bits")]
-                        let value = (sample * 8_388_607.0)
-                            .round()
-                            .clamp(-8_388_608.0, 8_388_607.0)
-                            as i32;
-                        self.out.write_all(&value.to_le_bytes()[..3])?;
-                    }
-                    WavFormat::Float32 => self.out.write_all(&sample.to_le_bytes())?,
-                }
+            self.sample(l)?;
+            if self.channels == 2 {
+                self.sample(r)?;
             }
         }
         self.frames += left.len().min(right.len()) as u64;
         Ok(())
+    }
+
+    /// Appends interleaved frames of the file's channel count.
+    pub fn write_interleaved(&mut self, samples: &[f32]) -> io::Result<()> {
+        let channels = usize::from(self.channels);
+        for frame in samples.chunks_exact(channels) {
+            for &sample in frame {
+                self.sample(sample)?;
+            }
+        }
+        self.frames += (samples.len() / channels) as u64;
+        Ok(())
+    }
+
+    fn sample(&mut self, sample: f32) -> io::Result<()> {
+        let sample = if sample.is_finite() { sample } else { 0.0 };
+        match self.format {
+            WavFormat::Pcm16 => {
+                // Triangular dither of one step hides the rounding.
+                let (a, b) = (self.random(), self.random());
+                let dither = f32::midpoint(a, b);
+                #[allow(clippy::cast_possible_truncation, reason = "clamped to 16 bits")]
+                let value = (sample * 32_767.0 + dither)
+                    .round()
+                    .clamp(-32_768.0, 32_767.0) as i16;
+                self.out.write_all(&value.to_le_bytes())
+            }
+            WavFormat::Pcm24 => {
+                #[allow(clippy::cast_possible_truncation, reason = "clamped to 24 bits")]
+                let value = (sample * 8_388_607.0)
+                    .round()
+                    .clamp(-8_388_608.0, 8_388_607.0) as i32;
+                self.out.write_all(&value.to_le_bytes()[..3])
+            }
+            WavFormat::Float32 => self.out.write_all(&sample.to_le_bytes()),
+        }
     }
 
     /// Frames written so far.
@@ -122,7 +153,8 @@ impl WavWriter {
 
     /// Completes the file and puts it in place.
     pub fn finish(mut self) -> io::Result<()> {
-        let data = self.frames * 2 * u64::from(self.format.bytes_per_sample());
+        let data =
+            self.frames * u64::from(self.channels) * u64::from(self.format.bytes_per_sample());
         if data % 2 == 1 {
             self.out.write_all(&[0])?; // Chunks are padded to an even size.
         }
@@ -134,7 +166,13 @@ impl WavWriter {
             .map_err(io::IntoInnerError::into_error)?;
         file.seek(SeekFrom::Start(0))?;
         let mut header = BufWriter::new(&mut file);
-        write_header(&mut header, self.format, self.sample_rate, frames)?;
+        write_header(
+            &mut header,
+            self.format,
+            self.sample_rate,
+            self.channels,
+            frames,
+        )?;
         header.flush()?;
         drop(header);
         file.sync_all()?;
@@ -153,9 +191,9 @@ fn write_header(
     out: &mut impl Write,
     format: WavFormat,
     sample_rate: u32,
+    channels: u16,
     frames: u32,
 ) -> io::Result<()> {
-    let channels: u16 = 2;
     let bytes = format.bytes_per_sample();
     let block_align = channels * bytes;
     let data = u64::from(frames) * u64::from(block_align);
@@ -257,6 +295,22 @@ mod tests {
             }
             std::fs::remove_file(path).ok();
         }
+    }
+
+    #[test]
+    fn mono_files_hold_one_channel() {
+        let path = temp("mono");
+        let mut writer =
+            WavWriter::create_with_channels(&path, WavFormat::Float32, 44_100, 1).unwrap();
+        writer.write_interleaved(&[0.5, -0.5, 0.25]).unwrap();
+        writer.write(&[1.0], &[-1.0]).unwrap();
+        assert_eq!(writer.frames(), 4);
+        writer.finish().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(u16::from_le_bytes([bytes[22], bytes[23]]), 1, "one channel");
+        let decoded = crate::audio::decode(&bytes).unwrap();
+        assert_eq!(decoded.channels, vec![vec![0.5, -0.5, 0.25, 1.0]]);
+        std::fs::remove_file(path).ok();
     }
 
     #[test]

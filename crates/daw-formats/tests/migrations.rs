@@ -17,9 +17,9 @@ use std::path::PathBuf;
 
 use daw_formats::{FORMAT_VERSION, load_project, save_project};
 use daw_model::{
-    ACOUSTIC_KIT, AutomationLane, AutomationPoint, AutomationTarget, ChainPlace, DEFAULT_VELOCITY,
-    EffectKind, EqSettings, Instrument, Note, NoteId, PluginFormat, PluginRef, PluginSetup,
-    PluginState, Project, Ticks,
+    ACOUSTIC_KIT, AudioFile, AudioId, AutomationLane, AutomationPoint, AutomationTarget,
+    ChainPlace, ClipContent, DEFAULT_VELOCITY, EffectKind, EqSettings, Instrument, Note, NoteId,
+    PluginFormat, PluginRef, PluginSetup, PluginState, Project, Ticks,
 };
 
 fn data_folder() -> PathBuf {
@@ -42,9 +42,35 @@ fn sample_plugin() -> PluginSetup {
     }
 }
 
+/// A folder of this test's own.
+fn scratch(name: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!("migrations-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).unwrap();
+    path
+}
+
+/// The sound of the version 4 sample's audio clip: a tenth of a second of
+/// mono 16-bit WAV at 48 kHz.
+fn write_hum(folder: &std::path::Path) {
+    let mut writer = daw_formats::wav::WavWriter::create_with_channels(
+        &folder.join("hum.wav"),
+        daw_formats::wav::WavFormat::Pcm16,
+        48_000,
+        1,
+    )
+    .unwrap();
+    let samples: Vec<f32> = (0..4800)
+        .map(|i| (f64::from(i) * 0.05).sin() as f32 * 0.5)
+        .collect();
+    writer.write_interleaved(&samples).unwrap();
+    writer.finish().unwrap();
+}
+
 /// The project every sample file contains (version 2 added the drum
 /// track, the pad setting and the effects; version 3 a plugin track with
-/// saved settings, a plugin effect and automation lanes).
+/// saved settings, a plugin effect and automation lanes; version 4 an audio
+/// track with a clip of a file kept in the container).
 fn reference_project() -> Project {
     let mut project = Project::starter("Pattern 1", "Piano");
     let (_, pattern) = project.first_pattern().unwrap();
@@ -89,6 +115,24 @@ fn reference_project() -> Project {
         });
         track.automation.push(lane);
     }
+    let voice = project.add_audio_track("Voice");
+    let hum = project.add_audio_file(AudioFile {
+        id: AudioId(0),
+        name: "Hum".to_owned(),
+        file: "hum.wav".to_owned(),
+        frames: 4800,
+        sample_rate: 48_000,
+        channels: 1,
+    });
+    let clip = project
+        .add_audio_clip(voice, Ticks::WHOLE, Ticks::QUARTER / 10, hum, 1200)
+        .unwrap();
+    project.update_clip(clip, |c| {
+        if let ClipContent::Audio { gain, fade_in, .. } = &mut c.content {
+            *gain = 0.5;
+            *fade_in = 0.01;
+        }
+    });
     "Format sample".clone_into(&mut project.title);
     project.tempo.set(Ticks::quarters(8), 90.0);
     let triplet = Ticks::note_value(1, 12);
@@ -112,8 +156,12 @@ fn reference_project() -> Project {
 fn every_released_format_version_still_opens() {
     let sample = data_folder().join(format!("format-v{FORMAT_VERSION}.project-sample"));
     if std::env::var_os("WRITE_FORMAT_SAMPLE").is_some() && !sample.exists() {
-        save_project(&reference_project(), &sample).unwrap();
+        let sounds = scratch("write");
+        write_hum(&sounds);
+        save_project(&reference_project(), &sample, Some(&sounds)).unwrap();
+        std::fs::remove_dir_all(sounds).ok();
     }
+    let opened = scratch("open");
     let mut found = 0;
     for entry in std::fs::read_dir(data_folder()).unwrap().flatten() {
         let path = entry.path();
@@ -128,7 +176,7 @@ fn every_released_format_version_still_opens() {
             .and_then(|n| n.split('.').next())
             .and_then(|n| n.parse().ok())
             .unwrap_or(0);
-        let project = load_project(&path)
+        let project = load_project(&path, Some(&opened))
             .unwrap_or_else(|e| panic!("{} no longer opens: {e}", path.display()));
         for pattern in &project.patterns {
             assert!(
@@ -171,6 +219,9 @@ fn every_released_format_version_still_opens() {
             let value = synth.automation[0].value_at(half_way());
             assert!((value.unwrap() - 0.5).abs() < 1e-6, "{}", path.display());
         }
+        if version >= 4 {
+            check_audio(&project, &opened, &path);
+        }
         assert_eq!(project.title, "Format sample", "{}", path.display());
         assert_eq!(
             project.tempo.bpm_at(Ticks::quarters(9)),
@@ -198,10 +249,38 @@ fn every_released_format_version_still_opens() {
             "triplets stay exact"
         );
     }
+    std::fs::remove_dir_all(opened).ok();
     assert!(
         found >= FORMAT_VERSION as usize,
         "a sample file is missing for some format version (found {found})"
     );
+}
+
+/// The version 4 sample's audio track, clip and file came back.
+fn check_audio(project: &Project, opened: &std::path::Path, path: &std::path::Path) {
+    let voice = project
+        .tracks
+        .iter()
+        .find(|t| t.instrument.is_audio())
+        .unwrap_or_else(|| panic!("{} lost its audio track", path.display()));
+    let clip = voice.clips[0];
+    assert_eq!(clip.start, Ticks::WHOLE);
+    let ClipContent::Audio {
+        offset,
+        gain,
+        fade_in,
+        fade_out,
+        ..
+    } = clip.content
+    else {
+        panic!("{} lost its audio clip", path.display());
+    };
+    assert_eq!((offset, gain, fade_in, fade_out), (1200, 0.5, 0.01, 0.0));
+    let file = project.audio_file(clip.audio().unwrap()).unwrap();
+    assert_eq!((file.name.as_str(), file.frames), ("Hum", 4800));
+    let bytes = std::fs::read(opened.join(&file.file)).unwrap();
+    let sound = daw_formats::audio::decode(&bytes).unwrap();
+    assert_eq!(sound.frames(), 4800, "the sound came out of the file");
 }
 
 /// Half way between the sample lane's points (at 0 and one bar).
@@ -214,7 +293,9 @@ fn half_way() -> f64 {
 #[test]
 fn plugin_settings_are_kept_as_entries_of_their_own() {
     let path = std::env::temp_dir().join(format!("plugin-states-{}.song", std::process::id()));
-    save_project(&reference_project(), &path).unwrap();
+    let sounds = scratch("states");
+    write_hum(&sounds);
+    save_project(&reference_project(), &path, Some(&sounds)).unwrap();
     let bytes = std::fs::read(&path).unwrap();
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
     let names: Vec<String> = zip
@@ -233,9 +314,11 @@ fn plugin_settings_are_kept_as_entries_of_their_own() {
         "no settings inside the description"
     );
     assert!(json.contains("$state_file"));
-    let project = load_project(&path).unwrap();
+    assert!(names.iter().any(|n| n == "audio/hum.wav"), "{names:?}");
+    let project = load_project(&path, None).unwrap();
     assert_eq!(project, reference_project_after_load(&project));
     std::fs::remove_file(path).ok();
+    std::fs::remove_dir_all(sounds).ok();
 }
 
 /// The reference project as loading gives it back (identifiers repaired).

@@ -182,7 +182,7 @@ fn write_jobs(folder: &Path, jobs: &mpsc::Receiver<Job>) {
                 // crash, its name is too.
                 let info = serde_json::to_vec_pretty(&Info { path }).unwrap_or_default();
                 if daw_formats::write_atomically(&folder.join(INFO_FILE), &info).is_ok() {
-                    let _ = daw_formats::save_project(&project, &folder.join(song_file()));
+                    let _ = daw_formats::save_project(&project, &folder.join(song_file()), None);
                 }
             }
             Job::Clear => {
@@ -224,7 +224,7 @@ fn find_orphan(root: &Path) -> Option<Orphan> {
     }
     found.sort_by_key(|(modified, _, _)| *modified);
     while let Some((_, folder, lock)) = found.pop() {
-        if let Ok(project) = daw_formats::load_project(&folder.join(song_file())) {
+        if let Ok(project) = daw_formats::load_project(&folder.join(song_file()), None) {
             let info: Info = fs::read(folder.join(INFO_FILE))
                 .ok()
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())

@@ -11,8 +11,14 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+claxon.workspace = true
 daw-ident.workspace = true
+lewton.workspace = true
+nanomp3.workspace = true
 daw-model.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 zip.workspace = true
+
+[dev-dependencies]
+flacenc.workspace = true

@@ -29,5 +29,7 @@ Translates between files on disk and the project data in `daw-model`.
 
 ## Roadmap
 
-Phase 1 (save and load), phase 2 (WAV export), phase 4 (audio import),
-phase 6 (DAWproject, MIDI files, FLAC export).
+Phase 1 (save and load), phase 2 (WAV export), phase 4 (audio import:
+`audio` reads WAV, FLAC, MP3 and Ogg Vorbis; the song file keeps its audio
+files as entries `audio/<name>`, format version 4), phase 6 (DAWproject,
+MIDI files, FLAC export).
