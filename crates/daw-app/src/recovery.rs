@@ -172,9 +172,12 @@ fn write_jobs(folder: &Path, jobs: &mpsc::Receiver<Job>) {
         }
         match job {
             Job::Write(project, path) => {
+                // The song's file name first, then the song: the song is
+                // what marks work to recover, so when it is there after a
+                // crash, its name is too.
                 let info = serde_json::to_vec_pretty(&Info { path }).unwrap_or_default();
-                if daw_formats::save_project(&project, &folder.join(song_file())).is_ok() {
-                    let _ = daw_formats::write_atomically(&folder.join(INFO_FILE), &info);
+                if daw_formats::write_atomically(&folder.join(INFO_FILE), &info).is_ok() {
+                    let _ = daw_formats::save_project(&project, &folder.join(song_file()));
                 }
             }
             Job::Clear => {
