@@ -3,9 +3,10 @@
 The phases come from the project brief. Each ends with a build the owner can
 run and a checklist of things to try. Status is updated at every milestone.
 
-**Now:** phase 2 (making a beat). Phase 1 is complete and the owner
-confirmed the milestone build works on Linux (the Windows build is still to
-be tried by hand). Phase 0 is complete: all three risk spikes passed on
+**Now:** the phase 2 milestone build (making a beat) is ready for the
+owner to try; phase 3 (plugins) comes next. Phase 1 is complete and the
+owner confirmed its build works on Linux (the Windows build is still to be
+tried by hand). Phase 0 is complete: all three risk spikes passed on
 Windows and Linux (decision 0009).
 
 ## Phase 0 — Foundations and risk spikes
@@ -74,16 +75,74 @@ Windows and Linux (decision 0009).
   decision 0005).
 - The pitch wheel and other controllers of a MIDI keyboard are not used
   yet (the sustain pedal is).
-- The sound is on the quiet side (a three-note chord peaks around −16 dBFS);
-  a master limiter in phase 2 will let the level go up safely.
+- The sound was on the quiet side (fixed in phase 2: the piano is 6 dB
+  louder and every new song has a limiter on the master).
 - Open and save dialogs are not attached to the window, so on some desktops
   they may open behind it.
 
 ## Phase 2 — Making a beat
 
-Step sequencer, drum sampler with the starter kit, patterns, arrangement
-timeline, mixer, built-in effects (EQ, compressor, reverb, delay, limiter),
-WAV export.
+- [x] Drum sampler with two bundled kits: a recorded acoustic kit (Big
+      Rusty Drums, CC0) and a synthesised electronic kit (decision 0008)
+- [x] Screens for the song, a pattern and the mixer (decision 0014): one
+      large surface showing the song or one pattern, the location line as
+      the way between them, the keyboard or the mixer at the bottom
+- [x] Step sequencer: click or drag to add hits, a loudness strip, each
+      sound's volume, pan, tune and length; drums from the computer keyboard
+- [x] Patterns: several per track; new, copy, rename, delete
+- [x] Arrangement timeline: tracks with mute and solo, clips with a picture
+      of their notes; place, move, repeat, copy and remove clips; loop a part
+- [x] What Space plays follows the screen: the song, or the part of the song
+      where the open pattern is placed, or a pattern on its own
+- [x] Mixer: volume, pan, mute, solo, level meters and effect chains for
+      every track and the master
+- [x] Built-in effects: EQ (it draws its curve), compressor, reverb, delay
+      in time with the song, limiter; a new song's master has a limiter
+- [x] WAV export in the background, CD or studio quality, with progress and
+      Cancel; the echoes and reverb fade out at the end
+- [x] File format version 2, with migration of phase 1 songs
+- [ ] The owner's hands-on check of the milestone build
+
+### Phase 2 milestone: things to try
+
+1. Start the program: a new song opens on the drum step grid. Click the
+   Kick squares on steps 1, 5, 9 and 13 and the Snare squares on 5 and 13,
+   then press Space. Drag along the Closed hi-hat row to add a hi-hat on
+   every step; Ctrl+Z removes the whole drag.
+2. Play the drums from the computer keyboard: the key caps on the left say
+   which key plays each sound (Z is the kick, X the snare, G the hi-hat).
+3. Click a sound's name: you hear it, and a panel changes its volume, pan,
+   tune and length, or silences it. Try Kit › Electronic at the top right.
+4. Click "Untitled song" at the left of the location line (or press F5):
+   the song view. The beat repeats over four bars. Drag the clip's right end
+   to make it last longer, click an empty spot on a track to place its
+   pattern again, double-click a clip to open it, right-click it for more.
+5. Open the piano (location line: Drums › Piano, or double-click the piano
+   clip) and add a melody. In a pattern, Space plays the part of the song
+   where that pattern is, with the other tracks.
+6. Press F9 (or the fader button at the right of the location line): the
+   mixer. Move the faders and pans, mute and solo tracks. On the drums,
+   "+ Add effect" › Reverb, then raise its Amount; on the piano, try the EQ
+   and watch its curve.
+7. In the song view, drag along the ruler to loop a part of the song.
+8. Menu › Export as WAV… (Ctrl+E): choose the quality and where; a progress
+   bar, then the file plays in any music player.
+9. Save, close and open the song again: patterns, mixer and effects come
+   back. A phase 1 song opens too.
+
+### Known gaps in this build
+
+- Clips cannot be moved to another track, several clips cannot be selected
+  at once, and clips have no copy and paste (Duplicate places a copy right
+  after a clip).
+- Effect settings cannot change during the song yet (automation is phase
+  3), and the compressor does not show how much it turns down.
+- The tempo stays the same for the whole song (a tempo track is phase 5).
+- The on-screen keyboard stays a piano keyboard on drum tracks; the step
+  grid shows which computer key plays each drum.
+- I cannot listen: drum timing and levels were checked by measuring
+  rendered and recorded sound, not by ear. The balance between the piano
+  and the kits deserves your ears.
 
 ## Phase 3 — Plugins
 

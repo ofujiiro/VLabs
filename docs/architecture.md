@@ -124,17 +124,28 @@ bars.
   windows through X11 directly, which also works under XWayland on Wayland
   desktops. On Windows, ordinary Win32 windows.
 
-## The interface *(phase 1 onwards)*
+## The interface
 
 Built with egui (eframe, wgpu renderer). All interface code is in `daw-ui`:
 
 - `session`: the open song and everything done to it, with no drawing
   (editing commands, the selection, playing notes, the transport,
-  recording, files). Tested without a window.
-- `workspace`: the window's layout (decision 0011), keyboard routing (note
-  keys to the session, shortcuts to commands), menus and dialogs.
-- `piano_roll`, `transport`, `keyboard_panel`: the custom-drawn views; they
-  draw only what is visible.
+  recording, files; in `session/arrange` the views, tracks, patterns and
+  clips; in `session/mixing` the mixer, effects and drum pads). It also
+  decides what Space plays, as a `PlaybackScope` given to the engine: the
+  song, a part of it looping, or one pattern alone (decision 0014). Tested
+  without a window.
+- `workspace`: the window's layout (decisions 0011 and 0014), keyboard
+  routing (note keys to the session, shortcuts to commands), menus,
+  dialogs; the parts of the window ask it for dialogs and windows through
+  `Intent`s.
+- `song_view`, `step_grid`, `piano_roll`, `mixer`, `effect_ui`,
+  `transport`, `keyboard_panel`: the views; the custom-drawn ones draw
+  only what is visible.
+- `export`: writes the song to a WAV file on a background thread, with a
+  second engine rendering it offline through the same processing as
+  playback (`daw_engine::OfflineRender`), block by block, with progress and
+  cancelling.
 - `keys`: note keys by physical position, the rebindable shortcut table.
 - `text`: every user-facing string. `theme`: colours, fonts, spacing; dark
   and light themes follow the system by default.

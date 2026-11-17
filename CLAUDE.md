@@ -123,7 +123,14 @@ These come from the brief; tests and CI enforce most of them.
 - **Interface tests** (`crates/daw-ui/tests/interface.rs`) use
   `egui_kittest`: find controls by their accessible label, click them, send
   keys. Dialogs re-centre for a few frames after opening; run a few frames
-  before clicking inside one.
+  before clicking inside one. The test clock moves a quarter of a second per
+  frame, so a double-click cannot happen in a test (open clips through their
+  menu there, and check double-clicks in the real program). Each square of
+  the step grid is labelled ("Kick, step 1"). Test what a person does; a
+  new test should be a step someone takes in the program.
+- **Driving the program:** `xdotool windowfocus` can fail on a window that
+  has just appeared; click the program's own buttons (Play, Stop) rather
+  than relying on keys when focus is uncertain.
 - **Reference plugins** (test fixtures only, never linked or bundled): Surge
   XT 1.3.4 from `github.com/surge-synthesizer/releases-xt` releases
   (`surge-xt-linux-1.3.4-pluginsonly.tar.gz`, `surge-xt-win64-1.3.4-pluginsonly.zip`).

@@ -14,12 +14,15 @@ automatically when you plug one in, but nothing extra is ever required.
 
 ## Status
 
-**Pre-alpha.** Roadmap phase 1 ("first sound") works: place and edit notes
-in a piano roll, play the bundled piano from the computer keyboard or a MIDI
-keyboard, record what you play with a metronome and count-in, undo anything,
-save and open songs. Your work is saved automatically and offered back after
-a crash. See [ROADMAP.md](ROADMAP.md) for what is done, what to try and what
-comes next.
+**Pre-alpha.** Roadmap phases 1 ("first sound") and 2 ("making a beat")
+work: make a beat on the step grid with a recorded acoustic kit or an
+electronic kit, write melodies in the piano roll with the bundled piano,
+arrange patterns on a timeline, mix with volume, pan, mute, solo and an
+effect chain per track (EQ, compressor, reverb, delay, limiter), and export
+the song as a WAV file. Play from the computer keyboard or a MIDI keyboard,
+record with a metronome and count-in, undo anything, save and open songs.
+Your work is saved automatically and offered back after a crash. See
+[ROADMAP.md](ROADMAP.md) for what is done, what to try and what comes next.
 
 ## Building from source
 
