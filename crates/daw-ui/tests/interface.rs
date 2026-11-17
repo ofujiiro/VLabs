@@ -1057,3 +1057,44 @@ fn a_plugin_track_keeps_its_settings_when_the_song_is_saved_and_opened() {
     assert!(!f.session().is_dirty(), "opening a song changes nothing");
     std::fs::remove_file(path).ok();
 }
+
+#[test]
+fn a_song_with_a_plugin_track_exports_with_its_sound() {
+    let Some(surge) = reference_plugin("surge/Surge XT.clap", PluginKind::Instrument) else {
+        return;
+    };
+    let mut f = new_song();
+    let path = std::env::temp_dir().join(format!("interface-plugin-{}.wav", std::process::id()));
+    *f.host.export_to.lock().unwrap() = Some(path.clone());
+    let session = f.workspace_mut().session_mut();
+    session.set_plugins(vec![surge.clone()], finished_search());
+    let track = session.add_plugin_track(&surge);
+    session.open_track(track);
+    // A long note on the plugin track only (the beat silenced).
+    session.add_note(Ticks::ZERO, 60, 0.8);
+    let drums = session.project().tracks[0].id;
+    session.toggle_mute(drums);
+    f.tick();
+    f.key(Key::E, Key::E, true, Modifiers::COMMAND);
+    f.key(Key::E, Key::E, false, Modifiers::COMMAND);
+    f.harness.get_by_label(text::EXPORT_CD).click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::EXPORT_BUTTON).click();
+    f.harness.run_steps(2);
+    f.workspace_mut().session_mut().finish_export();
+    f.harness.run_steps(3);
+    let bytes = std::fs::read(&path).expect("the file was written");
+    let data = u32::from_le_bytes(bytes[40..44].try_into().unwrap()) as usize;
+    let loudest = bytes[44..44 + data]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| i16::from_le_bytes(*c).unsigned_abs())
+        .max()
+        .unwrap();
+    assert!(
+        loudest > 1000,
+        "the plugin's note is in the file: {loudest}"
+    );
+    std::fs::remove_file(path).ok();
+}

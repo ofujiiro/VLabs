@@ -887,8 +887,10 @@ impl OfflineRender {
                 right[done + i] = frame[1];
             }
             done += n;
+            // (No plugin housekeeping here: an export has no plugin windows,
+            // and some plugins' timers wait for the program's main thread,
+            // which may be waiting for the export.)
             self.engine.poll();
-            self.engine.plugin_idle();
         }
         self.frames += left.len() as u64;
     }
