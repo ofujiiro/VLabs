@@ -14,7 +14,7 @@
 )]
 
 use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -108,6 +108,9 @@ struct Shared {
     sample_rate: u32,
     /// How many times the device has asked for sound.
     calls: AtomicU64,
+    /// The delay from the callback to the speakers, in microseconds, as the
+    /// device last reported it (0 for unknown).
+    latency_us: AtomicU32,
 }
 
 impl Shared {
@@ -159,6 +162,7 @@ impl AudioOutput {
             stop: AtomicBool::new(false),
             sample_rate,
             calls: AtomicU64::new(0),
+            latency_us: AtomicU32::new(0),
         });
         let watcher_shared = Arc::clone(&shared);
         let watcher = std::thread::Builder::new()
@@ -166,6 +170,15 @@ impl AudioOutput {
             .spawn(move || watch(&watcher_shared, use_devices))
             .ok();
         Self { shared, watcher }
+    }
+
+    /// The delay from the program to the speakers, as the device reports
+    /// it (`None` when it does not say, or there is no device).
+    pub fn latency(&self) -> Option<Duration> {
+        match self.shared.latency_us.load(Ordering::Relaxed) {
+            0 => None,
+            us => Some(Duration::from_micros(u64::from(us))),
+        }
     }
 
     /// The state of the output now.
@@ -350,9 +363,15 @@ where
     let callback_shared = Arc::clone(shared);
     let mut scratch = vec![0.0_f32; 8192 * render_channels];
     let mut priority_tried = false;
-    let data_callback = move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+    let data_callback = move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
         let _real_time = daw_rt::RtGuard::enter();
         callback_shared.calls.fetch_add(1, Ordering::Relaxed);
+        let stamp = info.timestamp();
+        let delay = stamp.playback.duration_since(stamp.callback);
+        callback_shared.latency_us.store(
+            u32::try_from(delay.as_micros()).unwrap_or(u32::MAX),
+            Ordering::Relaxed,
+        );
         if !priority_tried {
             priority_tried = true;
             let state = match raise_priority() {
