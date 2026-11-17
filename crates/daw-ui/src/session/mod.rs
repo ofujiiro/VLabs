@@ -1520,7 +1520,7 @@ fn placement(project: &Project, track: TrackId, pattern: PatternId) -> Option<Pl
                 length: clip.length,
                 offset,
             }),
-            ClipContent::Pattern { .. } => None,
+            ClipContent::Pattern { .. } | ClipContent::Audio { .. } => None,
         })
 }
 

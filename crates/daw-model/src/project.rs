@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::automation::{AutomationLane, AutomationTarget};
 use crate::mixer::{ChainPlace, Effect, EffectKind, LimiterSettings, MasterBus};
 use crate::song::{
-    ChannelStrip, Clip, ClipContent, ClipId, EffectId, Instrument, MAX_KEY, Note, NoteId, Pattern,
-    PatternId, Track, TrackId, default_step,
+    AudioFile, AudioId, ChannelStrip, Clip, ClipContent, ClipId, EffectId, Instrument, MAX_KEY,
+    Note, NoteId, Pattern, PatternId, Track, TrackId, default_step,
 };
 use crate::time::{MeterMap, Region, TempoMap, Ticks, TimeSignature};
 
@@ -38,6 +38,9 @@ pub struct Project {
     /// The master bus: master volume and effects.
     #[serde(default)]
     pub master: MasterBus,
+    /// The audio files the song's audio clips play (decision 0017).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audio: Vec<AudioFile>,
     /// The next unused identifier.
     next_id: u64,
 }
@@ -53,6 +56,7 @@ impl Project {
             patterns: Vec::new(),
             loop_region: None,
             master: MasterBus::default(),
+            audio: Vec::new(),
             next_id: 1,
         }
     }
@@ -130,6 +134,9 @@ impl Project {
         }
         for effect in &self.master.effects {
             highest = highest.max(effect.id.0);
+        }
+        for file in &self.audio {
+            highest = highest.max(file.id.0);
         }
         self.next_id = self.next_id.max(highest + 1);
     }
@@ -292,6 +299,7 @@ impl Project {
     pub fn remove_track(&mut self, id: TrackId) {
         self.tracks.retain(|t| t.id != id);
         self.patterns.retain(|p| p.track != Some(id));
+        self.prune_audio();
     }
 
     /// A clip by id, with its track.
@@ -316,13 +324,318 @@ impl Project {
         }
     }
 
-    /// Removes a clip.
+    /// Removes a clip (and its audio file, if no other clip plays it).
     pub fn remove_clip(&mut self, id: ClipId) {
         let Some((track, _)) = self.clip(id) else {
             return;
         };
         if let Some(track) = self.track_mut(track) {
             track.clips.retain(|c| c.id != id);
+        }
+        self.prune_audio();
+    }
+
+    /// Changes a clip's length; an audio clip cannot outlast its sound.
+    pub fn set_clip_length(&mut self, id: ClipId, length: Ticks) {
+        let Some((_, clip)) = self.clip(id).map(|(t, c)| (t, *c)) else {
+            return;
+        };
+        let mut length = length.max(Ticks(1));
+        if let Some(end) = self.audio_end(&clip) {
+            length = length.min((end - clip.start).max(Ticks(1)));
+        }
+        self.update_clip(id, |c| c.length = length);
+    }
+
+    /// Moves a clip's start to `start` while what it plays stays where it
+    /// is in the song: its beginning is trimmed away, or uncovered again.
+    /// Its end stays put. An audio clip cannot start before its file does.
+    pub fn trim_clip_start(&mut self, id: ClipId, start: Ticks) {
+        let Some((_, clip)) = self.clip(id).map(|(t, c)| (t, *c)) else {
+            return;
+        };
+        let mut start = start.max(Ticks::ZERO).min(clip.end() - Ticks(1));
+        let content = match clip.content {
+            ClipContent::Pattern { pattern, offset } => {
+                let length = self.pattern(pattern).map_or(Ticks::ZERO, |p| p.length);
+                let moved = offset + (start - clip.start);
+                ClipContent::Pattern {
+                    pattern,
+                    offset: if length > Ticks::ZERO {
+                        moved % length
+                    } else {
+                        Ticks::ZERO
+                    },
+                }
+            }
+            ClipContent::Audio {
+                audio,
+                offset,
+                gain,
+                fade_in,
+                fade_out,
+            } => {
+                let Some(file) = self.audio_file(audio) else {
+                    return;
+                };
+                if start < clip.start {
+                    // No earlier than the file's first frame.
+                    let first = self.tempo.seconds_at(clip.start) - file.seconds_in(offset);
+                    #[allow(clippy::cast_possible_truncation, reason = "tick positions fit easily")]
+                    let earliest = Ticks(self.tempo.ticks_at(first.max(0.0)).ceil() as i64);
+                    start = start.max(earliest).min(clip.start);
+                }
+                let moved = self.seconds_between(clip.start, start);
+                let frames = file.frames_in(moved.abs());
+                ClipContent::Audio {
+                    audio,
+                    offset: if moved >= 0.0 {
+                        offset + frames
+                    } else {
+                        offset.saturating_sub(frames)
+                    },
+                    gain,
+                    fade_in,
+                    fade_out,
+                }
+            }
+        };
+        self.update_clip(id, |c| {
+            let end = c.end();
+            c.start = start;
+            c.length = end - start;
+            c.content = content;
+        });
+    }
+
+    /// Splits a clip in two at `at`, which must be inside it: the clip
+    /// keeps the part before, and a new clip plays the part after, carrying
+    /// on exactly where the first stops. Returns the new clip.
+    pub fn split_clip(&mut self, id: ClipId, at: Ticks) -> Option<ClipId> {
+        let (track, clip) = self.clip(id).map(|(t, c)| (t, *c))?;
+        if at <= clip.start || at >= clip.end() {
+            return None;
+        }
+        let (before, after) = match clip.content {
+            ClipContent::Pattern { pattern, offset } => {
+                let length = self.pattern(pattern).map_or(Ticks::ZERO, |p| p.length);
+                let moved = offset + (at - clip.start);
+                let offset = if length > Ticks::ZERO {
+                    moved % length
+                } else {
+                    Ticks::ZERO
+                };
+                (clip.content, ClipContent::Pattern { pattern, offset })
+            }
+            ClipContent::Audio {
+                audio,
+                offset,
+                gain,
+                fade_in,
+                fade_out,
+            } => {
+                let file = self.audio_file(audio)?;
+                let first = self.seconds_between(clip.start, at);
+                let second = self.seconds_between(at, clip.end());
+                #[allow(clippy::cast_possible_truncation, reason = "seconds")]
+                let parts = (
+                    ClipContent::Audio {
+                        audio,
+                        offset,
+                        gain,
+                        fade_in: fade_in.min(first as f32),
+                        fade_out: 0.0,
+                    },
+                    ClipContent::Audio {
+                        audio,
+                        offset: offset + file.frames_in(first),
+                        gain,
+                        fade_in: 0.0,
+                        fade_out: fade_out.min(second as f32),
+                    },
+                );
+                parts
+            }
+        };
+        let new = ClipId(self.allocate_id());
+        let track = self.track_mut(track)?;
+        if let Some(first) = track.clips.iter_mut().find(|c| c.id == id) {
+            first.length = at - clip.start;
+            first.content = before;
+        }
+        track.clips.push(Clip {
+            id: new,
+            start: at,
+            length: clip.end() - at,
+            content: after,
+        });
+        track.clips.sort_by_key(|c| (c.start, c.id));
+        Some(new)
+    }
+
+    /// Makes room on a track from `start` to `end`: the parts of its clips
+    /// there are cut away (clips wholly inside go, clips across an edge are
+    /// trimmed, a clip across the whole span is split). `keep` is left
+    /// alone (the clip being placed there).
+    pub fn clear_span(&mut self, track: TrackId, start: Ticks, end: Ticks, keep: Option<ClipId>) {
+        if end <= start {
+            return;
+        }
+        let covered: Vec<Clip> = self.track(track).map_or_else(Vec::new, |t| {
+            t.clips
+                .iter()
+                .filter(|c| Some(c.id) != keep && c.start < end && start < c.end())
+                .copied()
+                .collect()
+        });
+        for clip in covered {
+            if clip.start >= start && clip.end() <= end {
+                if let Some(t) = self.track_mut(track) {
+                    t.clips.retain(|c| c.id != clip.id);
+                }
+            } else if clip.start < start && clip.end() > end {
+                self.split_clip(clip.id, end);
+                self.set_clip_length(clip.id, start - clip.start);
+            } else if clip.start < start {
+                self.set_clip_length(clip.id, start - clip.start);
+            } else {
+                self.trim_clip_start(clip.id, end);
+            }
+        }
+        self.prune_audio();
+    }
+
+    /// Moves an audio clip to another audio track, at the same time.
+    /// Returns whether it moved.
+    pub fn move_clip_to_track(&mut self, id: ClipId, to: TrackId) -> bool {
+        let Some((from, clip)) = self.clip(id).map(|(t, c)| (t, *c)) else {
+            return false;
+        };
+        let allowed = from != to
+            && clip.is_audio()
+            && self.track(to).is_some_and(|t| t.instrument.is_audio());
+        if !allowed {
+            return false;
+        }
+        if let Some(t) = self.track_mut(from) {
+            t.clips.retain(|c| c.id != id);
+        }
+        if let Some(t) = self.track_mut(to) {
+            t.clips.push(clip);
+            t.clips.sort_by_key(|c| (c.start, c.id));
+        }
+        true
+    }
+
+    // ----- Audio
+
+    /// Adds an audio track at the bottom: it plays audio clips.
+    pub fn add_audio_track(&mut self, name: &str) -> TrackId {
+        self.add_track(name, Instrument::Audio)
+    }
+
+    /// Adds an audio file to the project; returns its id (the file's own
+    /// id is ignored). Its sound is kept outside the model.
+    pub fn add_audio_file(&mut self, file: AudioFile) -> AudioId {
+        let id = AudioId(self.allocate_id());
+        self.audio.push(AudioFile {
+            id,
+            sample_rate: file.sample_rate.max(1),
+            channels: file.channels.clamp(1, 2),
+            ..file
+        });
+        id
+    }
+
+    /// An audio file by id.
+    pub fn audio_file(&self, id: AudioId) -> Option<&AudioFile> {
+        self.audio.iter().find(|f| f.id == id)
+    }
+
+    /// Places part of an audio file on a track: from frame `offset` of the
+    /// file, for `length`.
+    pub fn add_audio_clip(
+        &mut self,
+        track: TrackId,
+        start: Ticks,
+        length: Ticks,
+        audio: AudioId,
+        offset: u64,
+    ) -> Option<ClipId> {
+        self.audio_file(audio)?;
+        let id = ClipId(self.allocate_id());
+        let track = self.track_mut(track)?;
+        track.clips.push(Clip {
+            id,
+            start: start.max(Ticks::ZERO),
+            length: length.max(Ticks(1)),
+            content: ClipContent::audio(audio, offset),
+        });
+        track.clips.sort_by_key(|c| (c.start, c.id));
+        Some(id)
+    }
+
+    /// Forgets the audio files no clip plays any more.
+    pub fn prune_audio(&mut self) {
+        let used: HashSet<AudioId> = self
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.iter().filter_map(Clip::audio))
+            .collect();
+        self.audio.retain(|f| used.contains(&f.id));
+    }
+
+    /// How many seconds pass from `start` to `end` (negative if `end` is
+    /// earlier).
+    pub fn seconds_between(&self, start: Ticks, end: Ticks) -> f64 {
+        self.tempo.seconds_at(end) - self.tempo.seconds_at(start)
+    }
+
+    /// How long `seconds` of sound starting at `start` lasts on the
+    /// timeline (at least one tick).
+    pub fn ticks_for(&self, start: Ticks, seconds: f64) -> Ticks {
+        let from = self.tempo.seconds_at(start);
+        #[allow(clippy::cast_possible_truncation, reason = "tick positions fit easily")]
+        let end = self.tempo.ticks_at(from + seconds.max(0.0)).round() as i64;
+        Ticks((end - start.0).max(1))
+    }
+
+    /// Where an audio clip's sound runs out: the furthest its end can go.
+    pub fn audio_end(&self, clip: &Clip) -> Option<Ticks> {
+        let ClipContent::Audio { audio, offset, .. } = clip.content else {
+            return None;
+        };
+        let file = self.audio_file(audio)?;
+        let left = file.seconds() - file.seconds_in(offset);
+        Some(clip.start + self.ticks_for(clip.start, left))
+    }
+
+    /// Sets the tempo from `at` onwards (decision 0017: audio clips keep
+    /// their length in seconds, since their sound is not stretched; their
+    /// starts stay on their beats).
+    pub fn set_tempo(&mut self, at: Ticks, bpm: f64) {
+        let before = self.tempo.clone();
+        self.tempo.set(at, bpm);
+        if before == self.tempo {
+            return;
+        }
+        let tempo = self.tempo.clone();
+        for track in &mut self.tracks {
+            if !track.clips.iter().any(Clip::is_audio) {
+                continue;
+            }
+            for clip in Arc::make_mut(track)
+                .clips
+                .iter_mut()
+                .filter(|c| c.is_audio())
+            {
+                let seconds = before.seconds_at(clip.end()) - before.seconds_at(clip.start);
+                #[allow(clippy::cast_possible_truncation, reason = "tick positions fit easily")]
+                let end = tempo
+                    .ticks_at(tempo.seconds_at(clip.start) + seconds)
+                    .round() as i64;
+                clip.length = Ticks((end - clip.start.0).max(1));
+            }
         }
     }
 
@@ -491,17 +804,15 @@ impl Project {
         Some(id)
     }
 
-    /// The first track and the pattern of its first clip: what the editor
-    /// shows when a project opens.
+    /// The first track that plays a pattern, and the pattern of its first
+    /// pattern clip: what the editor shows when a project opens.
     pub fn first_pattern(&self) -> Option<(TrackId, PatternId)> {
         self.tracks.iter().find_map(|track| {
             track
                 .clips
                 .iter()
-                .map(|clip| match clip.content {
-                    ClipContent::Pattern { pattern, .. } => (track.id, pattern),
-                })
-                .next()
+                .find_map(Clip::pattern)
+                .map(|pattern| (track.id, pattern))
         })
     }
 
@@ -811,6 +1122,232 @@ mod tests {
             drums,
             Instrument::drums(crate::ACOUSTIC_KIT),
             "back to defaults stores nothing"
+        );
+    }
+
+    /// A song with an audio track holding one clip of a ten-second mono
+    /// file at 48 kHz, starting at bar 2 (the tempo is 120: a bar lasts two
+    /// seconds).
+    fn audio_song() -> (Project, TrackId, AudioId, ClipId) {
+        let mut project = Project::starter("P", "Piano");
+        let track = project.add_audio_track("Audio");
+        let audio = project.add_audio_file(AudioFile {
+            id: AudioId(0),
+            name: "Take".to_owned(),
+            file: "take.wav".to_owned(),
+            frames: 480_000,
+            sample_rate: 48_000,
+            channels: 1,
+        });
+        let start = Ticks::WHOLE;
+        let length = project.ticks_for(start, 10.0);
+        let clip = project
+            .add_audio_clip(track, start, length, audio, 0)
+            .unwrap();
+        (project, track, audio, clip)
+    }
+
+    fn audio_offset(project: &Project, clip: ClipId) -> u64 {
+        match project.clip(clip).unwrap().1.content {
+            ClipContent::Audio { offset, .. } => offset,
+            ClipContent::Pattern { .. } => panic!("not an audio clip"),
+        }
+    }
+
+    #[test]
+    fn audio_clips_last_as_long_as_their_sound() {
+        let (project, track, audio, clip) = audio_song();
+        let (_, c) = project.clip(clip).unwrap();
+        // Ten seconds at 120 BPM are 20 quarter notes.
+        assert_eq!(c.length, Ticks::quarters(20));
+        assert_eq!(
+            project.audio_end(c),
+            Some(Ticks::WHOLE + Ticks::quarters(20))
+        );
+        assert_eq!(project.song_end(), Ticks::WHOLE * 6);
+        assert!(project.track(track).unwrap().instrument.is_audio());
+        assert_eq!(project.audio_file(audio).unwrap().seconds(), 10.0);
+        assert_eq!(
+            project.first_pattern().map(|(t, _)| t),
+            Some(project.tracks[0].id),
+            "an audio track is never what opens first"
+        );
+    }
+
+    #[test]
+    fn splitting_an_audio_clip_carries_on_where_the_first_part_stops() {
+        let (mut project, _, _, clip) = audio_song();
+        project.update_clip(clip, |c| {
+            if let ClipContent::Audio {
+                fade_in, fade_out, ..
+            } = &mut c.content
+            {
+                *fade_in = 0.5;
+                *fade_out = 1.0;
+            }
+        });
+        let at = Ticks::WHOLE * 2; // One bar in: two seconds of sound.
+        let second = project.split_clip(clip, at).unwrap();
+        let (_, a) = project.clip(clip).map(|(t, c)| (t, *c)).unwrap();
+        let (_, b) = project.clip(second).map(|(t, c)| (t, *c)).unwrap();
+        assert_eq!((a.start, a.end()), (Ticks::WHOLE, at));
+        assert_eq!((b.start, b.end()), (at, Ticks::WHOLE + Ticks::quarters(20)));
+        assert_eq!(audio_offset(&project, second), 96_000, "two seconds in");
+        let fades = |c: &Clip| match c.content {
+            ClipContent::Audio {
+                fade_in, fade_out, ..
+            } => (fade_in, fade_out),
+            ClipContent::Pattern { .. } => (-1.0, -1.0),
+        };
+        assert_eq!(fades(&a), (0.5, 0.0), "the fade in stays at the start");
+        assert_eq!(fades(&b), (0.0, 1.0), "the fade out stays at the end");
+        assert!(
+            project.split_clip(clip, Ticks::WHOLE).is_none(),
+            "not inside"
+        );
+        assert_eq!(project.audio.len(), 1, "both parts play the same file");
+    }
+
+    #[test]
+    fn splitting_a_pattern_clip_keeps_the_pattern_in_place() {
+        let mut project = Project::starter("P", "Piano");
+        let (track, _) = project.first_pattern().unwrap();
+        let clip = project.track(track).unwrap().clips[0].id;
+        // The four-bar clip of a four-bar pattern, split after bar 1.
+        let second = project.split_clip(clip, Ticks::WHOLE).unwrap();
+        let (_, b) = project.clip(second).map(|(t, c)| (t, *c)).unwrap();
+        assert_eq!(
+            b.content,
+            ClipContent::Pattern {
+                pattern: project.first_pattern().unwrap().1,
+                offset: Ticks::WHOLE
+            }
+        );
+        // Trimming the second part's start back uncovers the pattern again.
+        project.trim_clip_start(second, Ticks::ZERO);
+        let (_, b) = project.clip(second).map(|(t, c)| (t, *c)).unwrap();
+        assert_eq!(b.start, Ticks::ZERO);
+        assert!(matches!(
+            b.content,
+            ClipContent::Pattern { offset, .. } if offset == Ticks::ZERO
+        ));
+    }
+
+    #[test]
+    fn trimming_an_audio_clip_moves_its_ends_but_not_its_sound() {
+        let (mut project, _, _, clip) = audio_song();
+        // The start one bar later: two seconds of sound are trimmed away.
+        project.trim_clip_start(clip, Ticks::WHOLE * 2);
+        let (_, c) = project.clip(clip).map(|(t, c)| (t, *c)).unwrap();
+        assert_eq!(c.start, Ticks::WHOLE * 2);
+        assert_eq!(c.end(), Ticks::WHOLE + Ticks::quarters(20), "the end stays");
+        assert_eq!(audio_offset(&project, clip), 96_000);
+        // Back to the very start of the song: no earlier than the file's start.
+        project.trim_clip_start(clip, Ticks::ZERO);
+        let (_, c) = project.clip(clip).map(|(t, c)| (t, *c)).unwrap();
+        assert_eq!(c.start, Ticks::WHOLE);
+        assert_eq!(audio_offset(&project, clip), 0);
+        // The end cannot go past the end of the sound.
+        project.set_clip_length(clip, Ticks::WHOLE * 100);
+        let (_, c) = project.clip(clip).map(|(t, c)| (t, *c)).unwrap();
+        assert_eq!(c.end(), Ticks::WHOLE + Ticks::quarters(20));
+        project.set_clip_length(clip, Ticks::WHOLE);
+        assert_eq!(project.clip(clip).unwrap().1.length, Ticks::WHOLE);
+    }
+
+    #[test]
+    fn a_new_take_replaces_what_it_covers() {
+        let (mut project, track, audio, clip) = audio_song();
+        // Bars 2 to 7 hold the clip; a take over bars 3 and 4 splits it.
+        let take = project
+            .add_audio_clip(track, Ticks::WHOLE * 2, Ticks::WHOLE * 2, audio, 0)
+            .unwrap();
+        project.clear_span(track, Ticks::WHOLE * 2, Ticks::WHOLE * 4, Some(take));
+        let spans: Vec<(Ticks, Ticks)> = project
+            .track(track)
+            .unwrap()
+            .clips
+            .iter()
+            .map(|c| (c.start, c.end()))
+            .collect();
+        assert_eq!(
+            spans,
+            vec![
+                (Ticks::WHOLE, Ticks::WHOLE * 2),
+                (Ticks::WHOLE * 2, Ticks::WHOLE * 4),
+                (Ticks::WHOLE * 4, Ticks::WHOLE + Ticks::quarters(20)),
+            ]
+        );
+        let last = project.track(track).unwrap().clips[2].id;
+        assert_eq!(
+            audio_offset(&project, last),
+            6 * 48_000,
+            "the old sound carries on"
+        );
+        // A take over everything removes the old clips.
+        project.clear_span(track, Ticks::ZERO, Ticks::WHOLE * 10, Some(take));
+        assert_eq!(project.track(track).unwrap().clips.len(), 1);
+        assert!(project.clip(clip).is_none());
+    }
+
+    #[test]
+    fn audio_files_go_when_no_clip_plays_them() {
+        let (mut project, track, audio, clip) = audio_song();
+        let copy = project
+            .add_audio_clip(track, Ticks::WHOLE * 8, Ticks::WHOLE, audio, 0)
+            .unwrap();
+        project.remove_clip(clip);
+        assert!(
+            project.audio_file(audio).is_some(),
+            "still played by the copy"
+        );
+        project.remove_clip(copy);
+        assert!(project.audio_file(audio).is_none());
+
+        let (mut project, track, audio, _) = audio_song();
+        project.remove_track(track);
+        assert!(project.audio_file(audio).is_none());
+        // Ids stay unique after loading.
+        let (mut loaded, _, audio, _) = audio_song();
+        loaded.next_id = 1;
+        loaded.repair_id_counter();
+        assert!(loaded.allocate_id() > audio.0);
+    }
+
+    #[test]
+    fn audio_clips_move_only_between_audio_tracks() {
+        let (mut project, track, _, clip) = audio_song();
+        let other = project.add_audio_track("Audio 2");
+        let piano = project.first_pattern().unwrap().0;
+        assert!(
+            !project.move_clip_to_track(clip, piano),
+            "not onto an instrument"
+        );
+        assert!(project.move_clip_to_track(clip, other));
+        assert_eq!(project.clip(clip).unwrap().0, other);
+        assert!(
+            project.track(track).unwrap().clips.is_empty(),
+            "it left its old track"
+        );
+        let pattern_clip = project.track(piano).unwrap().clips[0].id;
+        assert!(
+            !project.move_clip_to_track(pattern_clip, track),
+            "patterns stay home"
+        );
+    }
+
+    #[test]
+    fn a_tempo_change_keeps_audio_clips_in_seconds() {
+        let (mut project, _, _, clip) = audio_song();
+        let pattern_clip = project.tracks[0].clips[0];
+        project.set_tempo(Ticks::ZERO, 60.0);
+        let (_, c) = project.clip(clip).map(|(t, c)| (t, *c)).unwrap();
+        assert_eq!(c.start, Ticks::WHOLE, "the start stays on its beat");
+        assert_eq!(c.length, Ticks::quarters(10), "ten seconds at 60 BPM");
+        assert!((project.seconds_between(c.start, c.end()) - 10.0).abs() < 1e-9);
+        assert_eq!(
+            project.tracks[0].clips[0], pattern_clip,
+            "patterns follow the beat"
         );
     }
 }

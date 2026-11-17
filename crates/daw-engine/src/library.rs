@@ -196,8 +196,11 @@ impl SoundLibrary {
                     (Box::new(sampler), Some(problem))
                 }
             },
-            // The engine loads plugins itself (they have a main-thread half).
-            InstrumentSpec::Plugin(_) => (Box::new(crate::plugins::Silence), None),
+            // The engine loads plugins itself (they have a main-thread half);
+            // an audio track has no instrument (its clips are mixed in).
+            InstrumentSpec::Plugin(_) | InstrumentSpec::Audio => {
+                (Box::new(crate::plugins::Silence), None)
+            }
         }
     }
 }
@@ -209,7 +212,9 @@ pub(crate) fn instrument_settings(spec: &InstrumentSpec) -> Option<InstrumentSet
         InstrumentSpec::Drums { pads, .. } => {
             Some(InstrumentSettings::Drums(Box::new(pad_table(pads))))
         }
-        InstrumentSpec::SoundFont { .. } | InstrumentSpec::Plugin(_) => None,
+        InstrumentSpec::SoundFont { .. } | InstrumentSpec::Plugin(_) | InstrumentSpec::Audio => {
+            None
+        }
     }
 }
 

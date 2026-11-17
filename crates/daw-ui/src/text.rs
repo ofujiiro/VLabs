@@ -529,6 +529,8 @@ pub const ADD_DRUMS: &str = "Drums";
 pub const ADD_DRUMS_HINT: &str = "Add a drum track";
 pub const ADD_PIANO: &str = "Piano";
 pub const ADD_PIANO_HINT: &str = "Add a piano track";
+/// What an audio track's header says it plays.
+pub const AUDIO_TRACK_KIND: &str = "Recorded and imported sound";
 pub const MUTE_SHORT: &str = "M";
 pub const SOLO_SHORT: &str = "S";
 pub const MUTE_HINT: &str = "Silence this track";

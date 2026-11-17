@@ -23,6 +23,7 @@ considered instead.
 | [0014](0014-song-patterns-and-mixer-screens.md) | Phase 2 screens: song, step sequencer, mixer | Accepted |
 | [0015](0015-plugin-hosting.md) | Hosting plugins: one boundary, two halves, a scanner process | Accepted |
 | [0016](0016-plugin-screens.md) | Plugin screens: a chooser, separate editor windows, automation lanes | Accepted |
+| [0017](0017-audio-clips.md) | Audio: clips on the song timeline, recorded and imported sound | Accepted |
 
 ## Writing a new record
 

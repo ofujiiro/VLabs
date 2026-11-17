@@ -916,8 +916,8 @@ impl SongView {
         if area.height() < 4.0 {
             return;
         }
-        let offset = match clip.content {
-            daw_model::ClipContent::Pattern { offset, .. } => offset,
+        let daw_model::ClipContent::Pattern { offset, .. } = clip.content else {
+            return;
         };
         // Drums: one line per sound the pattern uses, top to bottom in the
         // step grid's order. Other instruments: the notes' pitch range.
@@ -1270,6 +1270,7 @@ impl SongView {
             Instrument::Drums { kit, .. } => text::kit_description(text::kit_name(kit)),
             Instrument::SoundFont { .. } => text::FIRST_TRACK.to_owned(),
             Instrument::Plugin(setup) => text::plugin_track(&setup.plugin.name, missing),
+            Instrument::Audio => text::AUDIO_TRACK_KIND.to_owned(),
         };
         child.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;

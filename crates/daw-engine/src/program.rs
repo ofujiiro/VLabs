@@ -420,7 +420,9 @@ pub(crate) fn compile(
             let pan = track.strip.pan.clamp(-1.0, 1.0);
             let mut notes = Vec::new();
             for clip in &track.clips {
-                let ClipContent::Pattern { pattern, offset } = clip.content;
+                let ClipContent::Pattern { pattern, offset } = clip.content else {
+                    continue;
+                };
                 let Some(pattern) = project.pattern(pattern) else {
                     continue;
                 };
