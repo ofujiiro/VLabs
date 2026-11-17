@@ -3,6 +3,7 @@
 //! The playback program: the project compiled into a form the audio thread
 //! can play without allocating or searching.
 
+use daw_dsp::audio::AudioBuffer;
 use daw_dsp::effects::{
     CompressorParams, DelayParams, EffectParams, EqParams, LimiterParams, ReverbParams,
 };
@@ -11,6 +12,10 @@ use daw_model::{
     PatternId, Project, Region, TempoMap, Ticks, TrackId, seconds_per_tick,
 };
 use std::sync::Arc;
+
+/// Every clip edge fades over this long, so a cut never clicks (decision
+/// 0017), unless the clip carries on exactly where the one before stops.
+const DECLICK_SECONDS: f64 = 0.0015;
 
 /// What the transport plays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,6 +121,41 @@ pub(crate) struct NoteSpan {
     pub velocity: f32,
 }
 
+/// An audio clip as the audio thread plays it: positions are frames of the
+/// song at the engine's rate, counted from its start.
+#[derive(Clone, Debug)]
+pub(crate) struct AudioSpan {
+    pub start: i64,
+    pub end: i64,
+    pub sound: Arc<AudioBuffer>,
+    /// The frame of the sound heard at `start`.
+    pub offset: f64,
+    /// Frames of the sound per frame of the song (1 at the engine's rate).
+    pub step: f64,
+    pub gain: f32,
+    /// Frames of fade at either end.
+    pub fade_in: i64,
+    pub fade_out: i64,
+}
+
+impl AudioSpan {
+    /// The clip's volume `at` frames after its start: its gain, through its
+    /// fades (an equal-power curve).
+    #[allow(clippy::cast_precision_loss, reason = "fade lengths are small")]
+    pub fn gain_at(&self, at: i64) -> f32 {
+        let mut gain = self.gain;
+        if at < self.fade_in {
+            gain *= (std::f32::consts::FRAC_PI_2 * (at as f32 + 0.5) / self.fade_in as f32).sin();
+        }
+        let left = self.end - self.start - at;
+        if left <= self.fade_out {
+            gain *=
+                (std::f32::consts::FRAC_PI_2 * (left as f32 - 0.5) / self.fade_out as f32).sin();
+        }
+        gain
+    }
+}
+
 /// One track's part of the program.
 #[derive(Clone, Debug)]
 pub(crate) struct TrackProgram {
@@ -141,6 +181,66 @@ pub(crate) struct TrackProgram {
     pub automation: Vec<CompiledLane>,
     /// Built-in effects with automated settings.
     pub automated_effects: Vec<AutomatedEffect>,
+    /// The track's audio clips, sorted by start.
+    pub audio: Vec<AudioSpan>,
+    /// For each audio clip, the furthest end of it and those before it (to
+    /// find the clips a block reaches quickly).
+    pub audio_reach: Vec<i64>,
+}
+
+impl TrackProgram {
+    /// Whether any audio clip sounds between two frames of the song.
+    pub fn audio_between(&self, from: i64, to: i64) -> bool {
+        let first = self.audio_reach.partition_point(|&reach| reach <= from);
+        self.audio[first..]
+            .iter()
+            .take_while(|span| span.start < to)
+            .any(|span| span.end > from)
+    }
+
+    /// Adds the track's audio clips from frame `from` of the song into the
+    /// buffers (both the same length). Real-time safe.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        reason = "frame positions are far below 2^52"
+    )]
+    pub fn mix_audio(&self, from: i64, left: &mut [f32], right: &mut [f32]) {
+        let to = from + left.len() as i64;
+        let first = self.audio_reach.partition_point(|&reach| reach <= from);
+        for span in self.audio[first..].iter().take_while(|s| s.start < to) {
+            let (start, end) = (span.start.max(from), span.end.min(to));
+            let (sound_left, sound_right) = (span.sound.left(), span.sound.right());
+            let frames = sound_left.len();
+            for at in start..end {
+                let index = (at - from) as usize;
+                let gain = span.gain_at(at - span.start);
+                let position = span.offset + (at - span.start) as f64 * span.step;
+                let (l, r) = if (span.step - 1.0).abs() < f64::EPSILON {
+                    let frame = position.round();
+                    if frame < 0.0 || frame as usize >= frames {
+                        continue;
+                    }
+                    (sound_left[frame as usize], sound_right[frame as usize])
+                } else {
+                    // At another rate: between two frames.
+                    if position < 0.0 || position as usize + 1 >= frames {
+                        continue;
+                    }
+                    let frame = position as usize;
+                    let t = (position - frame as f64) as f32;
+                    (
+                        sound_left[frame] + (sound_left[frame + 1] - sound_left[frame]) * t,
+                        sound_right[frame] + (sound_right[frame + 1] - sound_right[frame]) * t,
+                    )
+                };
+                left[index] += l * gain;
+                right[index] += r * gain;
+            }
+        }
+    }
 }
 
 /// Output gains for a volume and a pan position: the centre is at full level
@@ -396,13 +496,114 @@ fn lanes(
     (lanes, effects)
 }
 
+/// A track's audio clips, ready for the audio thread. Clips whose sound
+/// has not been given to the engine yet are left out (they are silent until
+/// it arrives and the song is compiled again).
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    reason = "frame positions are far below 2^52"
+)]
+fn audio_spans(
+    project: &Project,
+    track: &daw_model::Track,
+    sample_rate: u32,
+    sound_of: &impl Fn(&str) -> Option<Arc<AudioBuffer>>,
+) -> (Vec<AudioSpan>, Vec<i64>) {
+    let rate = f64::from(sample_rate.max(1));
+    let frame_at = |tick: Ticks| (project.tempo.seconds_at(tick) * rate).round() as i64;
+    let mut spans: Vec<(AudioSpan, f32, f32)> = Vec::new();
+    for clip in &track.clips {
+        let ClipContent::Audio {
+            audio,
+            offset,
+            gain,
+            fade_in,
+            fade_out,
+        } = clip.content
+        else {
+            continue;
+        };
+        let Some(file) = project.audio_file(audio) else {
+            continue;
+        };
+        let Some(sound) = sound_of(&file.file) else {
+            continue;
+        };
+        let (start, end) = (frame_at(clip.start), frame_at(clip.end()));
+        if end <= start {
+            continue;
+        }
+        let sound_rate = f64::from(sound.sample_rate());
+        let span = AudioSpan {
+            start,
+            end,
+            offset: file.seconds_in(offset) * sound_rate,
+            step: sound_rate / rate,
+            sound,
+            gain: if gain.is_finite() { gain.max(0.0) } else { 1.0 },
+            fade_in: 0,
+            fade_out: 0,
+        };
+        spans.push((span, fade_in, fade_out));
+    }
+    spans.sort_by_key(|(span, _, _)| span.start);
+    let declick = (DECLICK_SECONDS * rate).round() as i64;
+    let to_frames = |seconds: f32| {
+        if seconds.is_finite() {
+            (f64::from(seconds.max(0.0)) * rate).round() as i64
+        } else {
+            0
+        }
+    };
+    let continues = |a: &AudioSpan, b: &AudioSpan| {
+        b.start == a.end
+            && Arc::ptr_eq(&a.sound, &b.sound)
+            && (b.offset - (a.offset + (a.end - a.start) as f64 * a.step)).abs() < 1.0
+    };
+    let mut done: Vec<AudioSpan> = Vec::with_capacity(spans.len());
+    for index in 0..spans.len() {
+        let joined_before = index > 0 && continues(&spans[index - 1].0, &spans[index].0);
+        let joined_after =
+            index + 1 < spans.len() && continues(&spans[index].0, &spans[index + 1].0);
+        let (span, fade_in, fade_out) = &spans[index];
+        let mut span = span.clone();
+        let edge_in = if joined_before { 0 } else { declick };
+        let edge_out = if joined_after { 0 } else { declick };
+        let (mut fade_in, mut fade_out) = (
+            to_frames(*fade_in).max(edge_in),
+            to_frames(*fade_out).max(edge_out),
+        );
+        let length = span.end - span.start;
+        if fade_in + fade_out > length {
+            // Fades longer than the clip share it.
+            let total = fade_in + fade_out;
+            fade_in = fade_in * length / total;
+            fade_out = length - fade_in;
+        }
+        span.fade_in = fade_in;
+        span.fade_out = fade_out;
+        done.push(span);
+    }
+    let mut reach = Vec::with_capacity(done.len());
+    let mut furthest = i64::MIN;
+    for span in &done {
+        furthest = furthest.max(span.end);
+        reach.push(furthest);
+    }
+    (done, reach)
+}
+
 /// Compiles a project. `slot_of` gives the instrument slot of each track
 /// (tracks without one are left out), `effect_index` the effect table
-/// entry of each effect (effects without one are left out).
+/// entry of each effect (effects without one are left out), `sound_of` the
+/// sound of each audio file (by stored name).
 pub(crate) fn compile(
     project: &Project,
+    sample_rate: u32,
     slot_of: impl Fn(TrackId) -> Option<usize>,
     effect_index: impl Fn(EffectId) -> Option<usize>,
+    sound_of: impl Fn(&str) -> Option<Arc<AudioBuffer>>,
 ) -> Program {
     let bpm = project.tempo.initial_bpm();
     let any_solo = project.tracks.iter().any(|t| t.strip.solo);
@@ -453,6 +654,7 @@ pub(crate) fn compile(
             notes.sort_by_key(|n| (n.start, n.key));
             let (gain_left, gain_right) = pan_gains(gain, pan);
             let (automation, automated_effects) = lanes(track, bpm, &effect_index);
+            let (audio, audio_reach) = audio_spans(project, track, sample_rate, &sound_of);
             Some(TrackProgram {
                 slot,
                 notes,
@@ -466,6 +668,8 @@ pub(crate) fn compile(
                 effects: chain(&track.effects, bpm, &effect_index),
                 automation,
                 automated_effects,
+                audio,
+                audio_reach,
             })
         })
         .collect();
@@ -503,7 +707,13 @@ mod tests {
         project.add_note(pattern, note(Ticks::ZERO, Ticks::QUARTER, 60));
         project.add_note(pattern, note(Ticks::QUARTER * 3, Ticks::QUARTER * 2, 64));
         // The starter clip is four bars long: the one-bar pattern plays four times.
-        let program = compile(&project, |id| (id == track).then_some(0), |_| None);
+        let program = compile(
+            &project,
+            48_000,
+            |id| (id == track).then_some(0),
+            |_| None,
+            |_| None,
+        );
         let notes = &program.tracks[0].notes;
         assert_eq!(notes.len(), 8);
         assert_eq!(notes[2].start, Ticks::WHOLE);
@@ -517,12 +727,24 @@ mod tests {
         let (track, _) = project.first_pattern().unwrap();
         let other = project.add_track("Other", daw_model::Instrument::builtin_piano());
         project.track_mut(track).unwrap().strip.solo = true;
-        let program = compile(&project, |id| Some(usize::from(id != track)), |_| None);
+        let program = compile(
+            &project,
+            48_000,
+            |id| Some(usize::from(id != track)),
+            |_| None,
+            |_| None,
+        );
         assert_eq!(program.tracks[0].gain_left, 1.0);
         assert_eq!(program.tracks[1].gain_left, 0.0, "another track is soloed");
         project.track_mut(track).unwrap().strip.solo = false;
         project.track_mut(other).unwrap().strip.mute = true;
-        let program = compile(&project, |id| Some(usize::from(id != track)), |_| None);
+        let program = compile(
+            &project,
+            48_000,
+            |id| Some(usize::from(id != track)),
+            |_| None,
+            |_| None,
+        );
         assert_eq!(program.tracks[1].gain_right, 0.0, "muted");
     }
 
@@ -531,7 +753,7 @@ mod tests {
         let mut project = Project::starter("P", "T");
         let (track, _) = project.first_pattern().unwrap();
         project.track_mut(track).unwrap().strip.pan = 0.5;
-        let program = compile(&project, |_| Some(0), |_| None);
+        let program = compile(&project, 48_000, |_| Some(0), |_| None, |_| None);
         assert_eq!(
             (program.tracks[0].gain_left, program.tracks[0].gain_right),
             (0.5, 1.0)

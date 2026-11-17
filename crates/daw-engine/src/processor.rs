@@ -17,7 +17,7 @@ use daw_model::{Region, TICKS_PER_QUARTER, Ticks};
 
 use crate::messages::{
     Command, EngineEvent, Garbage, LiveNote, NO_TARGET, Outgoing, RECORD_ACTIVE, RECORD_COUNT_IN,
-    RECORD_IDLE, Shared,
+    RECORD_IDLE, RecordedChunk, Shared,
 };
 use crate::plugins::EffectSlot;
 use crate::program::{LaneTarget, Program, pan_gains};
@@ -75,8 +75,9 @@ impl SlotState {
 #[derive(Clone, Copy)]
 enum Recording {
     Idle,
+    /// Counting in, before recording notes into a slot, or sound (`None`).
     CountIn {
-        slot: usize,
+        slot: Option<usize>,
         /// Count-in position, in ticks from its start.
         position: f64,
         length: f64,
@@ -84,9 +85,12 @@ enum Recording {
         bar: f64,
         beat: f64,
     },
+    /// Recording notes into a slot.
     Active {
         slot: usize,
     },
+    /// Recording sound from the input.
+    Audio,
 }
 
 /// The audio thread's side of the engine. Call [`EngineProcessor::process`]
@@ -134,9 +138,63 @@ pub struct EngineProcessor {
     meter_peaks: Vec<f32>,
     /// Garbage that could not be sent yet because the queue was full.
     pending: Option<Garbage>,
+    /// Sound from the input device, as stereo frames.
+    input: rtrb::Consumer<f32>,
+    /// The take of sound being recorded.
+    take: Take,
+}
+
+/// A take of sound on its way to the recorder.
+struct Take {
+    /// Where the sound of takes goes, chunk by chunk.
+    recorded: rtrb::Producer<RecordedChunk>,
+    /// The chunk being filled.
+    chunk: RecordedChunk,
+    /// The take being recorded (or the last one).
+    number: u32,
+    /// Its frames so far: passed on, and lost because the recorder fell
+    /// behind.
+    frames: u64,
+    dropped: u64,
+}
+
+impl Take {
+    /// Starts the next take.
+    fn begin(&mut self) {
+        self.number = self.number.wrapping_add(1);
+        self.frames = 0;
+        self.dropped = 0;
+        self.chunk.clear();
+    }
+
+    fn push(&mut self, left: f32, right: f32) {
+        if self.chunk.push(left, right) {
+            self.flush();
+        }
+    }
+
+    /// Passes the chunk being filled on to the recorder.
+    fn flush(&mut self) {
+        let frames = self.chunk.frames() as u64;
+        if frames == 0 {
+            return;
+        }
+        self.chunk.take = self.number;
+        self.chunk.first = self.frames + self.dropped;
+        if self.recorded.push(self.chunk).is_ok() {
+            self.frames += frames;
+        } else {
+            self.dropped += frames;
+        }
+        self.chunk.clear();
+    }
 }
 
 impl EngineProcessor {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the queues the processor is connected by"
+    )]
     pub(crate) fn new(
         sample_rate: u32,
         max_block: usize,
@@ -144,6 +202,8 @@ impl EngineProcessor {
         live: rtrb::Consumer<LiveNote>,
         outgoing: rtrb::Producer<Outgoing>,
         shared: Arc<Shared>,
+        input: rtrb::Consumer<f32>,
+        recorded: rtrb::Producer<RecordedChunk>,
     ) -> Self {
         let max_block = max_block.max(1);
         Self {
@@ -177,6 +237,14 @@ impl EngineProcessor {
             effects: (0..MAX_EFFECTS).map(|_| None).collect(),
             meter_peaks: vec![0.0; MAX_SLOTS],
             pending: None,
+            input,
+            take: Take {
+                recorded,
+                chunk: RecordedChunk::EMPTY,
+                number: 0,
+                frames: 0,
+                dropped: 0,
+            },
         }
     }
 
@@ -188,6 +256,7 @@ impl EngineProcessor {
         let started = Instant::now();
         let channels = channels.max(1);
         self.handle_commands();
+        self.drain_input();
 
         let frames = output.len() / channels;
         let mut peak = 0.0_f32;
@@ -241,6 +310,28 @@ impl EngineProcessor {
         let load =
             (started.elapsed().as_secs_f64() * self.sample_rate / frames.max(1) as f64) as f32;
         Shared::store_f32(&self.shared.load, load);
+    }
+
+    /// Takes the sound the input delivered since the last block: passed on
+    /// while recording sound, let go otherwise (so it never piles up and
+    /// delays what follows).
+    fn drain_input(&mut self) {
+        let available = self.input.slots() & !1;
+        if available == 0 {
+            return;
+        }
+        let Ok(chunk) = self.input.read_chunk(available) else {
+            return;
+        };
+        if matches!(self.recording, Recording::Audio) {
+            let (first, second) = chunk.as_slices();
+            for part in [first, second] {
+                for frame in part.as_chunks::<2>().0 {
+                    self.take.push(frame[0], frame[1]);
+                }
+            }
+        }
+        chunk.commit_all();
     }
 
     fn send(&mut self, message: Outgoing) {
@@ -404,7 +495,8 @@ impl EngineProcessor {
             Command::Record {
                 slot,
                 count_in_bars,
-            } => self.start_recording(slot, count_in_bars),
+            } => self.start_recording(Some(slot), count_in_bars),
+            Command::RecordAudio { count_in_bars } => self.start_recording(None, count_in_bars),
             Command::NoteOn {
                 slot,
                 key,
@@ -445,7 +537,9 @@ impl EngineProcessor {
         }
     }
 
-    fn start_recording(&mut self, slot: usize, count_in_bars: u32) {
+    /// Starts recording notes into a slot, or sound (`None`), after a
+    /// count-in.
+    fn start_recording(&mut self, slot: Option<usize>, count_in_bars: u32) {
         if count_in_bars == 0 {
             self.begin_recording(slot);
             return;
@@ -483,8 +577,11 @@ impl EngineProcessor {
             .store(RECORD_COUNT_IN, Ordering::Relaxed);
     }
 
-    fn begin_recording(&mut self, slot: usize) {
-        self.recording = Recording::Active { slot };
+    fn begin_recording(&mut self, slot: Option<usize>) {
+        self.recording = match slot {
+            Some(slot) => Recording::Active { slot },
+            None => Recording::Audio,
+        };
         self.recorded_held = [None; 128];
         self.shared
             .recording
@@ -496,13 +593,32 @@ impl EngineProcessor {
             self.reset_cursors();
         }
         let at = self.position_ticks();
-        self.send(Outgoing::Event(EngineEvent::RecordingStarted { at }));
+        if slot.is_some() {
+            self.send(Outgoing::Event(EngineEvent::RecordingStarted { at }));
+        } else {
+            self.take.begin();
+            self.send(Outgoing::Event(EngineEvent::AudioRecordingStarted {
+                take: self.take.number,
+                at,
+                sample_rate: self.shared.input_rate.load(Ordering::Relaxed),
+                channels: self.shared.input_channels.load(Ordering::Relaxed),
+                latency: Shared::load_f32(&self.shared.record_latency),
+            }));
+        }
     }
 
     fn stop(&mut self) {
         let was_recording = !matches!(self.recording, Recording::Idle);
         if matches!(self.recording, Recording::Active { .. }) {
             self.close_all_recorded_notes(self.position_ticks());
+        }
+        if matches!(self.recording, Recording::Audio) {
+            self.take.flush();
+            self.send(Outgoing::Event(EngineEvent::AudioRecordingStopped {
+                take: self.take.number,
+                frames: self.take.frames,
+                dropped: self.take.dropped,
+            }));
         }
         self.recording = Recording::Idle;
         self.shared.recording.store(RECORD_IDLE, Ordering::Relaxed);
@@ -882,6 +998,19 @@ impl EngineProcessor {
         }
         let position =
             self.song_position(song.map_or(self.position, |(from, _)| from), song.is_some());
+        // Where the song is, in frames, for the tracks' audio clips.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "frame positions fit easily"
+        )]
+        let frame = match (song, &self.program) {
+            (Some((from, _)), Some(program)) => {
+                Some((program.tempo.seconds_at(from) * self.sample_rate).round() as i64)
+            }
+            _ => None,
+        };
+        #[allow(clippy::cast_possible_wrap, reason = "block sizes are small")]
+        let block = len as i64;
         for slot in 0..MAX_SLOTS {
             if self.instruments[slot].is_none() {
                 continue;
@@ -897,6 +1026,12 @@ impl EngineProcessor {
             let automated = match (song, track_index) {
                 (Some((from, _)), Some(index)) => self.automate(index, slot, from),
                 _ => None,
+            };
+            let audio = match (&self.program, track_index, frame) {
+                (Some(program), Some(index), Some(frame)) => {
+                    program.tracks[index].audio_between(frame, frame + block)
+                }
+                _ => false,
             };
             let settle = self.settle_gains && song.is_some();
             let (start_gains, target_gains, has_effects) = match (&self.program, track_index) {
@@ -918,7 +1053,7 @@ impl EngineProcessor {
             let Some(instrument) = self.instruments[slot].as_mut() else {
                 continue;
             };
-            let sounding = count > 0 || instrument.is_sounding();
+            let sounding = count > 0 || instrument.is_sounding() || audio;
             // A track with effects keeps running them: their tails (reverb,
             // echoes) go on after the instrument falls silent.
             if !sounding && !has_effects {
@@ -951,6 +1086,12 @@ impl EngineProcessor {
             } else {
                 left.fill(0.0);
                 right.fill(0.0);
+            }
+            if audio
+                && let (Some(program), Some(index), Some(frame)) =
+                    (&self.program, track_index, frame)
+            {
+                program.tracks[index].mix_audio(frame, left, right);
             }
             if has_effects && let (Some(program), Some(index)) = (&self.program, track_index) {
                 for effect in program.tracks[index].effects.iter().filter(|e| e.enabled) {
@@ -988,8 +1129,8 @@ impl EngineProcessor {
         }
         if let Some((from, to)) = song {
             let metronome = match self.recording {
-                Recording::Active { .. } => self.metronome_recording,
-                _ => self.metronome_playback,
+                Recording::Active { .. } | Recording::Audio => self.metronome_recording,
+                Recording::Idle | Recording::CountIn { .. } => self.metronome_playback,
             };
             if metronome {
                 self.metronome(offset, len, from, to);

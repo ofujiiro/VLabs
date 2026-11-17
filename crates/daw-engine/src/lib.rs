@@ -23,7 +23,7 @@ use daw_plugin_host::{AudioConfig, LoadedPlugin};
 pub use daw_plugin_host::scan::{ScanProblem, System as PluginSystem};
 pub use daw_plugin_host::{Format as PluginFileFormat, Kind as PluginKind, ParamInfo, PluginInfo};
 pub use library::SoundLibrary;
-pub use messages::EngineEvent;
+pub use messages::{CHUNK_FRAMES, EngineEvent, RecordedChunk};
 pub use plugins::PluginTarget;
 pub use processor::{EngineProcessor, MAX_EFFECTS, MAX_SLOTS};
 pub use program::PlaybackScope;
@@ -124,6 +124,81 @@ impl Default for EngineConfig {
 /// Room in the queue from MIDI keyboards to the audio thread.
 const LIVE_QUEUE: usize = 2048;
 
+/// Room in the queue from the input device to the audio thread, in samples
+/// (stereo frames): over a second at 48 kHz. The audio thread empties it
+/// every block.
+const INPUT_QUEUE: usize = 1 << 17;
+
+/// Room in the queue of recorded chunks, from the audio thread to the
+/// recorder: over five seconds at 48 kHz.
+const RECORDED_QUEUE: usize = 1024;
+
+/// The input device's side of the engine: hand it what the microphone or
+/// interface delivers. Owned by the input device's callback; every call is
+/// real-time safe.
+pub struct InputPort {
+    producer: rtrb::Producer<f32>,
+    shared: Arc<Shared>,
+}
+
+impl InputPort {
+    /// Sound from the input: interleaved frames of `channels` samples at
+    /// `sample_rate`. The first two channels are kept (a mono input is
+    /// heard on both sides). If the engine has stopped taking sound, what
+    /// does not fit is dropped.
+    pub fn push(&mut self, samples: &[f32], channels: usize, sample_rate: u32) {
+        let channels = channels.max(1);
+        let frames = samples.len() / channels;
+        if frames == 0 {
+            return;
+        }
+        self.shared.input_rate.store(sample_rate, Ordering::Relaxed);
+        #[allow(clippy::cast_possible_truncation, reason = "clamped to two")]
+        self.shared
+            .input_channels
+            .store(channels.min(2) as u8, Ordering::Relaxed);
+        self.shared
+            .input_frames
+            .fetch_add(frames as u64, Ordering::Relaxed);
+        let peak = samples.iter().fold(0.0_f32, |peak, s| {
+            if s.is_finite() {
+                peak.max(s.abs())
+            } else {
+                peak
+            }
+        });
+        self.shared
+            .input_peak
+            .fetch_max(peak.to_bits(), Ordering::Relaxed);
+        let room = self.producer.slots() / 2;
+        let take = frames.min(room);
+        if take == 0 {
+            return;
+        }
+        if let Ok(chunk) = self.producer.write_chunk_uninit(take * 2) {
+            let pairs = samples.chunks_exact(channels).take(take).flat_map(|frame| {
+                let left = frame[0];
+                let right = if channels > 1 { frame[1] } else { left };
+                [left, right]
+            });
+            chunk.fill_from_iter(pairs);
+        }
+    }
+}
+
+/// The recorder's side of the engine: the sound of takes, in chunks, as the
+/// audio thread passes them on while recording sound.
+pub struct RecordedAudio {
+    consumer: rtrb::Consumer<RecordedChunk>,
+}
+
+impl RecordedAudio {
+    /// The next chunk, if one is waiting.
+    pub fn pop(&mut self) -> Option<RecordedChunk> {
+        self.consumer.pop().ok()
+    }
+}
+
 /// Sends notes from MIDI keyboards straight to the audio thread, to the
 /// track chosen with [`Engine::set_live_target`]. Cheap to share between
 /// MIDI threads; the audio thread never waits for it.
@@ -198,6 +273,10 @@ pub struct Engine {
     /// When each plugin was loaded: just after, the changes it reports are
     /// about taking its settings, not changes made by the person.
     loaded_at: HashMap<PluginTarget, Instant>,
+    /// The input device's end of the input queue, until it is taken.
+    input_port: Option<InputPort>,
+    /// The recorder's end of the recorded queue, until it is taken.
+    recorded: Option<RecordedAudio>,
 }
 
 impl Engine {
@@ -207,6 +286,8 @@ impl Engine {
         let (command_tx, command_rx) = rtrb::RingBuffer::new(COMMAND_QUEUE);
         let (outgoing_tx, outgoing_rx) = rtrb::RingBuffer::new(OUTGOING_QUEUE);
         let (live_tx, live_rx) = rtrb::RingBuffer::new(LIVE_QUEUE);
+        let (input_tx, input_rx) = rtrb::RingBuffer::new(INPUT_QUEUE);
+        let (recorded_tx, recorded_rx) = rtrb::RingBuffer::new(RECORDED_QUEUE);
         let shared = Shared::new();
         let processor = EngineProcessor::new(
             config.sample_rate,
@@ -215,12 +296,13 @@ impl Engine {
             live_rx,
             outgoing_tx,
             Arc::clone(&shared),
+            input_rx,
+            recorded_tx,
         );
         let engine = Self {
             config,
             commands: command_tx,
             outgoing: outgoing_rx,
-            shared,
             library,
             slots: vec![None; MAX_SLOTS],
             effects: vec![None; MAX_EFFECTS],
@@ -233,6 +315,14 @@ impl Engine {
             missing: HashSet::new(),
             retry_missing: false,
             loaded_at: HashMap::new(),
+            input_port: Some(InputPort {
+                producer: input_tx,
+                shared: Arc::clone(&shared),
+            }),
+            recorded: Some(RecordedAudio {
+                consumer: recorded_rx,
+            }),
+            shared,
         };
         (engine, processor)
     }
@@ -251,6 +341,62 @@ impl Engine {
     /// The sounds the engine plays from (clone it to render offline).
     pub fn library(&self) -> &SoundLibrary {
         &self.library
+    }
+
+    // ----- Audio files and recording sound
+
+    /// Gives the engine the sound of an audio file, by the name it is stored
+    /// under: decoded, at the engine's sample rate. The song's clips of it
+    /// are heard from the next [`Engine::sync`].
+    pub fn register_audio(&mut self, name: &str, sound: Arc<daw_dsp::audio::AudioBuffer>) {
+        self.library.register_audio(name, sound);
+        self.compiled = None;
+    }
+
+    /// Whether the engine has the sound of an audio file.
+    pub fn has_audio(&self, name: &str) -> bool {
+        self.library.audio(name).is_some()
+    }
+
+    /// Forgets the sound of audio files no longer needed (`keep` says which
+    /// stay).
+    pub fn retain_audio(&mut self, keep: impl Fn(&str) -> bool) {
+        self.library.retain_audio(keep);
+    }
+
+    /// The input device's way in (once: the device's callback keeps it).
+    pub fn take_input_port(&mut self) -> Option<InputPort> {
+        self.input_port.take()
+    }
+
+    /// The recorder's way to the sound of takes (once).
+    pub fn take_recorded_audio(&mut self) -> Option<RecordedAudio> {
+        self.recorded.take()
+    }
+
+    /// Starts recording sound from the input after `count_in_bars` bars of
+    /// metronome.
+    pub fn record_audio(&mut self, count_in_bars: u32) {
+        self.send(Command::RecordAudio { count_in_bars });
+    }
+
+    /// How long sound takes from the program to the speakers and from the
+    /// microphone back, in seconds, as the devices report it. Takes are
+    /// moved earlier by this much, so they line up with what was heard.
+    pub fn set_record_latency(&mut self, seconds: f32) {
+        Shared::store_f32(&self.shared.record_latency, seconds.clamp(0.0, 2.0));
+    }
+
+    /// The loudest input sample since the last call (0 to 1, more when it
+    /// clips).
+    pub fn take_input_peak(&self) -> f32 {
+        f32::from_bits(self.shared.input_peak.swap(0, Ordering::Relaxed))
+    }
+
+    /// Frames the input has delivered since the engine started (to tell
+    /// whether any sound comes in at all).
+    pub fn input_frames(&self) -> u64 {
+        self.shared.input_frames.load(Ordering::Relaxed)
     }
 
     /// Brings the engine up to date with the project: builds instruments
@@ -342,8 +488,10 @@ impl Engine {
         let view = program::scoped(project, scope);
         let slots = &self.slots;
         let effects = &self.effects;
+        let library = &self.library;
         let program = program::compile(
             &view,
+            self.config.sample_rate,
             |id| {
                 slots
                     .iter()
@@ -354,6 +502,7 @@ impl Engine {
                     .iter()
                     .position(|e| e.as_ref().is_some_and(|(e, _)| *e == id))
             },
+            |name| library.audio(name).cloned(),
         );
         self.send(Command::Program(Box::new(program)));
     }

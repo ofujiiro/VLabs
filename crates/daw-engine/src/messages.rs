@@ -3,7 +3,9 @@
 //! What the interface and the audio thread tell each other.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{
+    AtomicBool, AtomicI64, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering,
+};
 
 use daw_dsp::{Instrument, InstrumentSettings};
 use daw_model::Ticks;
@@ -38,9 +40,13 @@ pub(crate) enum Command {
         recording: bool,
         volume: f32,
     },
-    /// Starts recording into `slot` after a count-in.
+    /// Starts recording notes into `slot` after a count-in.
     Record {
         slot: usize,
+        count_in_bars: u32,
+    },
+    /// Starts recording sound from the input after a count-in.
+    RecordAudio {
         count_in_bars: u32,
     },
     NoteOn {
@@ -86,6 +92,31 @@ pub enum EngineEvent {
     },
     /// Recording ended (the transport stopped).
     RecordingStopped,
+    /// The count-in is over: recording sound has started. The take's sound
+    /// arrives through [`crate::RecordedAudio`], in chunks marked `take`.
+    AudioRecordingStarted {
+        /// Which take (numbers only grow).
+        take: u32,
+        /// Where in the song recording started.
+        at: Ticks,
+        /// The input's sample rate (0 if no sound has come in yet).
+        sample_rate: u32,
+        /// The input's channels: 1 or 2 (0 if no sound has come in yet).
+        channels: u8,
+        /// How long sound takes to go out and come back in, in seconds, as
+        /// last reported (see [`crate::Engine::set_record_latency`]).
+        latency: f32,
+    },
+    /// Recording sound ended: `frames` were passed on (`dropped` more were
+    /// lost because the recorder fell behind).
+    AudioRecordingStopped {
+        /// Which take.
+        take: u32,
+        /// Frames passed on for the take.
+        frames: u64,
+        /// Frames lost.
+        dropped: u64,
+    },
     /// The transport stopped.
     Stopped,
 }
@@ -133,6 +164,10 @@ pub(crate) const RECORD_COUNT_IN: u8 = 1;
 pub(crate) const RECORD_ACTIVE: u8 = 2;
 
 /// Values the audio thread publishes for the interface to read at any time.
+#[allow(
+    clippy::struct_field_names,
+    reason = "the input's values read best with a common prefix"
+)]
 pub(crate) struct Shared {
     pub position: AtomicI64,
     pub playing: AtomicBool,
@@ -148,6 +183,16 @@ pub(crate) struct Shared {
     /// Peak output level of each slot's track in the last block (after its
     /// effects, volume and pan), as f32 bits.
     pub meters: Box<[AtomicU32]>,
+    /// The input's sample rate and channels, as it last delivered sound.
+    pub input_rate: AtomicU32,
+    pub input_channels: AtomicU8,
+    /// Frames the input has delivered since the engine started.
+    pub input_frames: AtomicU64,
+    /// The loudest input sample since the interface last looked, as f32
+    /// bits (only ever positive, so the bits order like the values).
+    pub input_peak: AtomicU32,
+    /// The delay from sound out to sound in, in seconds, as f32 bits.
+    pub record_latency: AtomicU32,
 }
 
 impl Shared {
@@ -163,6 +208,11 @@ impl Shared {
             meters: (0..crate::processor::MAX_SLOTS)
                 .map(|_| AtomicU32::new(0))
                 .collect(),
+            input_rate: AtomicU32::new(0),
+            input_channels: AtomicU8::new(0),
+            input_frames: AtomicU64::new(0),
+            input_peak: AtomicU32::new(0),
+            record_latency: AtomicU32::new(0),
         })
     }
 
@@ -172,5 +222,53 @@ impl Shared {
 
     pub fn load_f32(cell: &AtomicU32) -> f32 {
         f32::from_bits(cell.load(Ordering::Relaxed))
+    }
+}
+
+/// Frames of sound in one recorded chunk.
+pub const CHUNK_FRAMES: usize = 256;
+
+/// A piece of a take: stereo frames passed on by the audio thread while
+/// recording sound, marked with the take's number and where in the take
+/// they belong (so a recorder that fell behind can tell a gap).
+#[derive(Clone, Copy, Debug)]
+pub struct RecordedChunk {
+    /// The take.
+    pub take: u32,
+    /// The take frame of the first frame here.
+    pub first: u64,
+    frames: u16,
+    samples: [f32; 2 * CHUNK_FRAMES],
+}
+
+impl RecordedChunk {
+    pub(crate) const EMPTY: Self = Self {
+        take: 0,
+        first: 0,
+        frames: 0,
+        samples: [0.0; 2 * CHUNK_FRAMES],
+    };
+
+    /// The frames, interleaved left and right (a mono input gives the same
+    /// sample twice).
+    pub fn samples(&self) -> &[f32] {
+        &self.samples[..2 * usize::from(self.frames)]
+    }
+
+    /// How many frames it holds.
+    pub fn frames(&self) -> usize {
+        usize::from(self.frames)
+    }
+
+    pub(crate) fn push(&mut self, left: f32, right: f32) -> bool {
+        let at = 2 * usize::from(self.frames);
+        self.samples[at] = left;
+        self.samples[at + 1] = right;
+        self.frames += 1;
+        usize::from(self.frames) == CHUNK_FRAMES
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.frames = 0;
     }
 }
