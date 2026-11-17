@@ -324,6 +324,8 @@ impl EngineProcessor {
             return;
         };
         if matches!(self.recording, Recording::Audio) {
+            self.take.chunk.sample_rate = self.shared.input_rate.load(Ordering::Relaxed);
+            self.take.chunk.channels = self.shared.input_channels.load(Ordering::Relaxed);
             let (first, second) = chunk.as_slices();
             for part in [first, second] {
                 for frame in part.as_chunks::<2>().0 {

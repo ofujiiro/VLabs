@@ -912,3 +912,64 @@ pub fn exported(path: &str) -> String {
 pub fn could_not_export(error: &str) -> String {
     format!("Could not export the song: {error}")
 }
+
+// ----- Audio (phase 4, decision 0017)
+
+/// The name of a new audio track.
+pub const AUDIO_TRACK: &str = "Audio";
+pub const ADD_AUDIO: &str = "Audio";
+pub const ADD_AUDIO_HINT: &str =
+    "Add a track for recording from a microphone or importing sound files";
+pub const RECORD_SOUND: &str = "Record sound";
+pub const IMPORT_AUDIO: &str = "Import audio…";
+pub const IMPORT_FILE_TYPE: &str = "Sound files";
+pub const EDIT_ADD_AUDIO_TRACK: &str = "add audio track";
+pub const EDIT_IMPORT: &str = "import sound";
+pub const EDIT_RECORD_SOUND: &str = "record sound";
+pub const EDIT_SPLIT_CLIP: &str = "split clip";
+pub const EDIT_TRIM_CLIP: &str = "trim clip";
+pub const EDIT_FADE: &str = "change fade";
+pub const EDIT_CLIP_VOLUME: &str = "change clip volume";
+pub const SPLIT_HERE: &str = "Split here";
+pub const SPLIT_AT_PLAY: &str = "Split at the play position";
+pub const CLIP_VOLUME: &str = "Volume";
+pub const CLIP_VOLUME_HINT: &str = "How loud this clip plays, before the track's own volume";
+pub const FADE_IN_HINT: &str = "Drag to fade in";
+pub const FADE_OUT_HINT: &str = "Drag to fade out";
+pub const NO_INPUT: &str = "No sound came in from the microphone. Check that one is connected, switched on and allowed for this program.";
+pub const LOADING_SOUND: &str = "Loading…";
+pub const DROP_HERE: &str = "Drop sound files to import them";
+pub const AUDIO_HINT: &str = "Press Record to record from the microphone, or drop sound files here";
+pub const LAST_INSTRUMENT: &str = "A song keeps at least one instrument track";
+pub const RECORDING_SKIPPED: &str =
+    "The computer fell behind while recording: parts of the take are silent.";
+
+/// The name of a recorded take.
+pub fn recording_name(n: usize) -> String {
+    format!("Recording {n}")
+}
+
+/// Said when a take of sound is added to the song.
+pub fn recorded_sound(seconds: f64) -> String {
+    format!("Recorded {seconds:.1} seconds of sound")
+}
+
+pub fn importing(name: &str) -> String {
+    format!("Importing {name}…")
+}
+
+pub fn imported(name: &str) -> String {
+    format!("Imported {name}")
+}
+
+pub fn could_not_import(name: &str, error: &str) -> String {
+    format!("Could not import {name}: {error}")
+}
+
+pub fn could_not_record(error: &str) -> String {
+    format!("Could not keep the recording: {error}")
+}
+
+pub fn unreadable_sound(name: &str, error: &str) -> String {
+    format!("The sound of \"{name}\" could not be read: {error}")
+}

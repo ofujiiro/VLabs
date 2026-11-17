@@ -250,6 +250,7 @@ fn recording_passes_the_input_on_take_by_take_without_allocating() {
     let mut frames = Vec::new();
     while let Some(chunk) = recorded.pop() {
         assert_eq!(chunk.take, 1);
+        assert_eq!((chunk.sample_rate, chunk.channels), (44_100, 1));
         assert_eq!(chunk.first, frames.len() as u64 / 2, "no gaps");
         frames.extend_from_slice(chunk.samples());
     }

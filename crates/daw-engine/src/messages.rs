@@ -237,6 +237,11 @@ pub struct RecordedChunk {
     pub take: u32,
     /// The take frame of the first frame here.
     pub first: u64,
+    /// The input's sample rate.
+    pub sample_rate: u32,
+    /// The input's channels: 1 or 2 (a mono input still gives stereo
+    /// frames, the same sample twice).
+    pub channels: u8,
     frames: u16,
     samples: [f32; 2 * CHUNK_FRAMES],
 }
@@ -245,6 +250,8 @@ impl RecordedChunk {
     pub(crate) const EMPTY: Self = Self {
         take: 0,
         first: 0,
+        sample_rate: 0,
+        channels: 0,
         frames: 0,
         samples: [0.0; 2 * CHUNK_FRAMES],
     };
