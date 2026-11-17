@@ -2,6 +2,7 @@
 
 #![doc = include_str!("../README.md")]
 
+pub mod audio;
 mod click;
 pub mod drums;
 pub mod effects;

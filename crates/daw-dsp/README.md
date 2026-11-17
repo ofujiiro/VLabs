@@ -10,6 +10,10 @@ no plugin installed.
 - **Effects:** EQ, compressor, reverb, delay, limiter.
 - The building blocks they share: filters, envelopes, oscillators, delay
   lines, gain and level measurement.
+- **Recorded and imported sound in memory** (`audio`): buffers, conversion
+  between sample rates (our own windowed-sinc converter, decision 0017) and
+  loudness summaries for drawing waveforms. Made in the background; the
+  audio thread only reads buffers.
 
 ## Rules
 
@@ -27,5 +31,5 @@ The bundled sounds themselves (the piano SoundFont, the drum kit) are files in
 
 ## Roadmap
 
-Phase 1 (SoundFont player), phase 2 (drum sampler, effects),
-phase 6 (subtractive synth).
+Phase 1 (SoundFont player), phase 2 (drum sampler, effects), phase 4
+(audio buffers, rate conversion, waveforms), phase 6 (subtractive synth).
