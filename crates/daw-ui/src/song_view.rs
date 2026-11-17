@@ -791,12 +791,7 @@ impl SongView {
     /// The track list on the left: real widgets (names, mute, solo, a menu)
     /// in a column that scrolls with the rows.
     #[allow(clippy::too_many_lines, reason = "the whole track list, top to bottom")]
-    fn headers(
-        ui: &mut Ui,
-        session: &mut Session,
-        layout: &Layout,
-        intents: &mut Vec<Intent>,
-    ) {
+    fn headers(ui: &mut Ui, session: &mut Session, layout: &Layout, intents: &mut Vec<Intent>) {
         let p = Palette::of(ui.ctx());
         ui.painter_at(layout.headers)
             .rect_filled(layout.headers, CornerRadius::ZERO, p.surface);

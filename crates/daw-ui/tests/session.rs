@@ -54,7 +54,6 @@ fn piano_track(session: &Session) -> TrackId {
         .id
 }
 
-
 /// Lets `seconds` of audio pass, updating the session between blocks the
 /// way the interface does between frames.
 fn run(session: &mut Session, processor: &mut EngineProcessor, seconds: f64) {

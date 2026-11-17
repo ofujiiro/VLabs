@@ -283,7 +283,10 @@ impl StepGrid {
             .reduce(f32::max)
     }
 
-    #[allow(clippy::too_many_lines, reason = "one place that decides what a press does")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one place that decides what a press does"
+    )]
     fn handle_pointer(
         &mut self,
         ui: &Ui,

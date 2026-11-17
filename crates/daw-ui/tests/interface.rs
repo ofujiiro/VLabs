@@ -16,9 +16,10 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use daw_dsp::drums::PadSound;
 use daw_engine::{Engine, EngineConfig, EngineProcessor, SoundLibrary};
-use daw_model::Ticks;
-use daw_ui::{Host, KeyLabels, LayoutFamily, Session, Settings, Workspace, text};
+use daw_model::{ChainPlace, EffectKind, Ticks};
+use daw_ui::{Host, KeyLabels, LayoutFamily, Session, Settings, View, Workspace, text};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -107,6 +108,10 @@ impl Fixture {
 
     fn session(&self) -> &Session {
         self.workspace().session()
+    }
+
+    fn workspace_mut(&mut self) -> &mut Workspace {
+        self.harness.state_mut().as_mut().unwrap()
     }
 
     /// Lets the audio thread run for a moment, then draws a few frames.
@@ -577,4 +582,218 @@ fn closing_with_unsaved_changes_asks_and_never_just_quits() {
     f.harness.get_by_label(text::DISCARD_CHANGES).click();
     f.harness.step();
     assert!(sent_close_commands(&f).1, "discarding closes the window");
+}
+
+// ----- Phase 2: the step grid, the song view, the mixer, export
+
+/// The middle of a square of the step grid.
+fn square(f: &Fixture, sound: PadSound, step: usize) -> Pos2 {
+    f.harness
+        .get_by_label(&text::step_cell(text::pad_name(sound), step))
+        .rect()
+        .center()
+}
+
+#[test]
+fn a_new_song_opens_on_the_step_grid_and_squares_make_a_beat() {
+    let mut f = new_song();
+    f.harness.get_by_label(text::STEP_GRID);
+    assert!(f.session().is_drum_track());
+    assert!(f.notes().is_empty());
+
+    let kick = square(&f, PadSound::Kick, 1);
+    f.harness.hover_at(kick);
+    f.harness.step();
+    f.press(kick, PointerButton::Primary, true, Modifiers::NONE);
+    f.harness.step();
+    assert_eq!(
+        f.session().pointer_note(),
+        Some(36),
+        "the kick plays while the button is held"
+    );
+    f.press(kick, PointerButton::Primary, false, Modifiers::NONE);
+    f.harness.run_steps(2);
+    assert_eq!(f.session().pointer_note(), None);
+    let notes = f.notes();
+    assert_eq!(notes.len(), 1);
+    assert_eq!((notes[0].key, notes[0].start), (36, Ticks::ZERO));
+
+    f.click(kick, Modifiers::NONE);
+    assert!(f.notes().is_empty(), "a second click removes the hit");
+
+    // Dragging along the hi-hat row adds a hit on every square passed.
+    let first = square(&f, PadSound::ClosedHat, 1);
+    let last = square(&f, PadSound::ClosedHat, 8);
+    f.harness.hover_at(first);
+    f.harness.step();
+    f.press(first, PointerButton::Primary, true, Modifiers::NONE);
+    f.harness.step();
+    for i in 1..=10 {
+        let t = i as f32 / 10.0;
+        f.harness.hover_at(first + (last - first) * t);
+        f.harness.step();
+    }
+    f.press(last, PointerButton::Primary, false, Modifiers::NONE);
+    f.harness.run_steps(2);
+    let notes = f.notes();
+    assert_eq!(notes.len(), 8, "eight hits");
+    assert!(notes.iter().all(|n| n.key == 42), "all closed hi-hats");
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_PAINT_HITS)
+    );
+    f.key(Key::Z, Key::Z, true, Modifiers::COMMAND);
+    f.key(Key::Z, Key::Z, false, Modifiers::COMMAND);
+    assert!(f.notes().is_empty(), "one undo takes the whole drag away");
+}
+
+#[test]
+fn a_sound_name_plays_it_and_opens_its_settings() {
+    let mut f = new_song();
+    f.harness
+        .get_by_label(text::pad_name(PadSound::Snare))
+        .click();
+    f.harness.run_steps(3);
+    f.harness.get_by_label(text::PAD_MUTED).click();
+    f.harness.run_steps(2);
+    let drums = f.session().track_id();
+    assert!(f.session().pad(drums, 38).muted, "the snare is silenced");
+    assert_eq!(f.session().document().undo_label(), Some(text::EDIT_PAD));
+}
+
+#[test]
+fn the_location_line_and_the_song_view_lead_everywhere() {
+    let mut f = new_song();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    assert_eq!(
+        f.session().view(),
+        View::Song,
+        "the song's name shows the song"
+    );
+    let song = f.harness.get_by_label(text::SONG_VIEW).rect();
+
+    f.harness
+        .get_by_label(&format!("+ {}", text::ADD_PIANO))
+        .click();
+    f.harness.run_steps(2);
+    assert_eq!(f.session().project().tracks.len(), 3);
+
+    // The drum clip's menu (top row, from bar 1) opens its beat. (A
+    // double-click does the same; the test clock is too slow for one.)
+    let clip = Pos2::new(song.left() + 236.0 + 60.0, song.top() + 28.0 + 32.0);
+    f.harness.hover_at(clip);
+    f.harness.step();
+    f.press(clip, PointerButton::Secondary, true, Modifiers::NONE);
+    f.harness.step();
+    f.press(clip, PointerButton::Secondary, false, Modifiers::NONE);
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::OPEN_PATTERN).click();
+    f.harness.run_steps(2);
+    assert_eq!(f.session().view(), View::Pattern);
+    assert!(f.session().is_drum_track());
+
+    // F5 goes back to the song; clicking an empty spot places a pattern.
+    f.key(Key::F5, Key::F5, true, Modifiers::NONE);
+    f.key(Key::F5, Key::F5, false, Modifiers::NONE);
+    assert_eq!(f.session().view(), View::Song);
+    let drums = f.session().project().tracks[0].id;
+    let empty = Pos2::new(clip.x + 800.0, clip.y);
+    f.click(empty, Modifiers::NONE);
+    let clips = f.session().project().track(drums).unwrap().clips.len();
+    assert_eq!(clips, 2, "the beat was placed again");
+    f.key(Key::Delete, Key::Delete, true, Modifiers::NONE);
+    f.key(Key::Delete, Key::Delete, false, Modifiers::NONE);
+    let clips = f.session().project().track(drums).unwrap().clips.len();
+    assert_eq!(clips, 1, "Delete removes the selected clip");
+}
+
+#[test]
+fn the_mixer_adds_an_effect_that_opens_in_a_window() {
+    let mut f = new_song();
+    f.harness.get_by_label(text::SHOW_MIXER).click();
+    f.harness.run_steps(3);
+    let add = format!("+ {}", text::ADD_EFFECT);
+    f.harness.get_all_by_label(&add).next().unwrap().click();
+    f.harness.run_steps(3);
+    f.harness.get_by_label("Reverb").click();
+    f.harness.run_steps(4);
+    let drums = f.session().project().tracks[0].id;
+    let chain = f
+        .session()
+        .project()
+        .chain(ChainPlace::Track(drums))
+        .to_vec();
+    assert_eq!(chain.len(), 1, "a reverb on the drums");
+    assert!(matches!(chain[0].kind, EffectKind::Reverb(_)));
+    let title = text::effect_title("Reverb", text::DRUMS_TRACK);
+    f.harness.get_by_label(&title);
+    f.harness.get_by_label(text::EFFECT_ON).click();
+    f.harness.run_steps(2);
+    let effect = f.session().project().effect(chain[0].id).unwrap();
+    assert!(!effect.enabled, "the On switch bypasses it");
+    f.harness.get_by_label(text::REMOVE_EFFECT).click();
+    f.harness.run_steps(3);
+    assert!(
+        f.session()
+            .project()
+            .chain(ChainPlace::Track(drums))
+            .is_empty()
+    );
+    assert!(
+        f.harness.query_by_label(&title).is_none(),
+        "its window closed"
+    );
+}
+
+#[test]
+fn exporting_asks_where_then_writes_the_song() {
+    let mut f = new_song();
+    let path = std::env::temp_dir().join(format!("interface-export-{}.wav", std::process::id()));
+    *f.host.export_to.lock().unwrap() = Some(path.clone());
+    f.key(Key::E, Key::E, true, Modifiers::COMMAND);
+    f.key(Key::E, Key::E, false, Modifiers::COMMAND);
+    f.harness.get_by_label(text::EXPORT_TITLE);
+    f.harness.get_by_label(text::EXPORT_CD).click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::EXPORT_BUTTON).click();
+    f.harness.run_steps(2);
+    assert_eq!(*f.host.asked.lock().unwrap(), 1, "asked where");
+    f.workspace_mut().session_mut().finish_export();
+    f.harness.run_steps(3);
+    assert!(f.harness.query_by_label(text::EXPORTING).is_none());
+    let bytes = std::fs::read(&path).expect("the file was written");
+    assert_eq!(&bytes[..4], b"RIFF");
+    assert_eq!(
+        u32::from_le_bytes(bytes[24..28].try_into().unwrap()),
+        44_100,
+        "CD quality"
+    );
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn tracks_and_patterns_are_renamed_in_a_dialog() {
+    let mut f = new_song();
+    f.harness.get_by_label_contains(text::FIRST_BEAT).click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::RENAME_PATTERN).click();
+    f.harness.run_steps(4);
+    f.harness.get_by_label(text::RENAME);
+    f.harness.event(Event::Key {
+        key: Key::A,
+        physical_key: Some(Key::A),
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::COMMAND,
+    });
+    f.harness.event(Event::Text("Groove".to_owned()));
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::OK).click();
+    f.harness.run_steps(2);
+    assert_eq!(f.session().pattern().name, "Groove");
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_RENAME_PATTERN)
+    );
 }

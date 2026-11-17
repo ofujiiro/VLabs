@@ -108,6 +108,10 @@ impl SoundFontPlayer {
         settings.enable_reverb_and_chorus = true;
         let mut synth = Synthesizer::new(&bank.font, &settings)
             .map_err(|e| SoundFontError(format!("cannot play it: {e}")))?;
+        // Twice the synthesizer's default (+6 dB), so the piano sits level
+        // with the drum kits; the master bus's limiter catches the peaks of
+        // a loud mix.
+        synth.set_master_volume(PIANO_VOLUME);
         // Bank select, then program change, on channel 0.
         synth.process_midi_message(0, 0xB0, 0x00, i32::from(preset_bank >> 7));
         synth.process_midi_message(0, 0xB0, 0x20, i32::from(preset_bank & 0x7F));
@@ -132,6 +136,9 @@ impl SoundFontPlayer {
         self.synth.process_midi_message(0, 0xB0, 91, value);
     }
 }
+
+/// The synthesizer's master volume (its default is 0.5).
+const PIANO_VOLUME: f32 = 1.0;
 
 /// How long the player keeps rendering after its last note is released, so
 /// release tails and reverb fade out naturally.
