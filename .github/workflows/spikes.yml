@@ -136,12 +136,19 @@ jobs:
             $bundle = Get-ChildItem -Recurse raw-surge -Filter $name -Directory | Select-Object -First 1
             Copy-Item -Recurse $bundle.FullName fixtures/surge/
           }
+          # Dexed for Windows comes as an Inno Setup installer: its files are
+          # unpacked with innoextract (zlib licence; nothing is installed).
+          Invoke-WebRequest -Uri "https://github.com/dscharrer/innoextract/releases/download/1.9/innoextract-1.9-windows.zip" -OutFile innoextract.zip
+          Expand-Archive innoextract.zip -DestinationPath innoextract
           Invoke-WebRequest -Uri "https://github.com/asb2m10/dexed/releases/download/v$env:DEXED_VERSION/dexed-$env:DEXED_VERSION-win.zip" -OutFile dexed.zip
-          Expand-Archive dexed.zip -DestinationPath raw-dexed
-          $clap = Get-ChildItem -Recurse raw-dexed -Filter "Dexed.clap" -File | Select-Object -First 1
-          Copy-Item $clap.FullName fixtures/dexed/
-          $vst3 = Get-ChildItem -Recurse raw-dexed -Filter "Dexed.vst3" -Directory | Select-Object -First 1
-          Copy-Item -Recurse $vst3.FullName fixtures/dexed/
+          Expand-Archive dexed.zip -DestinationPath dexed-installer
+          $installer = Get-ChildItem -Recurse dexed-installer -Filter "*.exe" -File | Select-Object -First 1
+          & ./innoextract/innoextract.exe --silent --output-dir raw-dexed $installer.FullName
+          # The CLAP is a file; the VST3 is a single file here (a bundle folder elsewhere).
+          foreach ($name in "Dexed.clap", "Dexed.vst3") {
+            $item = Get-ChildItem -Recurse raw-dexed -Filter $name | Select-Object -First 1
+            Copy-Item -Recurse $item.FullName fixtures/dexed/
+          }
           Get-ChildItem -Recurse -Depth 1 fixtures
 
       - name: Install Rust
