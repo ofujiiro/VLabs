@@ -95,3 +95,24 @@ ramp to avoid clicks. Lanes are edited and undone like everything else.
   look-ahead plays slightly late against other tracks.
 - Exports instantiate the song's plugins again on the export thread, from
   freshly captured states.
+
+## Learned while building (phase 3)
+
+- **Changes reported on loading.** Four of the six reference plugin builds
+  report a change (parameter values, or "state changed") just after taking
+  their saved settings back, and one writes them back a byte different
+  (a value printed one character shorter). Opening a song therefore looked
+  like an edit. The engine ignores change reports during the first two
+  seconds after loading a plugin, and on a song with nothing unsaved a
+  later report counts only if the plugin's settings now differ from those
+  saved.
+- **Typed problems.** The engine reports what went wrong (a missing plugin,
+  one that failed to start, settings it refused) as `Problem` values; the
+  interface puts them into words, so all user-facing text stays in
+  `daw-ui`.
+- **Both formats listed.** A plugin that comes as CLAP and VST3 appears
+  twice in the chooser, CLAP first, each row saying its format: people can
+  pick the other if one misbehaves.
+- **Retiring order at exit.** The program's sound output now stops before
+  the engine is dropped, so no plugin's main half goes while its audio half
+  could still be processing.

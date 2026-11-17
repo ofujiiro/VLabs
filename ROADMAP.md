@@ -3,8 +3,9 @@
 The phases come from the project brief. Each ends with a build the owner can
 run and a checklist of things to try. Status is updated at every milestone.
 
-**Now:** phase 3 (plugins). Phase 2 is complete and the owner confirmed
-its milestone build works. Phase 1 is complete and the owner confirmed its
+**Now:** the phase 3 milestone build (plugins and automation) is ready
+for the owner to try. Phase 2 is complete and the owner confirmed its
+milestone build works. Phase 1 is complete and the owner confirmed its
 build works on Linux. Phase 0 is complete: all three risk spikes passed on
 Windows and Linux (decision 0009).
 
@@ -145,8 +146,83 @@ Windows and Linux (decision 0009).
 
 ## Phase 3 — Plugins
 
-Scanner (separate process), plugin browser, VST3 and CLAP instruments and
-effects, editor windows, state saving, parameter automation.
+- [x] How plugins are hosted (decision 0015) and their screens (decision
+      0016); reference plugins for tests: Surge XT, Surge XT Effects and
+      Dexed, each as CLAP and VST3
+- [x] One plugin host for CLAP and VST3: instruments and effects play in
+      the song, their settings are saved with it, their own windows open
+      (X11 on Linux, Win32 on Windows)
+- [x] Scanner in a separate run of the program, so a broken plugin cannot
+      take the program down while looking; what it learns is remembered
+- [x] Instrument chooser ("+ Instrument…"): the included instruments, then
+      every plugin instrument found, with a search field and "Look again"
+- [x] Plugin effects in the mixer's "+ Add effect" menu
+- [x] Plugin windows open from the track header, the mixer strip and the
+      location line
+- [x] Automation: lanes under each track in the song view for its volume,
+      pan, its effects' settings and its plugin's parameters; the setting
+      last moved in a plugin's window is offered first; click to add a
+      point, drag to move, right-click to remove, all undoable
+- [x] Songs whose plugins are not installed still open and play their
+      other tracks; the missing plugin is named
+- [x] File format version 3 (plugin settings as entries of their own), with
+      migration of phase 1 and 2 songs
+- [ ] The owner's hands-on check of the milestone build
+
+### Phase 3 milestone: things to try
+
+You need a plugin or two first. Two good free ones: **Surge XT** (a
+synthesiser, with **Surge XT Effects**) from surge-synthesizer.github.io,
+and **Dexed** (a classic FM synthesiser) from asb2m10.github.io/dexed. Their
+installers put them in the usual folders.
+
+1. Start the program and show the song (click the song's name at the left
+   of the location line, or press F5). Click "+ Instrument…" under the
+   tracks: the piano and drums, then your plugins, each with its maker and
+   format. Type a few letters in Search to narrow the list.
+2. Choose Surge XT (CLAP): a "Surge XT" track appears with a pattern. Click
+   the small window button on its header (left of the zigzag): Surge's own
+   window opens. Play the computer keyboard: you hear Surge. Turn something
+   in its window, then close it with its close button.
+3. Open the Surge pattern and draw a few long notes; press Space.
+4. Back in the song, click the zigzag (Automation) button on the Surge
+   track and choose Volume: a lane appears under the track with a flat line
+   at the present volume. Click low in the lane a few bars later: a fade.
+   Drag the point around; right-click it to remove it; Ctrl+Z undoes. Play:
+   the sound fades as drawn.
+5. Move a knob in Surge's window, then click Automation again: that knob
+   is offered first ("Last moved in the plugin"). Draw it changing over the
+   song.
+6. Press F9 for the mixer. On a track, "+ Add effect" › Plugins › Surge XT
+   Effects: its window opens. Built-in effects can change over the song
+   too: Automation › "Reverb · Amount", for instance.
+7. Save, close the program and open the song again: the plugins come back
+   with their settings, and the lanes with their points. The window title
+   shows no unsaved change until you change something (in a plugin's window
+   too).
+8. Export as WAV (Ctrl+E): the plugins and automation are in the file.
+9. Try a VST3 one too (Dexed › VST3 in the chooser), and an effect plugin
+   on the master strip.
+
+### Known gaps in this build
+
+- Plugins are only looked for in the usual folders (and `CLAP_PATH`);
+  there is no setting for other folders yet.
+- Automation is drawn, not recorded: moving a knob while the song plays
+  does not write points. Lanes are per track (none on the master), points
+  move one at a time, and the line between points is always straight.
+- While a lane changes a track's volume or pan, the mixer's fader for it
+  is overruled during playback (its tooltip says so).
+- A track's instrument cannot be swapped for another; add a new track.
+- Plugins run inside the program: one that crashes takes the program with
+  it (your work is autosaved). Only a plugin's main stereo input and output
+  are used.
+- What I could not check myself: closing a plugin window with its own close
+  button on a real desktop (my virtual screen has no window manager; the
+  program's own buttons and its tests close them), and using the program
+  with plugins on Windows (the automated tests load, play, save and open
+  windows for all three reference plugins on Windows too). I cannot listen:
+  levels and fades were checked by measuring recorded sound.
 
 ## Phase 4 — Audio
 

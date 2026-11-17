@@ -123,6 +123,47 @@ bars.
 - **Editor windows:** on Linux, plugin editors need X11; VLabs creates their
   windows through X11 directly, which also works under XWayland on Wayland
   desktops. On Windows, ordinary Win32 windows.
+- **Two halves** (decision 0015): loading a plugin gives a main-thread half
+  (`PluginHandle`: parameters, settings, its window, housekeeping) and an
+  audio-thread half (`PluginProcessor`: one call per block with the block's
+  notes and parameter changes at their frames). Only plain data crosses
+  between them. The engine keeps the main halves by where they sit in the
+  song (`PluginTarget`: a track's instrument or an effect); the audio halves
+  live in its instrument and effect tables like the built-in ones.
+- **Retiring safely:** when a plugin leaves the song, its audio half is
+  stopped on the audio thread and sent back with the other garbage; its
+  main half is dropped only after that, on the main thread. The program's
+  sound output stops before the engine when the program ends, for the same
+  reason.
+- **Settings** live in the plugin while it plays. They are copied into the
+  song (`PluginSetup.state`, opaque bytes) before saving, autosaving,
+  exporting, undoing and removing a plugin; the file keeps each plugin's
+  settings as an entry of its own (`plugins/<n>.state`, format version 3).
+- **Missing plugins** (a song from another computer): the track plays
+  silence and the effect is left out of its chain; the person is told which
+  plugin is missing, and the engine tries again when the plugin search
+  finds more plugins.
+- **Changes in a plugin's window** mark the song as changed. Many plugins
+  also report a change just after taking their saved settings back, so
+  reports in the first two seconds after loading are ignored, and on a song
+  with nothing unsaved a report counts only if the settings now differ.
+
+## Automation *(phase 3)*
+
+A track's lanes (`AutomationLane`) each change one setting: its volume, its
+pan, a setting of one of its effects (built-in settings are numbered in
+`EffectKind::params`; plugin effects use their parameter ids), or a
+parameter of its plugin instrument. Points hold values from 0 to 1 at ticks;
+between points the value moves in a straight line, and before the first and
+after the last it holds. Volume lanes use the mixer fader's scale (-60 dB
+to +6 dB, silence at the bottom).
+
+The program compiles lanes with the rest of the song; the audio thread
+evaluates them once per block at the block's first tick. Volume and pan
+glide across each block (no clicks) and take their values at once when
+playback starts or moves; built-in effects get new settings; plugin
+parameters are sent as events with the block's notes. While a lane exists,
+it overrules the mixer's fader for that setting during playback.
 
 ## The interface
 

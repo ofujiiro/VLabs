@@ -137,8 +137,19 @@ These come from the brief; tests and CI enforce most of them.
   (`surge-xt-linux-1.3.4-pluginsonly.tar.gz`, `surge-xt-win64-1.3.4-pluginsonly.zip`),
   and Dexed 0.9.8 (a second instrument) from `github.com/asb2m10/dexed`
   releases (`dexed-0.9.8-lnx.zip`, `dexed-0.9.8-win.zip`), each in CLAP and
-  VST3. CI downloads them in `spikes.yml`; the plugin host's tests use them
-  when `VLABS_TEST_PLUGINS` names the folder that holds them.
+  VST3. CI downloads them in `spikes.yml`; the plugin host's, the engine's,
+  the interface's and the program's plugin tests use them when
+  `VLABS_TEST_PLUGINS` names the folder that holds them (`surge/` and
+  `dexed/` inside), and pass quietly otherwise.
+- **Plugins in the real program:** link the fixture plugins into the scratch
+  home's `.clap` and `.vst3` folders (symbolic links work); the program
+  finds them at start (its cache is `plugins.json` in the data folder). The
+  virtual screen has no window manager: plugin windows open at 80,80 on top
+  of the program, so move them aside with `xdotool windowmove <id> X Y`
+  (`xdotool search --name "^Surge"` finds them), and close them with the
+  program's own window buttons. Start the program only once PipeWire and
+  WirePlumber are up; a sound device that never starts is reopened after
+  three seconds.
 - Network access in the development container is restricted: crates.io,
   GitHub (git, raw files and release downloads) and the Ubuntu archive work;
   many other sites do not.

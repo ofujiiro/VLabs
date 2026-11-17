@@ -14,14 +14,16 @@ automatically when you plug one in, but nothing extra is ever required.
 
 ## Status
 
-**Pre-alpha.** Roadmap phases 1 ("first sound") and 2 ("making a beat")
-work: make a beat on the step grid with a recorded acoustic kit or an
-electronic kit, write melodies in the piano roll with the bundled piano,
-arrange patterns on a timeline, mix with volume, pan, mute, solo and an
-effect chain per track (EQ, compressor, reverb, delay, limiter), and export
-the song as a WAV file. Play from the computer keyboard or a MIDI keyboard,
-record with a metronome and count-in, undo anything, save and open songs.
-Your work is saved automatically and offered back after a crash. See
+**Pre-alpha.** Roadmap phases 1 ("first sound"), 2 ("making a beat") and
+3 ("plugins") work: make a beat on the step grid with a recorded acoustic
+kit or an electronic kit, write melodies in the piano roll with the bundled
+piano or a CLAP or VST3 instrument, arrange patterns on a timeline, mix with
+volume, pan, mute, solo and an effect chain per track (EQ, compressor,
+reverb, delay, limiter, and plugin effects), make any of those settings
+change over the song with automation lanes, and export the song as a WAV
+file. Play from the computer keyboard or a MIDI keyboard, record with a
+metronome and count-in, undo anything, save and open songs. Your work is
+saved automatically and offered back after a crash. See
 [ROADMAP.md](ROADMAP.md) for what is done, what to try and what comes next.
 
 ## Building from source
@@ -40,14 +42,23 @@ Your work is saved automatically and offered back after a crash. See
    cargo run --release -p daw-app
    ```
 
-## Plugins on Linux
+## Plugins
 
-VLabs will host CLAP and VST3 plugins (roadmap phase 3) and look for them in
-the standard folders, including `~/.clap` and `~/.vst3`. Windows-only plugins
-can be used on Linux with [yabridge](https://github.com/robbert-vdh/yabridge):
-once yabridge has set them up in those folders, VLabs sees them like native
-plugins. Most plugin editor windows need X11; on a Wayland desktop they run
-through XWayland, which is installed by default on common distributions.
+VLabs hosts CLAP and VST3 instruments and effects. It looks for them in the
+standard folders when it starts, remembering what it learnt so later starts
+are quick:
+
+- Linux: `~/.clap`, `~/.vst3`, `/usr/lib/clap`, `/usr/lib/vst3`,
+  `/usr/local/lib/clap` and `/usr/local/lib/vst3`;
+- Windows: `Common Files\CLAP` and `Common Files\VST3` (in Program Files),
+  and the same two folders under `%LOCALAPPDATA%\Programs\Common`;
+- anywhere listed in the `CLAP_PATH` environment variable.
+
+Windows-only plugins can be used on Linux with
+[yabridge](https://github.com/robbert-vdh/yabridge): once yabridge has set
+them up in those folders, VLabs sees them like native plugins. Most plugin
+windows need X11; on a Wayland desktop they run through XWayland, which is
+installed by default on common distributions.
 
 ## Licence
 

@@ -54,3 +54,19 @@ come later without changing song lanes.
 - The parameter list of a large plugin is long (Surge XT has hundreds), so
   the lane chooser searches by name and puts the last-touched parameter on
   top: move a knob in the plugin, then choose it.
+
+## As built (phase 3)
+
+- Track headers in the song view got two small icon buttons on their second
+  line: the plugin's window (only on plugin tracks) and Automation (a line
+  through points). The same window button sits by the name on the mixer
+  strip and after the track's name in the location line.
+- "+ Instrument…" did not fit beside "+ Drums" and "+ Piano" in the track
+  column, so the add row wraps onto a second line.
+- A new lane starts with one point at the setting's present value, so the
+  person sees a flat line to draw on rather than an empty lane. Each lane's
+  header shows its name, its value where the song is, and a button that
+  removes it.
+- Clicking a lane puts the point on the nearest beat; holding Alt puts it
+  exactly where clicked, as Alt does for clips. A dragged point stays
+  between its neighbours.
