@@ -161,12 +161,6 @@ pub const EMPTY_PATTERN_HINT: &str = "Click anywhere to place a note — press S
 pub const EMPTY_PATTERN_HINT_2: &str =
     "Or play the computer keyboard: Z S X D C V… and Q 2 W 3 E R…";
 
-/// The start of the location line: "song  ›  track  ›" (the pattern's
-/// name follows, larger).
-pub fn location_prefix(song: &str, track: &str) -> String {
-    format!("{song}  ›  {track}  ›")
-}
-
 pub fn undo_named(label: &str) -> String {
     format!("Undo {label}")
 }
@@ -249,7 +243,6 @@ pub const METRONOME_WHEN_RECORDING: &str = "Click while recording";
 pub const METRONOME_VOLUME: &str = "Click volume";
 pub const QUANTIZE_HINT: &str = "Move recorded notes onto the grid, so they land exactly in time.";
 pub const BACK_TO_START: &str = "Back to the start";
-pub const VELOCITY_LANE_HINT: &str = "How hard each note is played. Drag a bar up or down.";
 
 const NOTE_NAMES: [&str; 12] = [
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
@@ -349,11 +342,6 @@ pub fn recorded(count: usize) -> String {
     }
 }
 
-pub fn counting_in(beats_left: u32) -> String {
-    format!("Count-in… {beats_left}")
-}
-
-pub const RECORDING: &str = "Recording — play notes; press Space to stop";
 pub const NO_SOUND_DEVICE: &str = "No sound device found: everything works, but nothing can be heard. Plug one in and it will be used.";
 pub const UNSAVED_QUESTION: &str = "This song has changes that are not saved.";
 pub const SAVE_CHANGES: &str = "Save changes";
@@ -452,7 +440,6 @@ pub const EDIT_CHANGE_EFFECT: &str = "change effect";
 pub const EDIT_PAD: &str = "change drum sound";
 
 // The location line.
-pub const SONG: &str = "Song";
 pub const SHOW_SONG: &str = "Show the whole song";
 pub const OPEN_TRACK_HINT: &str = "Open another track";
 pub const PATTERN_MENU_HINT: &str = "Choose, add, copy or rename patterns";
@@ -471,7 +458,6 @@ pub const KIT_HINT: &str = "Which drum kit this track plays";
 pub const STEPS: &str = "Steps";
 pub const STEPS_HINT: &str = "How long each square of the step grid is";
 pub const LOOP_SONG: &str = "Loop the song (drag along the ruler to loop a part)";
-pub const SONG_ZOOM_HINT: &str = "Ctrl + mouse wheel zooms";
 
 /// A bundled kit's name.
 pub fn kit_name(kit: &str) -> &str {
@@ -508,7 +494,6 @@ pub const PAD_TUNE: &str = "Tune";
 pub const PAD_LENGTH: &str = "Length";
 pub const PAD_MUTED: &str = "Silence this sound";
 pub const RESET_SOUND: &str = "Reset";
-pub const HITS_OUTSIDE: &str = "Some notes of this pattern are not drum sounds and are not shown.";
 
 /// The name of a drum sound.
 pub fn pad_name(sound: daw_dsp::drums::PadSound) -> &'static str {
@@ -544,9 +529,6 @@ pub const ADD_DRUMS: &str = "Drums";
 pub const ADD_DRUMS_HINT: &str = "Add a drum track";
 pub const ADD_PIANO: &str = "Piano";
 pub const ADD_PIANO_HINT: &str = "Add a piano track";
-pub const ADD_TRACK: &str = "Add a track:";
-pub const MUTE: &str = "Mute";
-pub const SOLO: &str = "Solo";
 pub const MUTE_SHORT: &str = "M";
 pub const SOLO_SHORT: &str = "S";
 pub const MUTE_HINT: &str = "Silence this track";
@@ -561,7 +543,6 @@ pub const REMOVE_CLIP: &str = "Remove from the song";
 pub const SONG_HINT: &str = "Click on a track to place its pattern · drag to move · drag the end to repeat · double-click to open";
 
 // The mixer.
-pub const MIXER: &str = "Mixer";
 pub const SHOW_MIXER: &str = "Show the mixer";
 pub const HIDE_MIXER: &str = "Hide the mixer";
 pub const MASTER: &str = "Master";
@@ -570,7 +551,6 @@ pub const PAN: &str = "Pan";
 pub const PAN_HINT: &str = "Where the track sits, from left to right. Double-click for the middle.";
 pub const VOLUME_HINT: &str = "Double-click for 0 dB";
 pub const ADD_EFFECT: &str = "Add effect";
-pub const EFFECTS: &str = "Effects";
 pub const NO_EFFECTS: &str = "No effects";
 pub const EFFECT_HINT: &str = "Click to adjust · right-click for more";
 pub const EFFECT_ON: &str = "On";
@@ -721,11 +701,6 @@ pub fn q(value: f32) -> String {
 /// Seconds: "1.25 s".
 pub fn seconds(value: f32) -> String {
     format!("{value:.2} s")
-}
-
-/// A multiple: "×1.5".
-pub fn times(value: f32) -> String {
-    format!("×{value:.2}")
 }
 
 // Export.
