@@ -3,10 +3,9 @@
 The phases come from the project brief. Each ends with a build the owner can
 run and a checklist of things to try. Status is updated at every milestone.
 
-**Now:** the phase 2 milestone build (making a beat) is ready for the
-owner to try; phase 3 (plugins) comes next. Phase 1 is complete and the
-owner confirmed its build works on Linux (the Windows build is still to be
-tried by hand). Phase 0 is complete: all three risk spikes passed on
+**Now:** phase 3 (plugins). Phase 2 is complete and the owner confirmed
+its milestone build works. Phase 1 is complete and the owner confirmed its
+build works on Linux. Phase 0 is complete: all three risk spikes passed on
 Windows and Linux (decision 0009).
 
 ## Phase 0 — Foundations and risk spikes
@@ -101,7 +100,7 @@ Windows and Linux (decision 0009).
 - [x] WAV export in the background, CD or studio quality, with progress and
       Cancel; the echoes and reverb fade out at the end
 - [x] File format version 2, with migration of phase 1 songs
-- [ ] The owner's hands-on check of the milestone build
+- [x] The owner's hands-on check of the milestone build
 
 ### Phase 2 milestone: things to try
 
