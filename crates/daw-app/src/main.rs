@@ -55,6 +55,20 @@ fn options() -> Options {
 }
 
 fn main() {
+    // A separate run that only describes one plugin file (decision 0015).
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if arguments.first().map(String::as_str) == Some(daw_plugin_host::scan::DESCRIBE_ARGUMENT) {
+        daw_plugin_host::scan::describe_and_print(&arguments[1..]);
+        return;
+    }
+    daw_plugin_host::set_identity(daw_plugin_host::HostIdentity {
+        name: daw_ident::PRODUCT_NAME.to_owned(),
+        vendor: String::new(),
+        url: String::new(),
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+    });
+    // Before the window opens (its toolkit then installs its own handlers).
+    daw_plugin_host::prepare_display();
     let options = options();
     let paths = Paths::find();
     let settings = paths

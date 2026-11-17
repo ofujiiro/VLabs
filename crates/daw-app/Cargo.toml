@@ -11,6 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+daw-plugin-host.workspace = true
 daw-devices.workspace = true
 daw-engine.workspace = true
 daw-formats.workspace = true

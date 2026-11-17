@@ -30,6 +30,7 @@ daw-engine = { path = "crates/daw-engine" }
 daw-formats = { path = "crates/daw-formats" }
 daw-ident = { path = "crates/daw-ident" }
 daw-model = { path = "crates/daw-model" }
+daw-plugin-host = { path = "crates/daw-plugin-host" }
 daw-rt = { path = "crates/daw-rt" }
 daw-ui = { path = "crates/daw-ui" }
 

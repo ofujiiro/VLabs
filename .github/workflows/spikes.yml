@@ -89,6 +89,7 @@ jobs:
     timeout-minutes: 45
     env:
       SURGE_VERSION: "1.3.4"
+      DEXED_VERSION: "0.9.8"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -96,31 +97,51 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb \
-            libasound2-dev libx11-6 libxext6 libxrender1 libxinerama1 libxrandr2 \
+          sudo apt-get install -y --no-install-recommends xvfb unzip \
+            libasound2-dev libjack-jackd2-dev libudev-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-6 libxext6 libxrender1 libxinerama1 libxrandr2 \
             libxcursor1 libfreetype6 libfontconfig1
 
-      # Surge XT is a test fixture only: downloaded here, never linked or bundled.
-      - name: Download Surge XT (Linux)
+      # The reference plugins are test fixtures only: downloaded here, never
+      # linked or bundled. Surge XT and Surge XT Effects, and Dexed, each as
+      # CLAP and VST3, in fixtures/surge and fixtures/dexed.
+      - name: Download the reference plugins (Linux)
         if: runner.os == 'Linux'
         run: |
-          mkdir -p fixtures
+          mkdir -p fixtures/surge fixtures/dexed raw-surge raw-dexed
           curl -sSfL -o surge.tar.gz "https://github.com/surge-synthesizer/releases-xt/releases/download/${SURGE_VERSION}/surge-xt-linux-${SURGE_VERSION}-pluginsonly.tar.gz"
-          tar -xzf surge.tar.gz -C fixtures
-          ls -la fixtures
+          tar -xzf surge.tar.gz -C raw-surge
+          for name in "Surge XT.clap" "Surge XT Effects.clap"; do find raw-surge -name "$name" -type f -exec cp {} fixtures/surge/ \; ; done
+          for name in "Surge XT.vst3" "Surge XT Effects.vst3"; do find raw-surge -name "$name" -type d -exec cp -r {} fixtures/surge/ \; ; done
+          curl -sSfL -o dexed.zip "https://github.com/asb2m10/dexed/releases/download/v${DEXED_VERSION}/dexed-${DEXED_VERSION}-lnx.zip"
+          unzip -q dexed.zip -d raw-dexed
+          find raw-dexed -name "Dexed.clap" -type f -exec cp {} fixtures/dexed/ \;
+          find raw-dexed -name "Dexed.vst3" -type d -exec cp -r {} fixtures/dexed/ \;
+          ls -la fixtures/surge fixtures/dexed
 
-      - name: Download Surge XT (Windows)
+      - name: Download the reference plugins (Windows)
         if: runner.os == 'Windows'
         run: |
-          New-Item -ItemType Directory -Force fixtures | Out-Null
+          New-Item -ItemType Directory -Force fixtures/surge, fixtures/dexed | Out-Null
           Invoke-WebRequest -Uri "https://github.com/surge-synthesizer/releases-xt/releases/download/$env:SURGE_VERSION/surge-xt-win64-$env:SURGE_VERSION-pluginsonly.zip" -OutFile surge.zip
-          Expand-Archive surge.zip -DestinationPath fixtures-raw
-          Get-ChildItem -Recurse -Depth 3 fixtures-raw | Select-Object FullName
-          $clap = Get-ChildItem -Recurse fixtures-raw -Filter "Surge XT.clap" | Select-Object -First 1
-          $vst3 = Get-ChildItem -Recurse fixtures-raw -Filter "Surge XT.vst3" -Directory | Select-Object -First 1
-          Copy-Item $clap.FullName fixtures/
-          Copy-Item -Recurse $vst3.FullName fixtures/
-          Get-ChildItem fixtures
+          Expand-Archive surge.zip -DestinationPath raw-surge
+          foreach ($name in "Surge XT.clap", "Surge XT Effects.clap") {
+            $file = Get-ChildItem -Recurse raw-surge -Filter $name -File | Select-Object -First 1
+            Copy-Item $file.FullName fixtures/surge/
+          }
+          foreach ($name in "Surge XT.vst3", "Surge XT Effects.vst3") {
+            $bundle = Get-ChildItem -Recurse raw-surge -Filter $name -Directory | Select-Object -First 1
+            Copy-Item -Recurse $bundle.FullName fixtures/surge/
+          }
+          Invoke-WebRequest -Uri "https://github.com/asb2m10/dexed/releases/download/v$env:DEXED_VERSION/dexed-$env:DEXED_VERSION-win.zip" -OutFile dexed.zip
+          Expand-Archive dexed.zip -DestinationPath raw-dexed
+          $clap = Get-ChildItem -Recurse raw-dexed -Filter "Dexed.clap" -File | Select-Object -First 1
+          Copy-Item $clap.FullName fixtures/dexed/
+          $vst3 = Get-ChildItem -Recurse raw-dexed -Filter "Dexed.vst3" -Directory | Select-Object -First 1
+          Copy-Item -Recurse $vst3.FullName fixtures/dexed/
+          Get-ChildItem -Recurse -Depth 1 fixtures
 
       - name: Install Rust
         run: rustup toolchain install
@@ -134,19 +155,33 @@ jobs:
 
       - name: CLAP (Linux, virtual X11 screen)
         if: runner.os == 'Linux'
-        run: xvfb-run -a -s "-screen 0 1600x1200x24" target/debug/spike-plugin-host "fixtures/Surge XT.clap" --editor 5 --out spike-output
+        run: xvfb-run -a -s "-screen 0 1600x1200x24" target/debug/spike-plugin-host "fixtures/surge/Surge XT.clap" --editor 5 --out spike-output
 
       - name: VST3 (Linux, virtual X11 screen)
         if: runner.os == 'Linux'
-        run: xvfb-run -a -s "-screen 0 1600x1200x24" target/debug/spike-plugin-host "fixtures/Surge XT.vst3" --editor 5 --out spike-output
+        run: xvfb-run -a -s "-screen 0 1600x1200x24" target/debug/spike-plugin-host "fixtures/surge/Surge XT.vst3" --editor 5 --out spike-output
 
       - name: CLAP (Windows)
         if: runner.os == 'Windows'
-        run: target\debug\spike-plugin-host.exe "fixtures\Surge XT.clap" --editor 5 --out spike-output
+        run: target\debug\spike-plugin-host.exe "fixtures\surge\Surge XT.clap" --editor 5 --out spike-output
 
       - name: VST3 (Windows)
         if: runner.os == 'Windows'
-        run: target\debug\spike-plugin-host.exe "fixtures\Surge XT.vst3" --editor 5 --out spike-output
+        run: target\debug\spike-plugin-host.exe "fixtures\surge\Surge XT.vst3" --editor 5 --out spike-output
+
+      - name: The program's plugin host and scanner (Linux, virtual X11 screen)
+        if: runner.os == 'Linux'
+        run: |
+          export VLABS_TEST_PLUGINS="$PWD/fixtures"
+          xvfb-run -a -s "-screen 0 1600x1200x24" cargo test -p daw-plugin-host --test reference --locked -- --test-threads 1 --nocapture
+          cargo test -p daw-app --test plugins --locked -- --nocapture
+
+      - name: The program's plugin host and scanner (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          $env:VLABS_TEST_PLUGINS = "$PWD\fixtures"
+          cargo test -p daw-plugin-host --test reference --locked -- --test-threads 1 --nocapture
+          cargo test -p daw-app --test plugins --locked -- --nocapture
 
       - name: Keep the renders and screenshots
         if: always()

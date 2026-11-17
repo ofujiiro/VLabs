@@ -920,6 +920,7 @@ dependencies = [
  "daw-formats",
  "daw-ident",
  "daw-model",
+ "daw-plugin-host",
  "daw-rt",
  "daw-ui",
  "eframe",
@@ -985,6 +986,19 @@ dependencies = [
 [[package]]
 name = "daw-plugin-host"
 version = "0.0.0"
+dependencies = [
+ "clack-extensions",
+ "clack-host",
+ "daw-rt",
+ "libc",
+ "libloading 0.9.1",
+ "rtrb",
+ "serde",
+ "serde_json",
+ "vst3",
+ "windows-sys 0.61.2",
+ "x11rb 0.14.0",
+]
 
 [[package]]
 name = "daw-rt"
