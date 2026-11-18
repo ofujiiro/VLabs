@@ -1622,13 +1622,12 @@ fn the_signature_row_changes_the_time_signature_from_a_bar() {
     let spot = Pos2::new(f.song_x(bar3) + 12.0, strip.center().y);
     f.click(spot, Modifiers::NONE);
     f.harness.get_by_label(&text::from_bar(2));
-    // TODO(phase 5): a simulated click on "7/8" inside this panel does not
-    // reach it yet (see docs/HANDOVER.md); the change is made directly.
-    f.harness.get_by_label("7/8");
-    let bar = 2;
-    f.workspace_mut()
-        .session_mut()
-        .set_meter_change(bar, daw_model::TimeSignature::new(7, 8));
+    // The panel stays put while it is open (it once slid to the window's
+    // edge, frame by frame, out from under the pointer).
+    let before = f.harness.get_by_label("7/8").rect();
+    f.harness.run_steps(3);
+    assert_eq!(f.harness.get_by_label("7/8").rect(), before);
+    f.harness.get_by_label("7/8").click();
     f.harness.run_steps(2);
     let seven_eight = daw_model::TimeSignature::new(7, 8).unwrap();
     assert_eq!(f.session().meter_change_at(2), Some(seven_eight));
@@ -1671,4 +1670,32 @@ fn the_tempo_line_takes_changes_that_are_dragged_and_removed() {
         .center();
     f.right_click(point);
     assert_eq!(f.session().tempo_changes().len(), 1);
+}
+
+#[test]
+fn panels_and_menus_take_clicks_that_last_several_frames() {
+    // A person's click lasts longer than a frame: the press must not close
+    // the panel or menu it lands in before the release.
+    let mut f = new_song();
+    f.harness
+        .get_by_label(text::pad_name(PadSound::Snare))
+        .click();
+    f.harness.run_steps(3);
+    let mute = f.harness.get_by_label(text::PAD_MUTED).rect().center();
+    f.click(mute, Modifiers::NONE);
+    let drums = f.session().track_id();
+    assert!(f.session().pad(drums, 38).muted, "the snare is silenced");
+
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    let song = f.harness.get_by_label(text::SONG_VIEW).rect();
+    // The drum clip: top row, under the ruler and the folded signature row.
+    let clip = Pos2::new(song.left() + 236.0 + 60.0, song.top() + 28.0 + 28.0 + 32.0);
+    f.right_click(clip);
+    let remove = f.harness.get_by_label(text::REMOVE_CLIP).rect().center();
+    f.click(remove, Modifiers::NONE);
+    assert!(
+        f.session().project().track(drums).unwrap().clips.is_empty(),
+        "the clip menu's entry worked"
+    );
 }

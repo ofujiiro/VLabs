@@ -33,6 +33,12 @@ const TEMPO_HEIGHT: f32 = 56.0;
 const TEMPO_MARGIN: f32 = 10.0;
 /// How close to a tempo point the pointer must be to take it.
 const POINT_GRAB: f32 = 7.0;
+/// The widths of the panel's columns. Fixed, so nothing in the panel can
+/// grow it to the edge of the window (which would make it slide over as
+/// the window keeps it on screen).
+const SIGNATURE_COLUMN: f32 = 200.0;
+const KEY_COLUMN: f32 = 280.0;
+const TEMPO_PANEL: f32 = 240.0;
 const DRAG_THRESHOLD: f32 = 4.0;
 
 /// How the song view maps time to the screen, this frame.
@@ -782,6 +788,7 @@ impl SignatureRow {
         ui.add_space(4.0);
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
+                ui.set_width(SIGNATURE_COLUMN);
                 ui.label(RichText::new(text::TIME_SIGNATURE).small().weak());
                 let change = session.meter_change_at(bar);
                 if bar > 0
@@ -799,6 +806,7 @@ impl SignatureRow {
             });
             ui.separator();
             ui.vertical(|ui| {
+                ui.set_width(KEY_COLUMN);
                 ui.label(RichText::new(text::KEY).small().weak());
                 let change = session.key_change_at(bar);
                 if bar > 0
@@ -835,7 +843,7 @@ impl SignatureRow {
         let change = changes[index];
         let last = index + 1 == changes.len();
         let bar = session.project().meter.position(at).bar;
-        ui.set_min_width(220.0);
+        ui.set_width(TEMPO_PANEL);
         ui.label(RichText::new(text::from_bar(bar)).strong());
         ui.horizontal(|ui| {
             let mut bpm = change.bpm;
