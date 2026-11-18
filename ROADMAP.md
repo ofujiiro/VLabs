@@ -487,7 +487,8 @@ microphone back to you, and speakers would be recorded too.
 
 ## Plugins and sound libraries (the owner's request, November 2026)
 
-Built after phase 6 (decision 0023), on its own branch.
+Built after phase 6 (decision 0023), merged in November 2026 (pull
+request 4).
 
 - [x] A Plugins window (menu, and the instrument chooser): every plugin
       found, the files that cannot be used and why, a search field.
