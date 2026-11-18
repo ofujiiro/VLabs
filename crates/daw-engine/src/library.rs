@@ -4,7 +4,9 @@
 //! instrument instances, off the audio thread.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use daw_dsp::audio::AudioBuffer;
 use daw_dsp::drums::{DrumKit, DrumSampler, PadParams, PadTable};
 use daw_dsp::{Instrument, InstrumentSettings, SineSynth, SoundFontBank, SoundFontPlayer};
 use daw_model::{
@@ -24,6 +26,9 @@ pub struct SoundLibrary {
     loaded_kits: HashMap<(String, u32), Result<DrumKit, Problem>>,
     soundfont_reverb: Option<f32>,
     plugins: Vec<PluginInfo>,
+    /// The sound of the song's audio files, by the name each is stored
+    /// under, decoded and at the engine's sample rate.
+    audio: HashMap<String, Arc<AudioBuffer>>,
 }
 
 impl Default for SoundLibrary {
@@ -42,7 +47,26 @@ impl SoundLibrary {
             loaded_kits: HashMap::new(),
             soundfont_reverb: None,
             plugins: Vec::new(),
+            audio: HashMap::new(),
         }
+    }
+
+    /// Gives the engine the sound of an audio file, by the name it is
+    /// stored under (decoded, and at the engine's sample rate: sound at
+    /// another rate plays at the right speed but less cleanly).
+    pub fn register_audio(&mut self, name: &str, sound: Arc<AudioBuffer>) {
+        self.audio.insert(name.to_owned(), sound);
+    }
+
+    /// The sound of an audio file, if it has been given.
+    pub fn audio(&self, name: &str) -> Option<&Arc<AudioBuffer>> {
+        self.audio.get(name)
+    }
+
+    /// Forgets the sound of every audio file not in `keep` (another song
+    /// was opened, say).
+    pub fn retain_audio(&mut self, keep: impl Fn(&str) -> bool) {
+        self.audio.retain(|name, _| keep(name));
     }
 
     /// The plugins found on this computer.
@@ -196,8 +220,11 @@ impl SoundLibrary {
                     (Box::new(sampler), Some(problem))
                 }
             },
-            // The engine loads plugins itself (they have a main-thread half).
-            InstrumentSpec::Plugin(_) => (Box::new(crate::plugins::Silence), None),
+            // The engine loads plugins itself (they have a main-thread half);
+            // an audio track has no instrument (its clips are mixed in).
+            InstrumentSpec::Plugin(_) | InstrumentSpec::Audio => {
+                (Box::new(crate::plugins::Silence), None)
+            }
         }
     }
 }
@@ -209,7 +236,9 @@ pub(crate) fn instrument_settings(spec: &InstrumentSpec) -> Option<InstrumentSet
         InstrumentSpec::Drums { pads, .. } => {
             Some(InstrumentSettings::Drums(Box::new(pad_table(pads))))
         }
-        InstrumentSpec::SoundFont { .. } | InstrumentSpec::Plugin(_) => None,
+        InstrumentSpec::SoundFont { .. } | InstrumentSpec::Plugin(_) | InstrumentSpec::Audio => {
+            None
+        }
     }
 }
 

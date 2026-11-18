@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The running program: the window, connected to the sound output, the MIDI
-//! keyboards, autosave and the settings file.
+//! The running program: the window, connected to the sound output and
+//! input, the MIDI keyboards, autosave and the settings file.
 
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use daw_devices::{AudioOutput, MidiInputs, MidiMessage, OutputMode};
+use daw_devices::{AudioInput, AudioOutput, MidiInputs, MidiMessage, OutputMode};
 use daw_engine::MidiSender;
 use daw_plugin_host::scan::{self, Scanner};
 use daw_ui::{PluginSearch, Request, Settings, Workspace, text};
@@ -19,12 +19,20 @@ use crate::recovery::Autosaver;
 const DEVICE_CHECK: Duration = Duration::from_secs(1);
 /// How long changed settings wait before they are written.
 const SETTINGS_DELAY: Duration = Duration::from_secs(2);
+/// How long an input device may take to open before the person is told
+/// there is none.
+const INPUT_GRACE: Duration = Duration::from_secs(2);
 
 /// Everything the window runs with.
 pub struct App {
     // The sound output stops first: plugins' audio halves are dropped before
     // their main halves (in the workspace's engine).
     audio: AudioOutput,
+    /// The microphone or interface (none when started silent).
+    input: Option<AudioInput>,
+    /// Since when the input has been wanted, and whether the person was
+    /// told it did not open.
+    input_wanted: Option<(Instant, bool)>,
     workspace: Workspace,
     midi: Option<MidiInputs>,
     midi_notes: mpsc::Receiver<(u8, bool)>,
@@ -44,6 +52,8 @@ pub struct Parts {
     pub workspace: Workspace,
     /// The sound output (kept running for as long as the window is open).
     pub audio: AudioOutput,
+    /// The sound input, if there is to be one.
+    pub input: Option<AudioInput>,
     /// The program's folders, if the system has them.
     pub paths: Option<Paths>,
     /// Autosave, if the recovery folder could be set up.
@@ -60,11 +70,19 @@ impl App {
         let Parts {
             mut workspace,
             audio,
+            input,
             paths,
             mut autosaver,
             settings,
             midi_sender,
         } = parts;
+        // The song's audio files live in the recovery folder, so a crash
+        // keeps them.
+        if let Some(autosaver) = &autosaver {
+            workspace
+                .session_mut()
+                .set_audio_folder(autosaver.audio_folder());
+        }
         if let Some((project, path)) = autosaver.as_mut().and_then(Autosaver::take_orphan) {
             workspace.offer_recovery(project, path);
         }
@@ -103,6 +121,8 @@ impl App {
         let mut app = Self {
             workspace,
             audio,
+            input,
+            input_wanted: None,
             midi: Some(midi),
             midi_notes,
             known_midi: Vec::new(),
@@ -162,6 +182,40 @@ impl App {
         self.workspace.open(path);
     }
 
+    /// Opens the input while the song wants it, and tells the engine how
+    /// long sound takes to go out and come back in.
+    fn follow_input(&mut self) {
+        let Some(input) = &self.input else {
+            return;
+        };
+        let wanted = self.workspace.session().wants_input();
+        input.set_active(wanted);
+        if !wanted {
+            self.input_wanted = None;
+            return;
+        }
+        let (since, told) = *self.input_wanted.get_or_insert((Instant::now(), false));
+        if !told && since.elapsed() > INPUT_GRACE && input.status().device.is_none() {
+            self.workspace
+                .session_mut()
+                .set_status(text::NO_INPUT_DEVICE);
+            self.input_wanted = Some((since, true));
+        }
+    }
+
+    /// The delay out (the output's report, or its buffer) plus the delay
+    /// in, for lining takes up with what was heard.
+    fn record_latency(&self) -> Duration {
+        let status = self.audio.status();
+        let out = self.audio.latency().or_else(|| {
+            status.buffer_frames.map(|frames| {
+                Duration::from_secs_f64(f64::from(frames) / f64::from(status.sample_rate))
+            })
+        });
+        let input = self.input.as_ref().and_then(AudioInput::latency);
+        out.unwrap_or_default() + input.unwrap_or_default()
+    }
+
     fn check_devices(&mut self) {
         if self
             .last_device_check
@@ -170,6 +224,11 @@ impl App {
             return;
         }
         self.last_device_check = Some(Instant::now());
+        let latency = self.record_latency();
+        self.workspace
+            .session_mut()
+            .engine_mut()
+            .set_record_latency(latency.as_secs_f32());
         let status = self.audio.status();
         let notice = match status.mode {
             OutputMode::Silent => Some(text::NO_SOUND_DEVICE.to_owned()),
@@ -219,6 +278,7 @@ impl eframe::App for App {
             self.workspace.session_mut().show_outside_note(key, down);
         }
         self.check_devices();
+        self.follow_input();
         self.follow_plugin_search();
         self.workspace.ui(ui);
         let requests = self.workspace.take_requests();
@@ -254,6 +314,7 @@ impl eframe::App for App {
         let settings = self.workspace.settings();
         self.write_settings(&settings);
         self.midi = None;
+        self.input = None;
         if let Some(autosaver) = &mut self.autosaver {
             autosaver.finish();
         }

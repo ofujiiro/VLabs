@@ -431,7 +431,11 @@ impl StepGrid {
                     text::pad_name(sound),
                 )
             });
-            if response.is_pointer_button_down_on() && self.drag == Drag::None {
+            // The sound plays on the press itself, once per click (also a
+            // click so quick it is pressed and released between two frames).
+            let pressed = response.hovered()
+                && ui.input(|i| i.pointer.button_pressed(PointerButton::Primary));
+            if pressed && self.drag == Drag::None {
                 session.pointer_on(sound.key(), session.keyboard_velocity());
                 self.drag = Drag::Pad;
             }

@@ -5,7 +5,8 @@
 //! (a drag in progress merges into one through the document's gestures).
 
 use daw_model::{
-    ACOUSTIC_KIT, Clip, ClipId, Instrument, Note, NoteId, PatternId, Project, Ticks, TrackId,
+    ACOUSTIC_KIT, Clip, ClipContent, ClipId, Instrument, Note, NoteId, PatternId, Project, Ticks,
+    TrackId,
 };
 
 use super::{Session, View, first_focus, placement};
@@ -49,13 +50,20 @@ impl Session {
         }
         self.track = track;
         self.pattern = pattern;
+        self.audio_focus = None;
         self.current.insert(track, pattern);
         self.view = View::Pattern;
         self.sync_engine();
     }
 
     /// Opens the pattern a track last showed (making one if it has none).
+    /// An audio track has no patterns: the song is shown with it in focus.
     pub fn open_track(&mut self, track: TrackId) {
+        if self.is_audio_track(track) {
+            self.show_song();
+            self.focus_audio_track(track);
+            return;
+        }
         let pattern = match self.current_pattern(track) {
             Some(pattern) => pattern,
             None => self.make_pattern(track),
@@ -66,6 +74,11 @@ impl Session {
     /// Puts a track in focus without changing the view (in the song view):
     /// the computer keyboard plays it and Record records into it.
     pub fn focus_track(&mut self, track: TrackId) {
+        if self.is_audio_track(track) {
+            self.focus_audio_track(track);
+            return;
+        }
+        self.audio_focus = None;
         if track == self.track || self.project().track(track).is_none() {
             return;
         }
@@ -122,6 +135,11 @@ impl Session {
             && self.project().clip(clip).is_none()
         {
             self.selected_clip = None;
+        }
+        if let Some(track) = self.audio_focus
+            && !self.is_audio_track(track)
+        {
+            self.audio_focus = None;
         }
         let project = self.project();
         let track_ok = project.track(self.track).is_some();
@@ -206,9 +224,13 @@ impl Session {
         });
     }
 
-    /// Removes a track with its clips and patterns (never the last one).
+    /// Removes a track with its clips and patterns (never the last one, nor
+    /// the last instrument track: notes and the keyboard need one).
     pub fn remove_track(&mut self, track: TrackId) {
-        if self.project().tracks.len() <= 1 || self.project().track(track).is_none() {
+        if self.project().tracks.len() <= 1
+            || self.project().track(track).is_none()
+            || self.is_last_instrument(track)
+        {
             return;
         }
         // Undoing brings its plugin back with the settings it has now.
@@ -243,7 +265,7 @@ impl Session {
             .track(track)
             .and_then(|t| match &t.instrument {
                 Instrument::Drums { kit, .. } => Some(kit.as_str()),
-                Instrument::SoundFont { .. } | Instrument::Plugin(_) => None,
+                Instrument::SoundFont { .. } | Instrument::Plugin(_) | Instrument::Audio => None,
             });
         if current.is_none_or(|k| k == kit) {
             return;
@@ -261,7 +283,7 @@ impl Session {
     pub fn kit(&self, track: TrackId) -> Option<&str> {
         match &self.project().track(track)?.instrument {
             Instrument::Drums { kit, .. } => Some(kit),
-            Instrument::SoundFont { .. } | Instrument::Plugin(_) => None,
+            Instrument::SoundFont { .. } | Instrument::Plugin(_) | Instrument::Audio => None,
         }
     }
 
@@ -465,7 +487,8 @@ impl Session {
         });
     }
 
-    /// Makes a clip last `length` (repeating its pattern to fill it).
+    /// Makes a clip last `length` (repeating its pattern to fill it; an
+    /// audio clip no longer than its sound).
     pub fn resize_clip(&mut self, clip: ClipId, length: Ticks) {
         let length = length.max(Ticks(1));
         if self
@@ -476,7 +499,7 @@ impl Session {
             return;
         }
         self.doc.edit(text::EDIT_RESIZE_CLIP, |p| {
-            p.update_clip(clip, |c| c.length = length);
+            p.set_clip_length(clip, length);
         });
     }
 
@@ -495,9 +518,15 @@ impl Session {
     /// Places a copy of a clip right after it; returns the copy, selected.
     pub fn duplicate_clip(&mut self, clip: ClipId) -> Option<ClipId> {
         let (track, original) = self.project().clip(clip).map(|(t, c)| (t, *c))?;
-        let pattern = original.pattern()?;
         let copy = self.doc.edit(text::EDIT_DUPLICATE_CLIP, |p| {
-            let copy = p.add_clip(track, original.end(), original.length, pattern)?;
+            let copy = match original.content {
+                ClipContent::Pattern { pattern, .. } => {
+                    p.add_clip(track, original.end(), original.length, pattern)?
+                }
+                ClipContent::Audio { audio, offset, .. } => {
+                    p.add_audio_clip(track, original.end(), original.length, audio, offset)?
+                }
+            };
             p.update_clip(copy, |c| c.content = original.content);
             Some(copy)
         })?;
@@ -513,6 +542,13 @@ impl Session {
     /// Selects a clip (or none); its track comes into focus.
     pub fn select_clip(&mut self, clip: Option<ClipId>) {
         self.selected_clip = clip;
+        if let Some((track, true)) = clip
+            .and_then(|id| self.project().clip(id))
+            .map(|(track, c)| (track, c.is_audio()))
+        {
+            self.focus_audio_track(track);
+            return;
+        }
         let Some((track, pattern)) = clip
             .and_then(|id| self.project().clip(id))
             .and_then(|(track, c)| c.pattern().map(|p| (track, p)))

@@ -37,7 +37,9 @@ code, so automated gates carry more weight than usual.
 
 - A newer push cancels an older running check on the same branch, to save CI
   minutes. Windows minutes count double on GitHub's private-repository
-  plans; the owner should keep an eye on the monthly allowance.
+  plans; the owner should keep an eye on the monthly allowance. (Update,
+  November 2026: the repository is public now, and GitHub's standard
+  runners are free for public repositories.)
 - Debug builds optimise dependencies fully and our code lightly
   (`opt-level = 1`), so a debug build can still play audio in real time while
   keeping the audio-thread checks on.

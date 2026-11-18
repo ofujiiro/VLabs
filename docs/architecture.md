@@ -38,8 +38,10 @@ record, notes, the play position); the processing half belongs to
 | MIDI input | Receives notes from MIDI keyboards | Only timestamps and queues them |
 | Autosave | Writes recovery copies of the song in the background | Ordinary thread |
 | Device watchers | Reopen the sound output and connect MIDI keyboards as they come and go | Ordinary threads |
-| Workers *(planned)* | Loading audio, drawing waveforms | Ordinary threads |
-| Plugin scanner *(planned)* | A separate process that inspects plugins | A crash there cannot reach the program |
+| Input watcher | Opens the default sound input while recording, reopens it when it fails | Ordinary thread; the input's own callback is real-time and only queues samples |
+| Audio files | Reads, decodes, converts and summarises the song's audio files, one at a time | Ordinary thread |
+| Recorder | Writes takes of sound to WAV files as they come, keeps their loudness summary | Ordinary thread |
+| Plugin scanner | A separate run of the program that inspects plugin files | A crash there cannot reach the program |
 
 ## How an edit becomes sound
 
@@ -107,8 +109,15 @@ bars.
 - **Autosave and crash recovery:** while there are unsaved changes, a
   recovery copy is written in the background every few seconds; after a
   crash it is offered back (decision 0013).
+- **Audio files** (format version 4, decision 0017) are entries
+  `audio/<name>` of the container, stored as they came (recordings as
+  24-bit WAV, imports in their own format). While a song is open they live
+  in the audio folder of this running copy, inside its recovery folder:
+  saving copies them in, opening extracts them there (never over a file
+  already there), autosave copies refer to them in place.
 - **Interchange:** DAWproject and Standard MIDI Files, import and export
-  (phase 6). Audio import: WAV, FLAC, MP3, OGG; export: WAV, FLAC.
+  (phase 6). Audio import: WAV, FLAC, MP3, OGG (phase 4); export: WAV,
+  FLAC.
 
 ## Plugins *(phase 3)*
 
@@ -165,6 +174,40 @@ playback starts or moves; built-in effects get new settings; plugin
 parameters are sent as events with the block's notes. While a lane exists,
 it overrules the mixer's fader for that setting during playback.
 
+## Audio *(phase 4)*
+
+Decision 0017. An audio track has no instrument; its clips each play part
+of an audio file. A clip starts on the timeline in ticks and plays its file
+at the file's own speed from `offset` (frames of the file), with a volume
+and fades in seconds; a tempo change keeps audio clips' lengths in seconds.
+
+- **Sound in memory:** the interface's audio store reads each file of the
+  song in the background (`daw-formats::audio`: WAV, FLAC, MP3, Ogg
+  Vorbis), converts it to the engine's rate (`daw-dsp::audio`, our own
+  windowed-sinc converter), summarises its loudness for drawing (`Peaks`),
+  and gives the engine the sound (`Engine::register_audio`, kept in the
+  sound library so exports have it).
+- **Playing:** the compiled program holds each track's clips as spans on
+  the song's frame timeline; the audio thread mixes them into the track
+  before its effects, from any position (nothing to rewind), with an
+  equal-power curve for fades and a 1.5 ms fade at every edge except where
+  a clip continues the one before (a split).
+- **Recording:** the input device's callback pushes its samples into the
+  engine's input queue (`InputPort`); the audio thread empties it every
+  block and, while a take runs, passes it on in chunks marked with the
+  take's number and place (`RecordedAudio`) to the recorder thread, which
+  writes the WAV file and the take's waveform as it grows. When the take
+  ends, the session puts it where recording started, moved earlier by the
+  delay out and back in that the devices report, as one undo step. The
+  input device is opened only while the session wants it.
+
+```text
+ microphone ─▶ input callback ─(InputPort)─▶ audio thread ─(chunks)─▶ recorder ─▶ take.wav
+                                                  │                                  │
+                                       song plays on, metronome            session: clip at
+                                                                            the start, one undo step
+```
+
 ## The interface
 
 Built with egui (eframe, wgpu renderer). All interface code is in `daw-ui`:
@@ -172,7 +215,9 @@ Built with egui (eframe, wgpu renderer). All interface code is in `daw-ui`:
 - `session`: the open song and everything done to it, with no drawing
   (editing commands, the selection, playing notes, the transport,
   recording, files; in `session/arrange` the views, tracks, patterns and
-  clips; in `session/mixing` the mixer, effects and drum pads). It also
+  clips; in `session/mixing` the mixer, effects and drum pads; in
+  `session/audio` audio tracks, importing, recording and shaping clips,
+  with the audio store and the recorder thread beside it). It also
   decides what Space plays, as a `PlaybackScope` given to the engine: the
   song, a part of it looping, or one pattern alone (decision 0014). Tested
   without a window.

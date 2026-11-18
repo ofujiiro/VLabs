@@ -278,11 +278,15 @@ pub enum Command {
     SwitchView,
     /// Export the song as a WAV file.
     Export,
+    /// Split the selected clip at the play position.
+    Split,
+    /// Import sound files.
+    ImportAudio,
 }
 
 impl Command {
     /// Every command, in the order the shortcuts window lists them.
-    pub const ALL: [Self; 32] = [
+    pub const ALL: [Self; 34] = [
         Self::PlayStop,
         Self::Record,
         Self::ToStart,
@@ -315,6 +319,8 @@ impl Command {
         Self::ToggleMixer,
         Self::SwitchView,
         Self::Export,
+        Self::ImportAudio,
+        Self::Split,
     ];
 
     /// The stable name used in the settings file.
@@ -352,6 +358,8 @@ impl Command {
             Self::ToggleMixer => "toggle_mixer",
             Self::SwitchView => "switch_view",
             Self::Export => "export",
+            Self::Split => "split",
+            Self::ImportAudio => "import_audio",
         }
     }
 
@@ -563,6 +571,8 @@ impl Default for Keymap {
             (Command::ToggleMixer, S::plain(Key::F9)),
             (Command::SwitchView, S::plain(Key::F5)),
             (Command::Export, S::ctrl(Key::E)),
+            (Command::Split, S::ctrl(Key::B)),
+            (Command::ImportAudio, S::ctrl(Key::I)),
         ];
         Self { bindings }
     }

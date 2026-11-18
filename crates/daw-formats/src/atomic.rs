@@ -10,6 +10,15 @@ use std::path::Path;
 /// folder, flushed to disk, then renamed over the target. Readers see either
 /// the old file or the complete new one, never a mixture.
 pub fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_atomically_with(path, |file| file.write_all(bytes))
+}
+
+/// Like [`write_atomically`], but `write` writes the contents into the
+/// temporary file itself (for files too large to build in memory first).
+pub fn write_atomically_with(
+    path: &Path,
+    write: impl FnOnce(&mut File) -> io::Result<()>,
+) -> io::Result<()> {
     let folder = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -24,7 +33,7 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     ));
     let result = (|| {
         let mut file = File::create(&temporary)?;
-        file.write_all(bytes)?;
+        write(&mut file)?;
         file.sync_all()?;
         drop(file);
         std::fs::rename(&temporary, path)

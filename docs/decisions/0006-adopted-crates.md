@@ -25,7 +25,9 @@ memory. "Planned" means checked and chosen, but not yet in `Cargo.toml`.
 | `zip` | 9.6.0 | MIT | 2026-11-16 | The single-file project container (deflate only). |
 | `midir` | 0.11.1 | MIT | 2026-11-16 | MIDI keyboard input with hot-plugging. |
 | `rfd` | 0.18.0 | MIT | 2026-11-16 | The desktop's own open and save dialogs: Windows' file dialog; on Linux the XDG portal over D-Bus (loaded at run time) or zenity. Default features. |
-| `claxon` | 0.4.3 | Apache-2.0 | 2026-11-16 | FLAC decoding: the bundled drum kit is stored as FLAC and decoded when loaded; also the piano and drum build tools. Stable for years, no open safety issues. |
+| `claxon` | 0.4.3 | Apache-2.0 | 2026-11-16 | FLAC decoding: the bundled drum kit is stored as FLAC and decoded when loaded; also the piano and drum build tools, and importing FLAC files (phase 4). Stable for years, no open safety issues. |
+| `nanomp3` (with `nanomp3-core`, `wide`, `bytemuck`) | 0.2.0 | MIT OR Apache-2.0 (`wide`: Zlib OR Apache-2.0 OR MIT; `bytemuck`: Zlib OR Apache-2.0 OR MIT) | 2026-11-17 | MP3 decoding for importing files: a bit-exact, safe (`forbid(unsafe_code)`) Rust port of minimp3, released September 2026. Lets us count a file's frames before decoding, so a hostile file cannot fill the memory. |
+| `lewton` (with `ogg` 0.8, `tinyvec`, `byteorder`) | 0.10.2 | MIT OR Apache-2.0 (`ogg`: BSD-3-Clause; `tinyvec`: Zlib OR Apache-2.0 OR MIT; `byteorder`: Unlicense OR MIT) | 2026-11-17 | Ogg Vorbis decoding for importing files (RustAudio). No release since 2021, but the format is frozen and the crate is the pure-Rust standard; decoding runs in a background thread with a size limit and a guard that turns a panic into an error. |
 | `flacenc` | 0.5.1 | Apache-2.0 | 2026-11-16 | FLAC encoding (without its default features), for now only in `tools/make-drums`; FLAC export in phase 6. Released December 2025. |
 | `egui_kittest` (with `kittest`) | 0.37.0 (0.5.0) | MIT OR Apache-2.0 | 2026-11-16 | Tests only: drives the real interface with simulated input and inspects it through its accessibility tree, with no window. Also fails tests on any glyph missing from our fonts and on unlabelled controls. |
 
@@ -33,10 +35,6 @@ memory. "Planned" means checked and chosen, but not yet in `Cargo.toml`.
 
 | Crate | Version | Licence | For |
 | --- | --- | --- | --- |
-| `hound` | 3.5.1 | Apache-2.0 | WAV reading and writing (phase 2) |
-| `lewton` | 0.10.2 | MIT OR Apache-2.0 | OGG Vorbis decoding (phase 4) |
-| `nanomp3` | 0.2.0 | MIT OR Apache-2.0 | MP3 decoding, pure Rust (phase 4) |
-| `rubato` | 5.1.0 | MIT OR Apache-2.0 | Sample-rate conversion of imported audio (phase 4) |
 | `quick-xml` | 0.42.0 | MIT | DAWproject import and export (phase 6) |
 
 ## Considered and set aside
@@ -50,3 +48,11 @@ memory. "Planned" means checked and chosen, but not yet in `Cargo.toml`.
   of our own (`crates/daw-app/src/paths.rs`, decision 0013).
 - `midly`, `symphonia`, `oxisynth`, `triple_buffer`, `vst3-sys`,
   `audio_thread_priority`: licences, see decision 0005.
+- `hound` (Apache-2.0, planned for WAV): WAV writing (phase 2) and reading
+  (phase 4) are a few hundred lines of our own in `daw-formats`, with our
+  own limits for untrusted files.
+- `rubato` 5.1.0 (MIT OR Apache-2.0, planned for rate conversion): checked
+  2026-11-17 and set aside. Converting whole files offline is a small,
+  well-understood job; our own windowed-sinc converter (`daw-dsp`, decision
+  0017) keeps six crates (`audioadapter`, `windowfunctions`, `visibility`
+  and others) out of the build.

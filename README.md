@@ -12,18 +12,26 @@ It works on a plain computer: built-in speakers or headphones, a mouse or
 trackpad and a typing keyboard. A MIDI keyboard or an audio interface is used
 automatically when you plug one in, but nothing extra is ever required.
 
+Later, after the first full version: singing voices, in the spirit of
+OpenUtau. Notes with lyrics sung by open voicebanks you install (classic
+UTAU voicebanks such as Kasane Teto's, and DiffSinger and ENUNU voices),
+managed and tuned inside VLabs (see [ROADMAP.md](ROADMAP.md)).
+
 ## Status
 
-**Pre-alpha.** Roadmap phases 1 ("first sound"), 2 ("making a beat") and
-3 ("plugins") work: make a beat on the step grid with a recorded acoustic
-kit or an electronic kit, write melodies in the piano roll with the bundled
-piano or a CLAP or VST3 instrument, arrange patterns on a timeline, mix with
-volume, pan, mute, solo and an effect chain per track (EQ, compressor,
-reverb, delay, limiter, and plugin effects), make any of those settings
-change over the song with automation lanes, and export the song as a WAV
-file. Play from the computer keyboard or a MIDI keyboard, record with a
-metronome and count-in, undo anything, save and open songs. Your work is
-saved automatically and offered back after a crash. See
+**Pre-alpha.** Roadmap phases 1 ("first sound"), 2 ("making a beat"), 3
+("plugins") and 4 ("audio") work: make a beat on the step grid with a
+recorded acoustic kit or an electronic kit, write melodies in the piano
+roll with the bundled piano or a CLAP or VST3 instrument, record your voice
+or guitar from the computer's microphone, bring in WAV, FLAC, MP3 and Ogg
+files, cut, trim and fade audio clips right on the timeline, arrange
+everything on one timeline, mix with volume, pan, mute, solo and an effect
+chain per track (EQ, compressor, reverb, delay, limiter, and plugin
+effects), make any of those settings change over the song with automation
+lanes, and export the song as a WAV file. Play from the computer keyboard
+or a MIDI keyboard, record notes with a metronome and count-in, undo
+anything, save and open songs (their sound inside the song file). Your work
+is saved automatically and offered back after a crash. See
 [ROADMAP.md](ROADMAP.md) for what is done, what to try and what comes next.
 
 ## Building from source

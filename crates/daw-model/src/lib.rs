@@ -24,9 +24,9 @@ pub use plugin::{PluginFormat, PluginRef, PluginSetup, PluginState, STATE_KEY, b
 pub use project::Project;
 pub use quantize::quantize_starts;
 pub use song::{
-    ACOUSTIC_KIT, BUILTIN_PIANO, ChannelStrip, Clip, ClipContent, ClipId, DEFAULT_VELOCITY,
-    ELECTRONIC_KIT, EffectId, Instrument, MAX_KEY, Note, NoteId, PadSetting, Pattern, PatternId,
-    SoundSource, Track, TrackId, default_step,
+    ACOUSTIC_KIT, AudioFile, AudioId, BUILTIN_PIANO, ChannelStrip, Clip, ClipContent, ClipId,
+    DEFAULT_VELOCITY, ELECTRONIC_KIT, EffectId, Instrument, MAX_KEY, Note, NoteId, PadSetting,
+    Pattern, PatternId, SoundSource, Track, TrackId, default_step,
 };
 pub use time::{
     BarPosition, MeterChange, MeterMap, Region, TEMPO_RANGE, TICKS_PER_QUARTER, TICKS_PER_WHOLE,

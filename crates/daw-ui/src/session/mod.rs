@@ -9,9 +9,13 @@
 //! automation in `plugins`.
 
 mod arrange;
+mod audio;
+mod audio_store;
 mod mixing;
 mod plugins;
+mod recorder;
 
+pub use audio::{LiveTake, SoundState};
 pub use mixing::MAX_GAIN;
 pub use plugins::{LaneChoice, PluginSearch};
 
@@ -209,14 +213,32 @@ pub struct Session {
     last_moved: Option<(PluginTarget, u32)>,
     /// Plugin parameters' names, by plugin identity and parameter.
     param_names: HashMap<(String, u32), String>,
+    /// The song's audio files: their folder, and their sound in memory.
+    audio: audio_store::AudioStore,
+    /// Writes takes of sound as they are recorded.
+    recorder: Option<recorder::Recorder>,
+    /// The audio track in focus in the song view, if one is.
+    audio_focus: Option<TrackId>,
+    /// The take of sound asked for, counting in or recording.
+    audio_take: Option<audio::AudioTake>,
+    /// Takes that ended, waiting for the recorder to finish their files.
+    finishing: Vec<audio::AudioTake>,
+    /// Until when the input device is wanted after a take.
+    input_until: Option<Instant>,
+    /// The input meter's level, falling back slowly.
+    input_meter: f32,
 }
 
 impl Session {
     /// Opens a project in the engine, showing the song. `path` is where it
     /// was loaded from (or `None` for a new song); `saved` says whether the
     /// file on disk matches it.
-    pub fn new(engine: Engine, project: Project, path: Option<PathBuf>, saved: bool) -> Self {
+    pub fn new(mut engine: Engine, project: Project, path: Option<PathBuf>, saved: bool) -> Self {
         let project = editable(project);
+        let rate = engine.config().sample_rate;
+        let recorder = engine
+            .take_recorded_audio()
+            .map(|source| recorder::Recorder::start(source, rate));
         let (track, pattern) = first_focus(&project);
         let doc = if saved {
             Document::new(project)
@@ -264,8 +286,16 @@ impl Session {
             plugin_search: PluginSearch::default(),
             last_moved: None,
             param_names: HashMap::new(),
+            audio: audio_store::AudioStore::new(rate),
+            recorder,
+            audio_focus: None,
+            audio_take: None,
+            finishing: Vec::new(),
+            input_until: None,
+            input_meter: 0.0,
         };
         session.selection_revision = session.doc.revision();
+        session.load_song_audio();
         session.sync_engine();
         session
     }
@@ -439,6 +469,7 @@ impl Session {
             self.handle_engine_event(event);
         }
         self.plugin_idle();
+        self.poll_audio();
         for problem in self.engine.take_problems() {
             self.set_status(text::problem(&problem));
         }
@@ -486,6 +517,10 @@ impl Session {
     /// unless the loop is off), or the pattern alone if it is not placed.
     pub fn playback_scope(&self) -> PlaybackScope {
         if self.view == View::Song {
+            // A take of sound is one clip: the song plays on through its loop.
+            if self.audio_take.is_some() {
+                return PlaybackScope::Unlooped;
+            }
             return PlaybackScope::Song;
         }
         match placement(self.project(), self.track, self.pattern) {
@@ -597,10 +632,19 @@ impl Session {
                     self.take_finished = true;
                 }
                 self.recording_held.clear();
+                self.audio_recording_ended();
             }
             EngineEvent::Stopped => {
                 self.awaiting_stop = false;
             }
+            EngineEvent::AudioRecordingStarted {
+                take, at, latency, ..
+            } => self.audio_recording_started(take, at, latency),
+            EngineEvent::AudioRecordingStopped {
+                take,
+                frames,
+                dropped,
+            } => self.audio_recording_stopped(take, frames, dropped),
         }
     }
 
@@ -756,6 +800,10 @@ impl Session {
             self.stop();
             return;
         }
+        if let Some(track) = self.audio_focus.filter(|_| self.view == View::Song) {
+            self.record_audio(track);
+            return;
+        }
         if self.view == View::Song {
             let (track, pattern) = (self.track, self.pattern);
             self.open_pattern(track, pattern);
@@ -883,11 +931,12 @@ impl Session {
         self.project().tempo.initial_bpm()
     }
 
-    /// Sets the tempo (one undo step, or part of a gesture).
+    /// Sets the tempo (one undo step, or part of a gesture). Audio clips
+    /// keep their length in seconds (decision 0017).
     pub fn set_tempo(&mut self, bpm: f64) {
         let bpm = bpm.clamp(*TEMPO_RANGE.start(), *TEMPO_RANGE.end());
         self.doc
-            .edit(text::EDIT_TEMPO, |p| p.tempo.set(Ticks::ZERO, bpm));
+            .edit(text::EDIT_TEMPO, |p| p.set_tempo(Ticks::ZERO, bpm));
     }
 
     /// The time signature at the start.
@@ -1307,7 +1356,7 @@ impl Session {
     pub fn save_as(&mut self, path: &Path) -> Result<(), String> {
         let path = with_extension(path);
         self.capture_plugin_states();
-        match daw_formats::save_project(self.project(), &path) {
+        match daw_formats::save_project(self.project(), &path, Some(self.audio.folder())) {
             Ok(()) => {
                 self.doc.mark_saved();
                 self.set_status(text::saved(&path.display().to_string()));
@@ -1350,6 +1399,19 @@ impl Session {
         self.paste_at = None;
         self.take = None;
         self.recording_held.clear();
+        self.audio_focus = None;
+        self.audio_take = None;
+        self.finishing.clear();
+        // The old song's sound goes; the new song's is read.
+        let wanted: HashSet<String> = self
+            .project()
+            .audio
+            .iter()
+            .map(|f| f.file.clone())
+            .collect();
+        self.engine.retain_audio(|name| wanted.contains(name));
+        self.audio.retain(|name| wanted.contains(name));
+        self.load_song_audio();
         self.awaiting_stop = true;
         self.sync_engine();
         self.engine.locate(Ticks::ZERO);
@@ -1357,7 +1419,7 @@ impl Session {
 
     /// Opens a song from a file.
     pub fn open(&mut self, path: &Path) -> Result<(), String> {
-        match daw_formats::load_project(path) {
+        match daw_formats::load_project(path, Some(self.audio.folder())) {
             Ok(project) => {
                 self.replace(project, Some(path.to_path_buf()), true);
                 self.set_status(text::opened(&path.display().to_string()));
@@ -1490,13 +1552,13 @@ pub fn with_extension(path: &Path) -> PathBuf {
     }
 }
 
-/// Makes sure a project has a track with a pattern to edit.
+/// Makes sure a project has an instrument track with a pattern to edit.
 fn editable(mut project: Project) -> Project {
     if project.first_pattern().is_some() {
         return project;
     }
     let length = project.meter.bar_start(4);
-    let track = match project.tracks.first() {
+    let track = match project.tracks.iter().find(|t| !t.instrument.is_audio()) {
         Some(track) => track.id,
         None => project.add_track(text::FIRST_TRACK, daw_model::Instrument::builtin_piano()),
     };
@@ -1520,7 +1582,7 @@ fn placement(project: &Project, track: TrackId, pattern: PatternId) -> Option<Pl
                 length: clip.length,
                 offset,
             }),
-            ClipContent::Pattern { .. } => None,
+            ClipContent::Pattern { .. } | ClipContent::Audio { .. } => None,
         })
 }
 

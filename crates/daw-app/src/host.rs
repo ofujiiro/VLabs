@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The desktop's own open, save and export dialogs.
+//! The desktop's own open, save, export and import dialogs.
 
 use std::path::{Path, PathBuf};
 
@@ -10,6 +10,8 @@ use daw_ui::{Host, text};
 #[derive(Default)]
 pub struct DialogHost {
     folder: Option<PathBuf>,
+    /// Where sound files were last imported from.
+    sounds: Option<PathBuf>,
 }
 
 impl DialogHost {
@@ -57,5 +59,19 @@ impl Host for DialogHost {
         let path = dialog.save_file();
         self.remember(path.as_deref());
         path
+    }
+
+    fn choose_audio_files(&mut self) -> Vec<PathBuf> {
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter(text::IMPORT_FILE_TYPE, &["wav", "flac", "mp3", "ogg"])
+            .set_title(text::IMPORT_TITLE);
+        if let Some(folder) = self.sounds.as_ref().or(self.folder.as_ref()) {
+            dialog = dialog.set_directory(folder);
+        }
+        let files = dialog.pick_files().unwrap_or_default();
+        if let Some(folder) = files.first().and_then(|f| f.parent()) {
+            self.sounds = Some(folder.to_path_buf());
+        }
+        files
     }
 }

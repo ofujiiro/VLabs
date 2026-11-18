@@ -43,6 +43,10 @@ id_type!(
     /// Identifies an effect in a chain.
     EffectId
 );
+id_type!(
+    /// Identifies an audio file of the project.
+    AudioId
+);
 
 /// The highest MIDI key.
 pub const MAX_KEY: u8 = 127;
@@ -163,6 +167,9 @@ pub enum Instrument {
     },
     /// A third-party plugin instrument.
     Plugin(crate::plugin::PluginSetup),
+    /// No instrument: the track plays the recorded or imported sound of its
+    /// audio clips.
+    Audio,
 }
 
 impl Instrument {
@@ -186,6 +193,11 @@ impl Instrument {
     /// Whether this is a drum kit.
     pub fn is_drums(&self) -> bool {
         matches!(self, Self::Drums { .. })
+    }
+
+    /// Whether the track plays audio clips rather than notes.
+    pub fn is_audio(&self) -> bool {
+        matches!(self, Self::Audio)
     }
 
     /// The plugin, if this is a plugin instrument.
@@ -215,7 +227,7 @@ impl Instrument {
                 .find(|p| p.key == key)
                 .copied()
                 .unwrap_or_else(|| PadSetting::new(key)),
-            Self::SoundFont { .. } | Self::Plugin(_) => PadSetting::new(key),
+            Self::SoundFont { .. } | Self::Plugin(_) | Self::Audio => PadSetting::new(key),
         }
     }
 
@@ -304,7 +316,7 @@ impl Default for ChannelStrip {
 }
 
 /// What a clip plays.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum ClipContent {
     /// A pattern, repeated for the length of the clip.
@@ -314,10 +326,53 @@ pub enum ClipContent {
         /// Where in the pattern the clip starts playing.
         offset: Ticks,
     },
+    /// Part of an audio file, at its natural speed (decision 0017).
+    Audio {
+        /// The file.
+        audio: AudioId,
+        /// The frame of the file (at its own rate) heard at the clip's start.
+        offset: u64,
+        /// Volume: 1 is unchanged.
+        #[serde(default = "unity", skip_serializing_if = "is_unity")]
+        gain: f32,
+        /// How long the sound takes to rise from silence at the start, in
+        /// seconds.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        fade_in: f32,
+        /// How long the sound takes to fall to silence at the end, in
+        /// seconds.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        fade_out: f32,
+    },
+}
+
+fn unity() -> f32 {
+    1.0
+}
+
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes a reference"
+)]
+fn is_unity(value: &f32) -> bool {
+    value.to_bits() == 1.0_f32.to_bits()
+}
+
+impl ClipContent {
+    /// Audio content: a file from `offset`, unchanged in volume, no fades.
+    pub fn audio(audio: AudioId, offset: u64) -> Self {
+        Self::Audio {
+            audio,
+            offset,
+            gain: 1.0,
+            fade_in: 0.0,
+            fade_out: 0.0,
+        }
+    }
 }
 
 /// A placement of content on a track's timeline.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Clip {
     /// Identity.
     pub id: ClipId,
@@ -335,11 +390,69 @@ impl Clip {
         self.start + self.length
     }
 
-    /// The pattern the clip plays.
+    /// The pattern the clip plays, if it plays one.
     pub fn pattern(&self) -> Option<PatternId> {
         match self.content {
             ClipContent::Pattern { pattern, .. } => Some(pattern),
+            ClipContent::Audio { .. } => None,
         }
+    }
+
+    /// The audio file the clip plays, if it plays one.
+    pub fn audio(&self) -> Option<AudioId> {
+        match self.content {
+            ClipContent::Audio { audio, .. } => Some(audio),
+            ClipContent::Pattern { .. } => None,
+        }
+    }
+
+    /// Whether the clip plays sound from an audio file.
+    pub fn is_audio(&self) -> bool {
+        matches!(self.content, ClipContent::Audio { .. })
+    }
+}
+
+/// An audio file of the project: recorded, or imported. The sound itself is
+/// kept outside the model (decision 0017); this says where to find it and
+/// what it is.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AudioFile {
+    /// Identity.
+    pub id: AudioId,
+    /// The name shown to people (an imported file's name, "Recording 2").
+    pub name: String,
+    /// The name it is stored under, in the song file's audio folder and
+    /// while the song is open.
+    pub file: String,
+    /// How long it is, in frames at its own rate.
+    pub frames: u64,
+    /// Its sample rate, in frames per second.
+    pub sample_rate: u32,
+    /// Its channels: 1 (mono) or 2 (stereo).
+    pub channels: u16,
+}
+
+impl AudioFile {
+    /// How long it lasts, in seconds.
+    #[allow(clippy::cast_precision_loss, reason = "frame counts fit easily")]
+    pub fn seconds(&self) -> f64 {
+        self.frames as f64 / f64::from(self.sample_rate.max(1))
+    }
+
+    /// A duration in seconds as a number of the file's frames (rounded).
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "rounded and clamped at zero"
+    )]
+    pub fn frames_in(&self, seconds: f64) -> u64 {
+        (seconds * f64::from(self.sample_rate)).round().max(0.0) as u64
+    }
+
+    /// A number of the file's frames as seconds.
+    #[allow(clippy::cast_precision_loss, reason = "frame counts fit easily")]
+    pub fn seconds_in(&self, frames: u64) -> f64 {
+        frames as f64 / f64::from(self.sample_rate.max(1))
     }
 }
 
