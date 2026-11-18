@@ -647,3 +647,47 @@ fn damaged_projects_are_refused() {
     }
     std::fs::remove_dir_all(folder).ok();
 }
+
+/// The schema of DAWproject 1.0 (from github.com/bitwig/dawproject, MIT),
+/// kept in `tests/data/dawproject`.
+fn schema(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/data/dawproject")
+        .join(name)
+}
+
+#[test]
+fn exported_projects_match_the_dawproject_schema() {
+    // Needs xmllint (libxml2); the test passes quietly without it.
+    let Ok(probe) = std::process::Command::new("xmllint").arg("--version").output() else {
+        return;
+    };
+    if !probe.status.success() {
+        return;
+    }
+    let folder = scratch("schema");
+    let sounds = folder.join("sounds");
+    std::fs::create_dir_all(&sounds).unwrap();
+    let file = folder.join("song.dawproject");
+    dawproject::export(&song(&sounds), &sounds, &file).unwrap();
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(&file).unwrap()).unwrap();
+    for (entry, xsd) in [("project.xml", "Project.xsd"), ("metadata.xml", "MetaData.xsd")] {
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name(entry).unwrap(), &mut text).unwrap();
+        let written = folder.join(entry);
+        std::fs::write(&written, text).unwrap();
+        let output = std::process::Command::new("xmllint")
+            .arg("--noout")
+            .arg("--schema")
+            .arg(schema(xsd))
+            .arg(&written)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{entry} does not match {xsd}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    std::fs::remove_dir_all(folder).ok();
+}
