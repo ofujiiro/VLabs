@@ -496,11 +496,11 @@ pub fn key_choices(
 pub fn location_bar(
     ui: &mut Ui,
     session: &mut Session,
-    bottom: (bool, bool),
+    bottom: (bool, bool, bool),
     actions: &mut Vec<Command>,
     intents: &mut Vec<Intent>,
 ) {
-    let (keyboard_shown, mixer_shown) = bottom;
+    let (keyboard_shown, mixer_shown, library_shown) = bottom;
     let p = Palette::of(ui.ctx());
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
@@ -521,6 +521,7 @@ pub fn location_bar(
                 ui.label(RichText::new("›").color(p.text_weak));
                 track_menu(ui, session);
                 plugin_button(ui, session);
+                soundfont_menu(ui, session);
                 ui.label(RichText::new("›").color(p.text_weak));
                 pattern_menu(ui, session, intents);
                 if !session.is_placed() {
@@ -532,6 +533,23 @@ pub fn location_bar(
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
+            let library_label = if library_shown {
+                text::HIDE_LIBRARY
+            } else {
+                text::SHOW_LIBRARY
+            };
+            if icon_button(
+                ui,
+                Icon::Folder,
+                library_label,
+                "",
+                Look::on(library_shown),
+                30.0,
+            )
+            .clicked()
+            {
+                actions.push(Command::ToggleLibrary);
+            }
             let mixer_label = if mixer_shown {
                 text::HIDE_MIXER
             } else {
@@ -635,6 +653,40 @@ fn plugin_button(ui: &mut Ui, session: &mut Session) {
     if icon_button(ui, Icon::Window, label, &hint, Look::on(open), 26.0).clicked() {
         session.toggle_plugin_window(target);
     }
+}
+
+/// The preset a track plays from a SoundFont the person chose (decision
+/// 0023).
+fn soundfont_menu(ui: &mut Ui, session: &mut Session) {
+    let track = session.track_id();
+    if session.soundfont_file(track).is_none() {
+        return;
+    }
+    let presets = session.soundfont_presets(track);
+    let current = session.soundfont_preset(track);
+    let name = presets
+        .iter()
+        .find(|p| Some((p.bank, p.program)) == current)
+        .map_or_else(|| text::PRESET.to_owned(), |p| p.name.clone());
+    let response = dropdown(ui, RichText::new(name), text::PRESET_HINT);
+    Popup::menu(&response).show(|ui| {
+        egui::ScrollArea::vertical()
+            .max_height(360.0)
+            .show(ui, |ui| {
+                for preset in &presets {
+                    let chosen = current == Some((preset.bank, preset.program));
+                    let label = format!(
+                        "{}  {}",
+                        text::preset_number(preset.bank, preset.program),
+                        preset.name
+                    );
+                    if ui.selectable_label(chosen, label).clicked() {
+                        session.set_soundfont_preset(track, preset.bank, preset.program);
+                        ui.close();
+                    }
+                }
+            });
+    });
 }
 
 /// A button that opens a menu, with a small arrow.

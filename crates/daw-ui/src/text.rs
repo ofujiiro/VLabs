@@ -139,6 +139,7 @@ pub fn command_name(command: crate::keys::Command) -> &'static str {
         C::ZoomOut => "Zoom out",
         C::ToggleKeyboard => "Show or hide the keyboard",
         C::ToggleMixer => "Show or hide the mixer",
+        C::ToggleLibrary => "Show or hide the sound library",
         C::SwitchView => "Switch between the song and the pattern",
         C::Export => "Export",
         C::Split => "Split the clip at the play position",
@@ -673,6 +674,14 @@ pub fn problem(problem: &daw_engine::Problem) -> String {
         P::MissingSound(name) => {
             format!("The sound \"{name}\" is missing from the program; a plain sound plays instead")
         }
+        P::MissingFile(path) => {
+            let name = std::path::Path::new(path)
+                .file_name()
+                .map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
+            format!(
+                "The file \"{name}\" is not on this computer (it was at {path}); a plain sound plays instead"
+            )
+        }
         P::UnreadableSound { sound, reason } => {
             format!("Could not read the sound {sound}; a plain sound plays instead ({reason})")
         }
@@ -688,6 +697,67 @@ pub fn problem(problem: &daw_engine::Problem) -> String {
             format!("The plugin \"{plugin}\" did not take its saved settings ({reason})")
         }
     }
+}
+
+// The sound library and SoundFonts (decision 0023).
+pub const LIBRARY: &str = "Library";
+pub const SHOW_LIBRARY: &str = "Show the sound library";
+pub const HIDE_LIBRARY: &str = "Hide the sound library";
+pub const ADD_SOUND_FOLDER: &str = "Add a folder…";
+pub const ADD_SOUND_FOLDER_HINT: &str =
+    "Add a folder of sounds, MIDI files or SoundFonts to the library (nothing is copied)";
+pub const LIBRARY_EMPTY: &str = "Add a folder of sounds to find, hear and use them here: WAV, AIFF, FLAC, MP3 and Ogg sounds, MIDI files and SoundFonts.";
+pub const LIBRARY_HINT: &str = "Click a sound to hear it · drag it onto the song, or double-click to add it at the play position";
+pub const LIBRARY_LISTING: &str = "Looking through the folder…";
+pub const LIBRARY_NOTHING_HERE: &str = "No sounds, MIDI files or SoundFonts here.";
+pub const LIBRARY_UP: &str = "Up";
+pub const LIBRARY_UP_HINT: &str = "Back to the folder above";
+pub const LIBRARY_REFRESH: &str = "Look again";
+pub const LIBRARY_REFRESH_HINT: &str = "List the folder again (files added since appear)";
+pub const REMOVE_SOUND_FOLDER: &str = "Remove from the library";
+pub const REMOVE_SOUND_FOLDER_HINT: &str =
+    "The folder stays on the disk: the library just stops showing it";
+pub const ADD_TO_SONG: &str = "Add to the song";
+pub const PLAY_SOUND: &str = "Play";
+pub const STOP_SOUND: &str = "Stop";
+pub const PREVIEW_TOO_LARGE: &str = "it is too large to play here; drag it onto the song instead";
+pub const SOUNDFONT: &str = "SoundFont";
+pub const ADD_SOUNDFONT: &str = "SoundFont…";
+pub const ADD_SOUNDFONT_HINT: &str = "Add a track playing a SoundFont (.sf2) file";
+pub const SOUNDFONT_FILE_TYPE: &str = "SoundFont";
+pub const CHOOSE_SOUNDFONT_TITLE: &str = "Choose a SoundFont";
+pub const PRESET: &str = "Preset";
+pub const PRESET_HINT: &str = "The sound of the SoundFont this track plays";
+pub const EDIT_ADD_SOUNDFONT: &str = "add SoundFont track";
+pub const EDIT_SOUNDFONT_PRESET: &str = "choose SoundFont preset";
+
+/// A sound the library could not play.
+pub fn cannot_preview(name: &str, why: &str) -> String {
+    format!("Could not play {name}: {why}")
+}
+
+/// How many files a library folder holds.
+pub fn library_count(count: usize, truncated: bool) -> String {
+    match (count, truncated) {
+        (_, true) => format!("{count}+ files"),
+        (1, false) => "1 file".to_owned(),
+        (n, false) => format!("{n} files"),
+    }
+}
+
+/// How many files a search found, when not all are shown.
+pub fn library_more_found(shown: usize, total: usize) -> String {
+    format!("Showing {shown} of {total}: type more to narrow the search")
+}
+
+/// What a SoundFont track plays, under its name.
+pub fn soundfont_track(file: &str) -> String {
+    format!("SoundFont · {file}")
+}
+
+/// A preset of a SoundFont in the preset menu: its bank and number.
+pub fn preset_number(bank: u16, program: u8) -> String {
+    format!("{bank}:{program:03}")
 }
 
 // The synth (decision 0019).

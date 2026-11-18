@@ -13,6 +13,7 @@ mod audio;
 mod audio_store;
 mod conductor;
 mod files;
+mod library;
 mod mixing;
 mod plugins;
 mod recorder;
@@ -272,6 +273,8 @@ pub struct Session {
     /// Writes a recovery copy at once, before risky moments (decision
     /// 0021).
     safety: Option<Box<dyn SafetyCopy>>,
+    /// The sound library's preview (decision 0023).
+    preview: library::Preview,
 }
 
 /// Writes a recovery copy of the song at once and waits until it is on
@@ -351,6 +354,7 @@ impl Session {
             input_meter: 0.0,
             synth_windows: Vec::new(),
             safety: None,
+            preview: library::Preview::default(),
         };
         session.selection_revision = session.doc.revision();
         session.load_song_audio();
@@ -562,6 +566,7 @@ impl Session {
         }
         self.plugin_idle();
         self.poll_audio();
+        self.poll_preview();
         for problem in self.engine.take_problems() {
             self.set_status(text::problem(&problem));
         }

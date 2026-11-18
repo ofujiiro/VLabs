@@ -278,6 +278,8 @@ pub enum Command {
     ToggleKeyboard,
     /// Show or hide the mixer.
     ToggleMixer,
+    /// Show or hide the sound library (decision 0023).
+    ToggleLibrary,
     /// Switch between the song and the open pattern.
     SwitchView,
     /// Export the song as a WAV file.
@@ -292,7 +294,7 @@ pub enum Command {
 
 impl Command {
     /// Every command, in the order the shortcuts window lists them.
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 38] = [
         Self::PlayStop,
         Self::Record,
         Self::ToStart,
@@ -325,6 +327,7 @@ impl Command {
         Self::ZoomOut,
         Self::ToggleKeyboard,
         Self::ToggleMixer,
+        Self::ToggleLibrary,
         Self::SwitchView,
         Self::Export,
         Self::ImportAudio,
@@ -365,6 +368,7 @@ impl Command {
             Self::ZoomOut => "zoom_out",
             Self::ToggleKeyboard => "toggle_keyboard",
             Self::ToggleMixer => "toggle_mixer",
+            Self::ToggleLibrary => "toggle_library",
             Self::SwitchView => "switch_view",
             Self::Export => "export",
             Self::Split => "split",
@@ -591,6 +595,7 @@ impl Default for Keymap {
             (Command::ZoomOut, S::ctrl(Key::Minus)),
             (Command::ToggleKeyboard, S::ctrl(Key::K)),
             (Command::ToggleMixer, S::plain(Key::F9)),
+            (Command::ToggleLibrary, S::plain(Key::F6)),
             (Command::SwitchView, S::plain(Key::F5)),
             (Command::Export, S::ctrl(Key::E)),
             (Command::Split, S::ctrl(Key::B)),

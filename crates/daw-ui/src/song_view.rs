@@ -38,6 +38,7 @@ use egui::{
 };
 
 use crate::icons::{Icon, Look, icon_button};
+use crate::library_panel::LibraryDrag;
 use crate::session::{LaneChoice, Session, SoundState};
 use crate::signature_row::{Axis, SignatureRow};
 use crate::step_grid::PAD_ORDER;
@@ -317,7 +318,8 @@ impl SongView {
         self.headers(ui, session, &layout, intents);
         self.clip_menu(ui, session);
         self.empty_spot_menu(ui, session);
-        if ui.input(|i| !i.raw.hovered_files.is_empty()) {
+        let library_drag = egui::DragAndDrop::has_payload_of_type::<LibraryDrag>(ui.ctx());
+        if library_drag || ui.input(|i| !i.raw.hovered_files.is_empty()) {
             let painter = ui.painter_at(layout.timeline);
             painter.rect_filled(
                 layout.timeline,
@@ -338,19 +340,28 @@ impl SongView {
     /// pointer at its beat, or on new tracks (at the play position if the
     /// pointer is not over the tracks).
     fn take_dropped_files(&mut self, ui: &Ui, session: &mut Session, layout: &Layout) {
-        let files: Vec<PathBuf> = ui.input(|i| {
+        let mut files: Vec<PathBuf> = ui.input(|i| {
             i.raw
                 .dropped_files
                 .iter()
                 .map(|f| f.path().to_path_buf())
                 .collect()
         });
-        if files.is_empty() {
-            return;
-        }
         let pointer = ui
             .input(|i| i.pointer.latest_pos())
             .filter(|p| layout.timeline.contains(*p));
+        // Files dragged from the sound library (decision 0023), let go
+        // over the tracks.
+        if pointer.is_some()
+            && ui.input(|i| i.pointer.any_released())
+            && let Some(dragged) = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
+        {
+            egui::DragAndDrop::clear_payload(ui.ctx());
+            files.extend(dragged.0.iter().cloned());
+        }
+        if files.is_empty() {
+            return;
+        }
         let (track, at) = match pointer {
             Some(pos) => {
                 let track = layout
@@ -1790,6 +1801,14 @@ impl SongView {
         let missing = plugin.is_some_and(|target| session.is_plugin_missing(target));
         let kind = match &instrument {
             Instrument::Drums { kit, .. } => text::kit_description(text::kit_name(kit)),
+            Instrument::SoundFont {
+                source: daw_model::SoundSource::File(path),
+                ..
+            } => text::soundfont_track(
+                &std::path::Path::new(path)
+                    .file_name()
+                    .map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned()),
+            ),
             Instrument::SoundFont { .. } => text::FIRST_TRACK.to_owned(),
             Instrument::Plugin(setup) => text::plugin_track(&setup.plugin.name, missing),
             Instrument::Audio => text::AUDIO_TRACK_KIND.to_owned(),
