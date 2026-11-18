@@ -11,9 +11,10 @@ use crate::automation::{AutomationLane, AutomationTarget};
 use crate::mixer::{ChainPlace, Effect, EffectKind, LimiterSettings, MasterBus};
 use crate::song::{
     AudioFile, AudioId, ChannelStrip, Clip, ClipContent, ClipId, EffectId, Instrument, MAX_KEY,
-    Note, NoteId, Pattern, PatternId, Track, TrackId, default_step,
+    Note, NoteId, Pattern, PatternId, Swing, Track, TrackId, default_step,
 };
-use crate::time::{MeterMap, Region, TempoMap, Ticks, TimeSignature};
+use crate::theory::KeyMap;
+use crate::time::{MeterMap, Region, TempoChange, TempoMap, Ticks, TimeSignature};
 
 /// One song. This is the single source of truth: the interface shows it and
 /// edits it (through [`crate::Document`]), the engine plays a compiled copy.
@@ -29,6 +30,9 @@ pub struct Project {
     pub tempo: TempoMap,
     /// Time signatures over the whole song.
     pub meter: MeterMap,
+    /// The song's key over the whole song (decision 0018).
+    #[serde(default)]
+    pub key: KeyMap,
     /// The tracks, top to bottom.
     pub tracks: Vec<Arc<Track>>,
     /// Every pattern, whether placed on the timeline or not.
@@ -52,6 +56,7 @@ impl Project {
             title: String::new(),
             tempo: TempoMap::default(),
             meter: MeterMap::default(),
+            key: KeyMap::default(),
             tracks: Vec::new(),
             patterns: Vec::new(),
             loop_region: None,
@@ -153,6 +158,7 @@ impl Project {
             notes: Vec::new(),
             track: None,
             step: default_step(),
+            swing: Swing::default(),
         }));
         id
     }
@@ -610,13 +616,36 @@ impl Project {
         Some(clip.start + self.ticks_for(clip.start, left))
     }
 
-    /// Sets the tempo from `at` onwards (decision 0017: audio clips keep
-    /// their length in seconds, since their sound is not stretched; their
-    /// starts stay on their beats).
+    /// Sets the tempo from `at` onwards (see [`Self::change_tempo`]).
     pub fn set_tempo(&mut self, at: Ticks, bpm: f64) {
+        self.change_tempo(|tempo| tempo.set(at, bpm));
+    }
+
+    /// Changes the tempo map (decision 0017: audio clips keep their length
+    /// in seconds, since their sound is not stretched; their starts stay on
+    /// their beats).
+    pub fn change_tempo(&mut self, change: impl FnOnce(&mut TempoMap)) {
+        let lengths = self.audio_seconds();
         let before = self.tempo.clone();
-        self.tempo.set(at, bpm);
-        if before == self.tempo {
+        change(&mut self.tempo);
+        if before != self.tempo {
+            self.restore_audio_seconds(&lengths);
+        }
+    }
+
+    /// How long each audio clip lasts, in seconds.
+    fn audio_seconds(&self) -> std::collections::HashMap<ClipId, f64> {
+        self.tracks
+            .iter()
+            .flat_map(|t| t.clips.iter().filter(|c| c.is_audio()))
+            .map(|c| (c.id, self.seconds_between(c.start, c.end())))
+            .collect()
+    }
+
+    /// Gives audio clips back their lengths in seconds from their (possibly
+    /// new) starts, under the (possibly new) tempo.
+    fn restore_audio_seconds(&mut self, lengths: &std::collections::HashMap<ClipId, f64>) {
+        if lengths.is_empty() {
             return;
         }
         let tempo = self.tempo.clone();
@@ -629,7 +658,9 @@ impl Project {
                 .iter_mut()
                 .filter(|c| c.is_audio())
             {
-                let seconds = before.seconds_at(clip.end()) - before.seconds_at(clip.start);
+                let Some(seconds) = lengths.get(&clip.id) else {
+                    continue;
+                };
                 #[allow(clippy::cast_possible_truncation, reason = "tick positions fit easily")]
                 let end = tempo
                     .ticks_at(tempo.seconds_at(clip.start) + seconds)
@@ -637,6 +668,99 @@ impl Project {
                 clip.length = Ticks((end - clip.start.0).max(1));
             }
         }
+    }
+
+    /// Changes the time signatures, keeping the song in its bars (decision
+    /// 0018): clips, automation points, tempo changes and the loop keep
+    /// their bar and their place in it; a pattern that fills whole bars
+    /// where it is first placed keeps its number of bars if its notes still
+    /// fit; audio clips keep their length in seconds.
+    pub fn change_meter(&mut self, meter: MeterMap) {
+        if meter == self.meter {
+            return;
+        }
+        let lengths = self.audio_seconds();
+        let resized = self.whole_bar_patterns(&meter);
+        let old = std::mem::replace(&mut self.meter, meter);
+        let new = self.meter.clone();
+        let place = |at: Ticks| old.keep_bars(&new, at);
+        for track in &mut self.tracks {
+            let track = Arc::make_mut(track);
+            for clip in &mut track.clips {
+                let start = place(clip.start);
+                if !clip.is_audio() {
+                    let end = place(clip.end());
+                    if end > start {
+                        clip.length = end - start;
+                    }
+                }
+                clip.start = start;
+            }
+            track.clips.sort_by_key(|c| (c.start, c.id));
+            for lane in &mut track.automation {
+                for point in &mut lane.points {
+                    point.at = place(point.at);
+                }
+                lane.points.sort_by_key(|p| p.at);
+            }
+        }
+        self.tempo = TempoMap::from_changes(self.tempo.changes().iter().map(|c| TempoChange {
+            at: place(c.at),
+            ..*c
+        }));
+        if let Some(region) = self.loop_region {
+            let start = place(region.start);
+            let end = place(region.end).max(start + Ticks(1));
+            self.loop_region = Region::new(start, end);
+        }
+        for (pattern, length) in resized {
+            if let Some(p) = self.pattern_mut(pattern) {
+                p.length = length;
+            }
+        }
+        self.restore_audio_seconds(&lengths);
+    }
+
+    /// The patterns that fill whole bars where they are first placed, with
+    /// the length the same number of bars has under `meter`, if their notes
+    /// fit in it.
+    fn whole_bar_patterns(&self, meter: &MeterMap) -> Vec<(PatternId, Ticks)> {
+        let old = &self.meter;
+        let on_bar_line = |at: Ticks| {
+            let p = old.position(at);
+            p.beat == 0 && p.ticks == Ticks::ZERO
+        };
+        let mut resized = Vec::new();
+        for pattern in &self.patterns {
+            let Some(clip) = pattern
+                .track
+                .and_then(|t| self.track(t))
+                .and_then(|t| t.clips.iter().find(|c| c.pattern() == Some(pattern.id)))
+            else {
+                continue;
+            };
+            let ClipContent::Pattern { offset, .. } = clip.content else {
+                continue;
+            };
+            let zero = clip.start - offset;
+            let end = zero + pattern.length;
+            if zero < Ticks::ZERO || !on_bar_line(zero) || !on_bar_line(end) {
+                continue;
+            }
+            let first = old.position(zero).bar;
+            let bars = old.position(end).bar - first;
+            let length = meter.bar_start(first + bars) - meter.bar_start(first);
+            let notes_end = pattern
+                .notes
+                .iter()
+                .map(Note::end)
+                .max()
+                .unwrap_or(Ticks::ZERO);
+            if length != pattern.length && notes_end <= length && length > Ticks::ZERO {
+                resized.push((pattern.id, length));
+            }
+        }
+        resized
     }
 
     // ----- Effects
@@ -1348,6 +1472,108 @@ mod tests {
         assert_eq!(
             project.tracks[0].clips[0], pattern_clip,
             "patterns follow the beat"
+        );
+    }
+
+    #[test]
+    fn a_glide_keeps_audio_clips_in_seconds_too() {
+        let (mut project, _, _, clip) = audio_song();
+        project.change_tempo(|tempo| {
+            tempo.set(Ticks::quarters(8), 60.0);
+            tempo.set_glide(Ticks::ZERO, true);
+        });
+        let c = *project.clip(clip).unwrap().1;
+        assert_eq!(c.start, Ticks::WHOLE);
+        assert!((project.seconds_between(c.start, c.end()) - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn changing_the_time_signature_keeps_the_song_in_its_bars() {
+        // Piano: four bars (the loop); drums: one bar repeated over four;
+        // an automation point at bar 3, a tempo change at bar 4, a sound
+        // clip at bar 2.
+        let mut project = Project::starter("P", "Piano");
+        let (drums, beat) = project.add_drums_with_pattern("Drums", "Beat", "acoustic", 1, 4);
+        let (piano, piano_pattern) = (project.tracks[1].id, project.patterns[0].id);
+        let (_, audio, clip) = {
+            let (p, track, audio, clip) = {
+                let mut p = project.clone();
+                let track = p.add_audio_track("Audio");
+                let audio = p.add_audio_file(AudioFile {
+                    id: AudioId(0),
+                    name: "Take".to_owned(),
+                    file: "take.wav".to_owned(),
+                    frames: 96_000,
+                    sample_rate: 48_000,
+                    channels: 1,
+                });
+                let length = p.ticks_for(Ticks::WHOLE, 2.0);
+                let clip = p
+                    .add_audio_clip(track, Ticks::WHOLE, length, audio, 0)
+                    .unwrap();
+                (p, track, audio, clip)
+            };
+            project = p;
+            (track, audio, clip)
+        };
+        let _ = audio;
+        project.add_lane(drums, AutomationTarget::Volume);
+        project.update_lane(drums, AutomationTarget::Volume, |lane| {
+            lane.insert(crate::AutomationPoint {
+                at: Ticks::WHOLE * 2 + Ticks::QUARTER,
+                value: 0.5,
+            });
+        });
+        project.set_tempo(Ticks::WHOLE * 3, 90.0);
+
+        let mut meter = MeterMap::default();
+        meter.set(1, TimeSignature::new(3, 4).unwrap());
+        project.change_meter(meter);
+
+        let bar = |n: u32| project.meter.bar_start(n);
+        assert_eq!(bar(4), Ticks::quarters(13));
+        let drum_clip = project.track(drums).unwrap().clips[0];
+        assert_eq!((drum_clip.start, drum_clip.end()), (Ticks::ZERO, bar(4)));
+        assert_eq!(
+            project.pattern(beat).unwrap().length,
+            Ticks::WHOLE,
+            "bar one is still 4/4: the beat keeps its bar"
+        );
+        let piano_clip = project.track(piano).unwrap().clips[0];
+        assert_eq!(piano_clip.end(), bar(4), "the piano still ends at bar 5");
+        assert_eq!(
+            project.pattern(piano_pattern).unwrap().length,
+            bar(4),
+            "an empty four-bar pattern stays four bars"
+        );
+        assert_eq!(project.loop_region, Region::new(Ticks::ZERO, bar(4)));
+        let point = project
+            .lane(drums, AutomationTarget::Volume)
+            .unwrap()
+            .points[0];
+        assert_eq!(point.at, bar(2) + Ticks::QUARTER, "bar 3, beat 2");
+        assert_eq!(
+            project.tempo.changes()[1].at,
+            bar(3),
+            "the tempo change keeps bar 4"
+        );
+        let sound = *project.clip(clip).unwrap().1;
+        assert_eq!(sound.start, bar(1), "sound keeps its bar");
+        assert!((project.seconds_between(sound.start, sound.end()) - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_pattern_whose_notes_would_not_fit_keeps_its_length() {
+        let mut project = Project::starter("P", "Piano");
+        let pattern = project.patterns[0].id;
+        project.add_note(pattern, note(Ticks::quarters(15), 60));
+        project.change_meter(MeterMap::constant(TimeSignature::new(3, 4).unwrap()));
+        assert_eq!(project.pattern(pattern).unwrap().length, Ticks::WHOLE * 4);
+        let clip = project.tracks[0].clips[0];
+        assert_eq!(
+            clip.end(),
+            Ticks::quarters(12),
+            "its clip keeps its four bars"
         );
     }
 }

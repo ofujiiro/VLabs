@@ -108,11 +108,97 @@ pub struct Pattern {
     /// The step sequencer's step length for this pattern.
     #[serde(default = "default_step")]
     pub step: Ticks,
+    /// How the pattern swings as it plays (decision 0018).
+    #[serde(default, skip_serializing_if = "Swing::is_straight")]
+    pub swing: Swing,
 }
 
 /// The step length of a new pattern: a sixteenth note.
 pub fn default_step() -> Ticks {
     Ticks::note_value(1, 16)
+}
+
+/// Swing (decision 0018): every second `unit` of a pattern plays late, and
+/// everything between grid lines moves with it. Notes stay where they are
+/// written; the warp applies as the pattern plays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Swing {
+    /// How late the off-beats are, from 0 (straight) to 100 (as late as a
+    /// dotted note: three to one). 67 is the triplet feel (two to one).
+    pub percent: u8,
+    /// The note value that swings: an eighth or a sixteenth.
+    pub unit: Ticks,
+}
+
+impl Default for Swing {
+    fn default() -> Self {
+        Self {
+            percent: 0,
+            unit: Ticks::note_value(1, 16),
+        }
+    }
+}
+
+impl Swing {
+    /// The most swing there is.
+    pub const MAX_PERCENT: u8 = 100;
+
+    /// Whether the pattern plays straight.
+    #[allow(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "serde's skip_serializing_if passes a reference"
+    )]
+    pub fn is_straight(&self) -> bool {
+        self.percent == 0 || self.unit <= Ticks::ZERO
+    }
+
+    /// Where a position written in the pattern plays. In each pair of
+    /// units, the first is stretched by `(200 + percent) / 200` and the
+    /// second squeezed to fit; exact in integers, rounded to the tick.
+    pub fn apply(self, at: Ticks) -> Ticks {
+        if self.is_straight() {
+            return at;
+        }
+        let unit = i128::from(self.unit.0);
+        let percent = i128::from(self.percent.min(Self::MAX_PERCENT));
+        let period = 2 * unit;
+        let at = i128::from(at.0);
+        let (pair, into) = (at.div_euclid(period), at.rem_euclid(period));
+        let swung = if into < unit {
+            rounded_div(into * (200 + percent), 200)
+        } else {
+            rounded_div(
+                unit * (200 + percent) + (into - unit) * (200 - percent),
+                200,
+            )
+        };
+        Ticks(i64::try_from(pair * period + swung).unwrap_or(i64::MAX))
+    }
+
+    /// Where a position that played (a note recorded into a swung pattern)
+    /// is written: the inverse of [`Self::apply`].
+    pub fn remove(self, at: Ticks) -> Ticks {
+        if self.is_straight() {
+            return at;
+        }
+        let unit = i128::from(self.unit.0);
+        let percent = i128::from(self.percent.min(Self::MAX_PERCENT));
+        let period = 2 * unit;
+        let at = i128::from(at.0);
+        let (pair, into) = (at.div_euclid(period), at.rem_euclid(period));
+        let split = unit * (200 + percent);
+        let written = if into * 200 < split {
+            rounded_div(into * 200, 200 + percent)
+        } else {
+            unit + rounded_div(into * 200 - split, 200 - percent)
+        };
+        Ticks(i64::try_from(pair * period + written).unwrap_or(i64::MAX))
+    }
+}
+
+/// `a / b` rounded to the nearest whole number (b positive).
+fn rounded_div(a: i128, b: i128) -> i128 {
+    (2 * a + b).div_euclid(2 * b)
 }
 
 impl Pattern {
@@ -475,4 +561,54 @@ pub struct Track {
     /// Settings that change over the song.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub automation: Vec<crate::automation::AutomationLane>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn swing_delays_the_off_beats_only() {
+        let sixteenth = Ticks::note_value(1, 16);
+        let straight = Swing::default();
+        assert!(straight.is_straight());
+        assert_eq!(straight.apply(sixteenth), sixteenth);
+        let full = Swing {
+            percent: 100,
+            unit: sixteenth,
+        };
+        // At full swing the off-beat sixteenth lands on a dotted sixteenth.
+        assert_eq!(full.apply(sixteenth), Ticks::note_value(3, 32));
+        for beat in 0..8 {
+            let on = sixteenth * (2 * beat);
+            assert_eq!(full.apply(on), on, "the beats stay");
+        }
+        let triplet = Swing {
+            percent: 67,
+            unit: Ticks::note_value(1, 8),
+        };
+        let off = triplet.apply(Ticks::note_value(1, 8));
+        let ideal = Ticks::note_value(1, 6);
+        assert!(
+            (off - ideal).0.abs() < Ticks::note_value(1, 8).0 / 200,
+            "67 % is within half a percent of the triplet feel"
+        );
+    }
+
+    #[test]
+    fn swing_is_a_smooth_warp_that_can_be_undone() {
+        let swing = Swing {
+            percent: 45,
+            unit: Ticks::note_value(1, 16),
+        };
+        let mut last = Ticks(i64::MIN);
+        for step in -40..400 {
+            let at = Ticks(step * 12_345);
+            let played = swing.apply(at);
+            assert!(played >= last, "the warp never goes backwards");
+            last = played;
+            let back = swing.remove(played);
+            assert!((back - at).0.abs() <= 1, "{at:?} comes back as {back:?}");
+        }
+    }
 }

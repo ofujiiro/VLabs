@@ -9,6 +9,7 @@ mod plugin;
 mod project;
 mod quantize;
 mod song;
+mod theory;
 mod time;
 
 pub use automation::{
@@ -26,9 +27,12 @@ pub use quantize::quantize_starts;
 pub use song::{
     ACOUSTIC_KIT, AudioFile, AudioId, BUILTIN_PIANO, ChannelStrip, Clip, ClipContent, ClipId,
     DEFAULT_VELOCITY, ELECTRONIC_KIT, EffectId, Instrument, MAX_KEY, Note, NoteId, PadSetting,
-    Pattern, PatternId, SoundSource, Track, TrackId, default_step,
+    Pattern, PatternId, SoundSource, Swing, Track, TrackId, default_step,
+};
+pub use theory::{
+    ChordKind, ChordShape, INTERVALS, KeyChange, KeyMap, Scale, ScaleKind, invert, invert_once,
 };
 pub use time::{
     BarPosition, MeterChange, MeterMap, Region, TEMPO_RANGE, TICKS_PER_QUARTER, TICKS_PER_WHOLE,
-    TempoChange, TempoMap, Ticks, TimeSignature, seconds_per_tick,
+    TempoChange, TempoMap, Ticks, TimeSignature, piece_seconds, piece_ticks, seconds_per_tick,
 };

@@ -19,7 +19,8 @@ use daw_formats::{FORMAT_VERSION, load_project, save_project};
 use daw_model::{
     ACOUSTIC_KIT, AudioFile, AudioId, AutomationLane, AutomationPoint, AutomationTarget,
     ChainPlace, ClipContent, DEFAULT_VELOCITY, EffectKind, EqSettings, Instrument, Note, NoteId,
-    PluginFormat, PluginRef, PluginSetup, PluginState, Project, Ticks,
+    PluginFormat, PluginRef, PluginSetup, PluginState, Project, Scale, ScaleKind, Swing, Ticks,
+    TimeSignature,
 };
 
 fn data_folder() -> PathBuf {
@@ -70,7 +71,8 @@ fn write_hum(folder: &std::path::Path) {
 /// The project every sample file contains (version 2 added the drum
 /// track, the pad setting and the effects; version 3 a plugin track with
 /// saved settings, a plugin effect and automation lanes; version 4 an audio
-/// track with a clip of a file kept in the container).
+/// track with a clip of a file kept in the container; version 5 a key with
+/// a change, a swung beat, a tempo glide and a time-signature change).
 fn reference_project() -> Project {
     let mut project = Project::starter("Pattern 1", "Piano");
     let (_, pattern) = project.first_pattern().unwrap();
@@ -135,6 +137,17 @@ fn reference_project() -> Project {
     });
     "Format sample".clone_into(&mut project.title);
     project.tempo.set(Ticks::quarters(8), 90.0);
+    project.tempo.set(Ticks::quarters(16), 100.0);
+    project.tempo.set_glide(Ticks::quarters(8), true);
+    project.key.set(0, Some(Scale::new(9, ScaleKind::Minor)));
+    project.key.set(4, Some(Scale::new(0, ScaleKind::Major)));
+    project.meter.set(8, TimeSignature::new(7, 8).unwrap());
+    if let Some(beat) = project.pattern_mut(beat) {
+        beat.swing = Swing {
+            percent: 67,
+            unit: Ticks::note_value(1, 8),
+        };
+    }
     let triplet = Ticks::note_value(1, 12);
     for (i, key) in [60_u8, 64, 67, 72].iter().enumerate() {
         project.add_note(
@@ -185,46 +198,19 @@ fn every_released_format_version_still_opens() {
                 path.display()
             );
         }
-        if version >= 2 {
-            let drums = project
-                .tracks
-                .iter()
-                .find(|t| t.instrument.is_drums())
-                .unwrap_or_else(|| panic!("{} lost its drum track", path.display()));
-            assert!(
-                matches!(&drums.instrument, Instrument::Drums { kit, .. } if kit == ACOUSTIC_KIT)
-            );
-            assert_eq!(drums.instrument.pad(36).tune, -2.0, "{}", path.display());
-            assert_eq!(drums.effects.len(), 1, "{}", path.display());
-            assert_eq!(
-                project.master.effects.len(),
-                1,
-                "the master limiter: {}",
-                path.display()
-            );
-        }
-        if version >= 3 {
-            let synth = project
-                .tracks
-                .iter()
-                .find(|t| t.instrument.plugin().is_some())
-                .unwrap_or_else(|| panic!("{} lost its plugin track", path.display()));
-            let setup = synth.instrument.plugin().unwrap();
-            assert_eq!(setup, &sample_plugin(), "the plugin and its settings");
-            assert!(
-                matches!(&synth.effects[0].kind, EffectKind::Plugin(p) if *p == sample_plugin()),
-                "the plugin effect and its settings"
-            );
-            assert_eq!(synth.automation.len(), 1);
-            let value = synth.automation[0].value_at(half_way());
-            assert!((value.unwrap() - 0.5).abs() < 1e-6, "{}", path.display());
-        }
+        check_mixing_and_plugins(&project, version, &path);
         if version >= 4 {
             check_audio(&project, &opened, &path);
         }
+        if version >= 5 {
+            check_theory_and_rhythm(&project, &path);
+        } else {
+            assert!(!project.key.has_any(), "no key before version 5");
+            assert!(project.patterns.iter().all(|p| p.swing.is_straight()));
+        }
         assert_eq!(project.title, "Format sample", "{}", path.display());
         assert_eq!(
-            project.tempo.bpm_at(Ticks::quarters(9)),
+            project.tempo.bpm_at(Ticks::quarters(8)),
             90.0,
             "{}",
             path.display()
@@ -254,6 +240,43 @@ fn every_released_format_version_still_opens() {
         found >= FORMAT_VERSION as usize,
         "a sample file is missing for some format version (found {found})"
     );
+}
+
+/// The version 2 sample's drums and effects, and the version 3 sample's
+/// plugin and automation, came back.
+fn check_mixing_and_plugins(project: &Project, version: u32, path: &std::path::Path) {
+    if version >= 2 {
+        let drums = project
+            .tracks
+            .iter()
+            .find(|t| t.instrument.is_drums())
+            .unwrap_or_else(|| panic!("{} lost its drum track", path.display()));
+        assert!(matches!(&drums.instrument, Instrument::Drums { kit, .. } if kit == ACOUSTIC_KIT));
+        assert_eq!(drums.instrument.pad(36).tune, -2.0, "{}", path.display());
+        assert_eq!(drums.effects.len(), 1, "{}", path.display());
+        assert_eq!(
+            project.master.effects.len(),
+            1,
+            "the master limiter: {}",
+            path.display()
+        );
+    }
+    if version >= 3 {
+        let synth = project
+            .tracks
+            .iter()
+            .find(|t| t.instrument.plugin().is_some())
+            .unwrap_or_else(|| panic!("{} lost its plugin track", path.display()));
+        let setup = synth.instrument.plugin().unwrap();
+        assert_eq!(setup, &sample_plugin(), "the plugin and its settings");
+        assert!(
+            matches!(&synth.effects[0].kind, EffectKind::Plugin(p) if *p == sample_plugin()),
+            "the plugin effect and its settings"
+        );
+        assert_eq!(synth.automation.len(), 1);
+        let value = synth.automation[0].value_at(half_way());
+        assert!((value.unwrap() - 0.5).abs() < 1e-6, "{}", path.display());
+    }
 }
 
 /// The version 4 sample's audio track, clip and file came back.
@@ -327,4 +350,26 @@ fn reference_project_after_load(loaded: &Project) -> Project {
     expected.repair_id_counter();
     let _ = loaded;
     expected
+}
+
+/// The version 5 sample's key changes, swing, glide and meter change came
+/// back.
+fn check_theory_and_rhythm(project: &Project, path: &std::path::Path) {
+    let name = path.display();
+    assert_eq!(
+        project.key.at_bar(0),
+        Some(Scale::new(9, ScaleKind::Minor)),
+        "{name}"
+    );
+    assert_eq!(project.key.at_bar(6).map(|s| s.tonic), Some(0), "{name}");
+    assert!(project.tempo.changes()[1].glide, "{name}");
+    assert!((project.tempo.bpm_at(Ticks::quarters(12)) - 95.0).abs() < 1e-9);
+    assert_eq!(project.meter.signature_at_bar(8).numerator, 7, "{name}");
+    let swung = project
+        .patterns
+        .iter()
+        .find(|p| !p.swing.is_straight())
+        .unwrap_or_else(|| panic!("{name} lost its swing"));
+    assert_eq!(swung.swing.percent, 67);
+    assert_eq!(swung.swing.unit, Ticks::note_value(1, 8));
 }
