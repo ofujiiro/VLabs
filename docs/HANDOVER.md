@@ -65,6 +65,26 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   no master-bus lanes; no instrument swap; plugins in-process; plugin
   latency not compensated.
 
+## Phase 5 in progress (branch `phase-5-theory-rhythm`, not pushed)
+
+Built and committed: decision 0018; model (theory module, key map,
+tempo glides, swing, meter changes that keep bars, format v5 with its
+sample); engine (glides, swing; offline renders check both); session
+(key, keep in key, chord stamps, inversions, intervals, swing, any
+pattern length, tempo/signature/key changes); interface (key button,
+Draw/Snap/Swing/Notes menus, piano roll and step grid tools, the song
+view's signature row). Tests: model, engine, session (`tests/theory.rs`)
+and interface tests pass, except the open issue below.
+
+Open, next session first:
+- A simulated click on a choice inside the signature row's bar panel
+  (e.g. "7/8") does not register in `egui_kittest` (the panel opens; the
+  test now makes the change directly). Check it in the real program;
+  likely the Area's input or `ui.close()` inside `signature_choices`.
+- Not yet done: full `cargo xtask ci` on the last commit, the program on
+  the virtual screen (screenshots), ROADMAP/README/architecture/CLAUDE.md
+  updates for phase 5, pushing (the owner must give push access).
+
 ## Next: phase 5 — Theory and rhythm
 
 Key and scale highlighting, snap-to-scale, chord stamps, inversions,

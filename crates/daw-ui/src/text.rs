@@ -1267,6 +1267,8 @@ pub const SIGNATURES: &str = "Signatures";
 pub const SIGNATURES_HINT: &str =
     "Click a bar to change the time signature or the key from there; drag a change to move it";
 pub const TEMPO_LANE: &str = "Tempo";
+pub const SIGNATURE_TAGS: &str = "Time-signature and key changes";
+pub const TEMPO_LINE: &str = "Tempo changes";
 pub const TEMPO_LANE_HINT: &str = "Click to add a tempo change; drag a point to change it, \
      click it for its exact tempo, right-click it to remove it";
 pub const SHOW_SIGNATURES: &str = "Show tempo and signature changes";

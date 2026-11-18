@@ -96,6 +96,9 @@ pub struct SignatureRow {
     open: bool,
     drag: Drag,
     panel: Option<(Panel, Pos2)>,
+    /// Set on the frame a panel opens, so the press that opened it does
+    /// not count as a press outside it.
+    panel_fresh: bool,
 }
 
 /// A signature tag on screen: its bar and where it is drawn.
@@ -253,10 +256,6 @@ impl SignatureRow {
     /// a click opens the row.
     fn folded(&mut self, ui: &mut Ui, session: &Session, lane: Rect, axis: &Axis) {
         let p = Palette::of(ui.ctx());
-        let response = ui.interact(lane, ui.scope_id().with("signature-folded"), Sense::click());
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::Role::Button, true, text::SHOW_SIGNATURES)
-        });
         let project = session.project();
         let first = project.meter.initial();
         let summary = text::signature_summary(
@@ -265,6 +264,9 @@ impl SignatureRow {
             first.denominator,
             &text::song_key_name(project.key.at_bar(0)),
         );
+        // A click on the line opens the row, like the button beside it.
+        let response = ui.interact(lane, ui.scope_id().with("signature-folded"), Sense::click());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &summary));
         let painter = ui.painter_at(lane);
         painter.text(
             pos2(lane.left() + 10.0, lane.center().y),
@@ -350,8 +352,9 @@ impl SignatureRow {
             ui.scope_id().with("signature-tags"),
             Sense::click_and_drag(),
         );
-        response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Canvas, true, text::SIGNATURES));
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Canvas, true, text::SIGNATURE_TAGS)
+        });
         let tags = Self::tag_list(ui, session, strip, axis);
         let (pos, pressed, down) = ui.input(|i| {
             (
@@ -377,6 +380,7 @@ impl SignatureRow {
                 let bar = session.project().meter.position(axis.tick(pos.x)).bar;
                 let x = axis.x(session.project().meter.bar_start(bar));
                 self.panel = Some((Panel::Bar(bar), pos2(x, strip.bottom())));
+                self.panel_fresh = true;
             }
         }
         if let Drag::Tag { bar, origin, moved } = self.drag {
@@ -557,7 +561,7 @@ impl SignatureRow {
             Sense::click_and_drag(),
         );
         response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Canvas, true, text::TEMPO_LANE));
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Canvas, true, text::TEMPO_LINE));
         let range = match self.drag {
             // The scale holds still while a point is dragged.
             Drag::Tempo { .. } => ui
@@ -761,6 +765,7 @@ impl SignatureRow {
                 });
             });
         let pressed_outside = ui.input(|i| i.pointer.any_pressed())
+            && !std::mem::take(&mut self.panel_fresh)
             && !area.response.contains_pointer()
             && ui
                 .input(|i| i.pointer.interact_pos())
