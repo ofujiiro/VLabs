@@ -47,27 +47,18 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   v1, as the brief says (decision 0023); a `.dll` added in the Plugins
   window is explained.
 
-- After those merges, CI failed on Windows and fixes are on branch
-  `plugins-and-libraries` (pull request to be opened): two install tests
-  wrote Linux binary headers into their test plugins, which Windows then
-  set aside as made for Linux; and the installer script pieced file paths
-  together with `/`, which NSIS's `File` cannot follow on Windows (it
-  finds a file's folder by its last `\`), so makensis found nothing. The
-  script now gets each file's whole path. "Program builds" made the Linux
-  AppImage successfully.
+- After those merges, CI failed on Windows; the fixes were merged in pull
+  request 5: two install tests wrote Linux binary headers into their test
+  plugins, and the installer script pieced file paths together with `/`,
+  which NSIS's `File` cannot follow on Windows (the script now gets each
+  file's whole path).
+- The owner decided (November 2026) not to bundle Wine and yabridge with
+  the Linux build (decision 0023), and to drop the ".mse" question.
 
 ## Waiting on the owner
 
-- Open the pull request for `plugins-and-libraries` (the Windows fixes
-  and the VST2 note); before merging, run "Program builds" on that branch
-  to check that the Windows installer is made now.
-- The hands-on checks of phases 3 to 6 (ROADMAP.md, "things to try").
-- A decision on bundling Wine and yabridge with the Linux build (their
-  licences, LGPL and GPL, and their size), versus setting up the person's
-  own Wine and yabridge.
-
-- Whether ".mse", in the owner's list of file kinds, meant `.msi`
-  (installers, which the Plugins window takes) or something else.
+- The hands-on checks of phases 3 to 6 and of the plugins round
+  (ROADMAP.md, "things to try").
 
 ## Next
 
@@ -77,7 +68,7 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
 ## Not verified (say so if asked)
 
 - The installer and the AppImage on real machines. CI made the AppImage;
-  the Windows installer's fix has not run on CI yet. Running the
+  the Windows installer's fix was merged without my checking its CI run. Running the
   downloaded build tools (appimagetool) or making a stand-in program for
   makensis was not permitted in the development session, so neither was
   built locally.

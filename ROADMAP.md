@@ -3,17 +3,12 @@
 The phases come from the project brief. Each ends with a build the owner can
 run and a checklist of things to try. Status is updated at every milestone.
 
-**Now:** phase 6 (completing v1: the synth, MIDI files and DAWproject in
-and out, FLAC export, autosave polish, the Windows installer and the
-Linux AppImage, generated licence notices, the user guide) is built on
-branch `phase-6-completing-v1`, waiting for its pull request and the
-owner's check. Phase 5 is merged (pull request 2, CI green on Windows and
-Linux). The phase 3, 4 and 5 builds still await the owner's hands-on
-check. Phase 2 is complete and the owner confirmed its milestone build
-works. Phase 1 is complete and the owner confirmed its build works on
-Linux. Phase 0 is complete: all three risk spikes passed on Windows and
-Linux (decision 0009). The repository has been public since November 2026
-(the owner's decision).
+**Now:** phases 0 to 6 and the plugins and sound libraries round are
+built and merged (pull requests 1 to 5). Next: SFZ instruments, then the
+owner's hands-on checks close v1; the singing voices come after v1. The
+owner confirmed the phase 1 and 2 builds; the phase 3 to 6 builds and the
+plugins round await their hands-on check. The repository has been public
+since November 2026 (the owner's decision).
 
 ## Phase 0 — Foundations and risk spikes
 
@@ -550,8 +545,8 @@ request 4).
   larger than 256 MB (drag those in).
 - A large SoundFont (hundreds of megabytes) pauses the window for a moment
   when it is added or when a song using it opens.
-- Bundling Wine and yabridge with the Linux version (so nothing else needs
-  installing) is a licensing and size decision for the owner.
+- Wine and yabridge are not bundled with the Linux version (the owner's
+  decision, November 2026): the Plugins window says how to install them.
 
 ## After v1 — Singing voices (the owner's request, November 2026)
 
