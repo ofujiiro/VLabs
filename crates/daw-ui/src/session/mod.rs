@@ -11,13 +11,16 @@
 mod arrange;
 mod audio;
 mod audio_store;
+mod conductor;
 mod mixing;
 mod plugins;
 mod recorder;
+mod theory;
 
 pub use audio::{LiveTake, SoundState};
 pub use mixing::MAX_GAIN;
 pub use plugins::{LaneChoice, PluginSearch};
+pub use theory::Draw;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -26,7 +29,7 @@ use std::time::{Duration, Instant};
 use daw_engine::{Engine, EngineEvent, PlaybackScope, PluginTarget, RecordState};
 use daw_model::{
     ClipContent, ClipId, Document, MAX_KEY, MeterMap, Note, NoteId, Pattern, PatternId, Project,
-    Region, TEMPO_RANGE, TICKS_PER_WHOLE, Ticks, TimeSignature, TrackId,
+    Region, TICKS_PER_WHOLE, Ticks, TrackId,
 };
 use egui::Key;
 
@@ -57,16 +60,23 @@ pub enum Grid {
 }
 
 impl Grid {
-    /// The choices offered, coarse to fine.
-    pub const CHOICES: [Self; 9] = [
+    /// The choices offered, in the menu's groups: straight values coarse to
+    /// fine, then triplets, quintuplets and septuplets (decision 0018), then
+    /// no grid.
+    pub const CHOICES: [Self; 14] = [
         Self::Bar,
         Self::Note(2),
         Self::Note(4),
         Self::Note(8),
         Self::Note(16),
         Self::Note(32),
+        Self::Note(6),
         Self::Note(12),
         Self::Note(24),
+        Self::Note(10),
+        Self::Note(20),
+        Self::Note(14),
+        Self::Note(28),
         Self::Off,
     ];
 
@@ -80,11 +90,13 @@ impl Grid {
         }
     }
 
-    /// Where something placed at `at` lands.
+    /// Where something placed at `at` lands. Grid lines count from each
+    /// bar line (decision 0018).
     pub fn snap_down(self, meter: &MeterMap, at: Ticks) -> Ticks {
+        let at = at.max(Ticks::ZERO);
         match self {
-            Self::Off => at.max(Ticks::ZERO),
-            _ => at.floor_to(self.step(meter, at)).max(Ticks::ZERO),
+            Self::Off => at,
+            _ => meter.grid_floor(at, self.step(meter, at)),
         }
     }
 
@@ -92,13 +104,30 @@ impl Grid {
     pub fn snap_nearest(self, meter: &MeterMap, at: Ticks) -> Ticks {
         match self {
             Self::Off => at,
-            _ => at.round_to(self.step(meter, at)),
+            _ => meter.grid_round(at.max(Ticks::ZERO), self.step(meter, at)),
         }
     }
 }
 
-/// Lengths offered for new notes.
-pub const NOTE_LENGTHS: [i64; 9] = [1, 2, 4, 8, 16, 32, 6, 12, 24];
+/// Lengths offered for new notes, as fractions of a whole note: straight,
+/// dotted, then triplets, quintuplets and septuplets.
+pub const NOTE_LENGTHS: [(i64, i64); 15] = [
+    (1, 1),
+    (1, 2),
+    (1, 4),
+    (1, 8),
+    (1, 16),
+    (1, 32),
+    (3, 4),
+    (3, 8),
+    (3, 16),
+    (3, 32),
+    (1, 6),
+    (1, 12),
+    (1, 24),
+    (1, 20),
+    (1, 28),
+];
 
 /// How long a status message stays.
 const STATUS_TIME: Duration = Duration::from_secs(5);
@@ -183,6 +212,14 @@ pub struct Session {
     selection_revision: u64,
     /// The grid notes snap to.
     pub grid: Grid,
+    /// Whether new and moved notes stay in the song's key (decision 0018).
+    pub keep_in_key: bool,
+    /// What a click in the piano roll places: a note or a chord.
+    pub draw: Draw,
+    /// The inversion chord stamps place (0 is root position).
+    pub chord_inversion: usize,
+    /// The notes of a chord just placed, sounding while the mouse holds it.
+    chord_held: Vec<u8>,
     /// The length of new notes.
     pub note_length: Ticks,
     clipboard: Vec<Note>,
@@ -260,6 +297,10 @@ impl Session {
             selection: HashSet::new(),
             selection_revision: 0,
             grid: Grid::Note(16),
+            keep_in_key: false,
+            draw: Draw::Note,
+            chord_inversion: 0,
+            chord_held: Vec::new(),
             note_length: Ticks::QUARTER,
             clipboard: Vec::new(),
             clipboard_span: Ticks::ZERO,
@@ -418,6 +459,7 @@ impl Session {
                 notes: Vec::new(),
                 track: None,
                 step: daw_model::default_step(),
+                swing: daw_model::Swing::default(),
             })
         })
     }
@@ -446,6 +488,21 @@ impl Session {
             length: self.pattern().length,
             offset: Ticks::ZERO,
         })
+    }
+
+    /// The song's time signatures as the open pattern sees them: its bars
+    /// count from where it starts in the song (its first placement), so the
+    /// grid and bar lines of the pattern editors match the song's there.
+    pub fn pattern_meter(&self) -> MeterMap {
+        let placement = self.placement();
+        let meter = &self.project().meter;
+        let zero = placement.start - placement.offset;
+        let at = meter.position(zero.max(Ticks::ZERO));
+        if zero >= Ticks::ZERO && at.beat == 0 && at.ticks == Ticks::ZERO {
+            meter.from_bar(at.bar)
+        } else {
+            MeterMap::constant(meter.signature_at(zero.max(Ticks::ZERO)))
+        }
     }
 
     /// The pattern's length in whole bars (rounded up).
@@ -651,6 +708,7 @@ impl Session {
     fn key_is_down(&self, key: u8) -> bool {
         self.held_keys.values().any(|&k| k == key)
             || self.pointer_note == Some(key)
+            || self.chord_held.contains(&key)
             || self.outside_notes[usize::from(key & 0x7F)]
     }
 
@@ -660,17 +718,23 @@ impl Session {
         };
         let placement = self.placement();
         let pattern_length = self.pattern().length;
+        // What was played in a swung pattern is written where it plays back
+        // as heard (decision 0018).
+        let swing = self.pattern().swing;
+        let played = placement.to_pattern_folded(start, pattern_length);
+        let written = swing.remove(played);
+        let written_end = swing.remove(played + (end - start).max(Ticks(1)));
         let mut note = Note {
             id: NoteId(0),
-            start: placement.to_pattern_folded(start, pattern_length),
-            length: (end - start).max(Ticks(1)),
+            start: written,
+            length: (written_end - written).max(Ticks(1)),
             key,
             velocity,
             pitch_offset: 0.0,
         };
         if self.snap_recording {
             let mut notes = [note];
-            let step = self.grid.step(&self.project().meter, note.start);
+            let step = self.grid.step(&self.pattern_meter(), note.start);
             daw_model::quantize_starts(&mut notes, step);
             note = notes[0];
             if self.loop_in_play().is_some() && note.start >= pattern_length {
@@ -926,38 +990,6 @@ impl Session {
         self.snap_recording = on;
     }
 
-    /// The tempo at the start, in beats per minute.
-    pub fn tempo(&self) -> f64 {
-        self.project().tempo.initial_bpm()
-    }
-
-    /// Sets the tempo (one undo step, or part of a gesture). Audio clips
-    /// keep their length in seconds (decision 0017).
-    pub fn set_tempo(&mut self, bpm: f64) {
-        let bpm = bpm.clamp(*TEMPO_RANGE.start(), *TEMPO_RANGE.end());
-        self.doc
-            .edit(text::EDIT_TEMPO, |p| p.set_tempo(Ticks::ZERO, bpm));
-    }
-
-    /// The time signature at the start.
-    pub fn time_signature(&self) -> TimeSignature {
-        self.project().meter.initial()
-    }
-
-    /// Sets the time signature. The pattern keeps its number of bars
-    /// (growing if its notes need more room), so nothing is cut off.
-    pub fn set_time_signature(&mut self, signature: TimeSignature) {
-        if signature == self.time_signature() {
-            return;
-        }
-        let bars = self.pattern_bars();
-        let (track, pattern) = (self.track, self.pattern);
-        self.doc.edit(text::EDIT_TIME_SIGNATURE, |p| {
-            p.meter = MeterMap::constant(signature);
-            set_length_in_bars(p, track, pattern, bars);
-        });
-    }
-
     /// Makes the pattern a number of bars long (at least long enough for
     /// its notes).
     pub fn set_pattern_bars(&mut self, bars: u32) {
@@ -1169,7 +1201,7 @@ impl Session {
     /// their length rounded up to whole beats, or to whole bars once they
     /// are longer than half a bar.
     fn span_of(&self, first: Ticks, end: Ticks) -> Ticks {
-        let signature = self.project().meter.signature_at(first);
+        let signature = self.pattern_meter().signature_at(first);
         let length = (end - first).max(Ticks(1));
         let unit = if length * 2 > signature.bar_length() {
             signature.bar_length()
@@ -1191,7 +1223,7 @@ impl Session {
             .map(|n| n.start)
             .min()
             .unwrap_or(Ticks::ZERO);
-        let step = self.grid.step(&self.project().meter, first);
+        let step = self.grid.step(&self.pattern_meter(), first);
         let delta = (step * steps).max(-first);
         if delta == Ticks::ZERO {
             return;
@@ -1311,9 +1343,12 @@ impl Session {
         self.engine.note_on(self.track, key, velocity);
     }
 
-    /// Releases the note the mouse was playing.
+    /// Releases the note (or chord) the mouse was playing.
     pub fn pointer_off(&mut self) {
         if let Some(key) = self.pointer_note.take() {
+            self.engine.note_off(self.track, key);
+        }
+        for key in std::mem::take(&mut self.chord_held) {
             self.engine.note_off(self.track, key);
         }
     }

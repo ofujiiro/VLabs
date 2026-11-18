@@ -154,6 +154,22 @@ impl Scale {
         i32::from(self.tonic) + octave * 12 + i32::from(step)
     }
 
+    /// Where `key` sits among the notes of the scale: the place of its
+    /// nearest scale note, counted from the tonic of octave zero. Moving
+    /// every note of a chord by the same number of places keeps it a chord
+    /// of the key.
+    pub fn index(self, key: u8) -> i32 {
+        self.index_below(i32::from(self.nearest(key)))
+    }
+
+    /// The key at a place among the notes of the scale (see
+    /// [`Self::index`]), if it is on the keyboard.
+    pub fn key_at_index(self, index: i32) -> Option<u8> {
+        u8::try_from(self.key_at(index))
+            .ok()
+            .filter(|&k| k <= MAX_KEY)
+    }
+
     /// The key `steps` notes of the scale above `key` (below if negative).
     /// A key outside the scale counts its nearest scale note in that
     /// direction as the first step. `None` if the result is off the
@@ -540,6 +556,16 @@ mod tests {
         assert_eq!(scale.step(127, 1), None, "off the keyboard");
         let blues = Scale::new(9, ScaleKind::Blues);
         assert_eq!(blues.step(57, 3), Some(63), "A, C, D, E flat");
+    }
+
+    #[test]
+    fn places_among_the_notes_of_the_scale() {
+        let scale = c_major();
+        assert_eq!(scale.index(60), 35, "five octaves of seven notes below C4");
+        assert_eq!(scale.index(61), scale.index(62), "C sharp counts as D");
+        assert_eq!(scale.key_at_index(scale.index(64) + 2), Some(67));
+        assert_eq!(scale.key_at_index(-1), None);
+        assert_eq!(scale.key_at_index(scale.index(127) + 1), None);
     }
 
     #[test]
