@@ -60,6 +60,10 @@ pub(crate) enum Command {
     },
     /// Silences everything at once.
     Panic,
+    /// Plays a sound once over everything else, at the engine's rate (the
+    /// sound library's preview, decision 0023), or stops the one playing.
+    /// The number tells previews apart.
+    Preview(Option<(Arc<daw_dsp::audio::AudioBuffer>, u64)>),
 }
 
 /// From the audio thread to the interface.
@@ -156,6 +160,11 @@ pub(crate) enum Garbage {
     Settings(Box<InstrumentSettings>),
     /// An effect (a plugin's audio half lets its main half go too).
     Effect(EffectSlot),
+    #[allow(
+        dead_code,
+        reason = "held only so it is dropped on the interface thread"
+    )]
+    Sound(Arc<daw_dsp::audio::AudioBuffer>),
 }
 
 /// Recording states, as stored in [`Shared::recording`].
@@ -193,6 +202,10 @@ pub(crate) struct Shared {
     pub input_peak: AtomicU32,
     /// The delay from sound out to sound in, in seconds, as f32 bits.
     pub record_latency: AtomicU32,
+    /// The number of the last preview the audio thread took.
+    pub preview_taken: AtomicU64,
+    /// Whether that preview is still playing.
+    pub previewing: AtomicBool,
 }
 
 impl Shared {
@@ -213,6 +226,8 @@ impl Shared {
             input_frames: AtomicU64::new(0),
             input_peak: AtomicU32::new(0),
             record_latency: AtomicU32::new(0),
+            preview_taken: AtomicU64::new(0),
+            previewing: AtomicBool::new(false),
         })
     }
 

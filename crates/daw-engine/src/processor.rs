@@ -142,6 +142,18 @@ pub struct EngineProcessor {
     input: rtrb::Consumer<f32>,
     /// The take of sound being recorded.
     take: Take,
+    /// The sound library's preview, playing over the song.
+    preview: Option<Preview>,
+}
+
+/// How loud the library's preview plays (about -3 dB).
+const PREVIEW_GAIN: f32 = 0.7;
+
+/// A sound from the library playing once, over the song (decision 0023).
+struct Preview {
+    sound: Arc<daw_dsp::audio::AudioBuffer>,
+    /// The next frame to play.
+    at: usize,
 }
 
 /// A take of sound on its way to the recorder.
@@ -237,6 +249,7 @@ impl EngineProcessor {
             effects: (0..MAX_EFFECTS).map(|_| None).collect(),
             meter_peaks: vec![0.0; MAX_SLOTS],
             pending: None,
+            preview: None,
             input,
             take: Take {
                 recorded,
@@ -273,6 +286,7 @@ impl EngineProcessor {
                 self.mix_left[i] += self.click_left[i];
                 self.mix_right[i] += self.click_right[i];
             }
+            self.mix_preview(n);
             for i in 0..n {
                 let left = self.mix_left[i].clamp(-1.0, 1.0);
                 let right = self.mix_right[i].clamp(-1.0, 1.0);
@@ -297,6 +311,7 @@ impl EngineProcessor {
             .position
             .store(self.position.floor() as i64, Ordering::Relaxed);
         self.shared.playing.store(self.playing, Ordering::Relaxed);
+        self.finish_preview();
         Shared::store_f32(&self.shared.peak, peak);
         for (meter, peak) in self.shared.meters.iter().zip(self.meter_peaks.iter_mut()) {
             Shared::store_f32(meter, *peak);
@@ -347,6 +362,42 @@ impl EngineProcessor {
 
     fn discard(&mut self, garbage: Garbage) {
         self.send(Outgoing::Garbage(garbage));
+    }
+
+    /// Adds the library's preview to the mix, after the master effects (so
+    /// they never colour it) like the metronome.
+    fn mix_preview(&mut self, n: usize) {
+        let Some(preview) = &mut self.preview else {
+            return;
+        };
+        let (left, right) = (preview.sound.left(), preview.sound.right());
+        let end = (preview.at + n).min(left.len()).min(right.len());
+        for (i, frame) in (preview.at..end).enumerate() {
+            self.mix_left[i] += left[frame] * PREVIEW_GAIN;
+            self.mix_right[i] += right[frame] * PREVIEW_GAIN;
+        }
+        preview.at = end.max(preview.at);
+    }
+
+    /// Lets a finished preview go (to be freed elsewhere) and says whether
+    /// one is playing.
+    fn finish_preview(&mut self) {
+        let finished = self
+            .preview
+            .as_ref()
+            .is_some_and(|p| p.at >= p.sound.frames());
+        // Garbage waiting for room in the queue goes first.
+        if finished
+            && self.pending.is_none()
+            && let Some(done) = self.preview.take()
+        {
+            self.discard(Garbage::Sound(done.sound));
+        }
+        let playing = self
+            .preview
+            .as_ref()
+            .is_some_and(|p| p.at < p.sound.frames());
+        self.shared.previewing.store(playing, Ordering::Relaxed);
     }
 
     fn handle_commands(&mut self) {
@@ -511,6 +562,19 @@ impl EngineProcessor {
                 }
                 for slot in &mut self.slots {
                     *slot = SlotState::new();
+                }
+                if let Some(old) = self.preview.take() {
+                    self.discard(Garbage::Sound(old.sound));
+                }
+            }
+            Command::Preview(sound) => {
+                if let Some(old) = self.preview.take() {
+                    self.discard(Garbage::Sound(old.sound));
+                }
+                if let Some((sound, number)) = sound {
+                    self.shared.previewing.store(true, Ordering::Relaxed);
+                    self.shared.preview_taken.store(number, Ordering::Release);
+                    self.preview = Some(Preview { sound, at: 0 });
                 }
             }
         }
