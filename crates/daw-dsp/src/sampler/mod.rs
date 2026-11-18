@@ -207,6 +207,12 @@ pub struct Region {
     pub seq_position: u32,
     /// It plays only after this keyswitch was pressed.
     pub sw_last: Option<u8>,
+    /// It plays only while this key is held down.
+    pub sw_down: Option<u8>,
+    /// It plays only while this key is up.
+    pub sw_up: Option<u8>,
+    /// It plays only if the key played before was this one.
+    pub sw_previous: Option<u8>,
     /// What starts it.
     pub trigger: Trigger,
     /// The key at which the sound plays at its own pitch.
@@ -311,6 +317,9 @@ impl Default for Region {
             seq_length: 1,
             seq_position: 1,
             sw_last: None,
+            sw_down: None,
+            sw_up: None,
+            sw_previous: None,
             trigger: Trigger::Attack,
             pitch_keycenter: 60,
             pitch_keytrack: 100.0,

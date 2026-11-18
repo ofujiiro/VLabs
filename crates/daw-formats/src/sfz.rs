@@ -585,6 +585,13 @@ struct RegionReader<'a> {
     extra_volume: f32,
     extra_amplitude: f32,
     extra_tune: f32,
+    /// Settings moved by controllers: (what, controller) and how far at
+    /// the controller's top, applied at its starting value.
+    modulations: BTreeMap<(String, usize), f32>,
+    /// How deep its LFOs, and its pitch and extra envelopes, go, by
+    /// setting.
+    lfo_depths: BTreeMap<String, f32>,
+    envelope_depths: BTreeMap<String, f32>,
 }
 
 impl<'a> RegionReader<'a> {
@@ -611,6 +618,9 @@ impl<'a> RegionReader<'a> {
             extra_volume: 0.0,
             extra_amplitude: 1.0,
             extra_tune: 0.0,
+            modulations: BTreeMap::new(),
+            lfo_depths: BTreeMap::new(),
+            envelope_depths: BTreeMap::new(),
         }
     }
 
@@ -682,7 +692,10 @@ impl<'a> RegionReader<'a> {
                     switches.default = self.key_u8(value);
                 }
             }
-            "sw_down" | "sw_up" | "sw_previous" | "sw_vel" => {
+            "sw_down" => self.region.sw_down = self.key_u8(value),
+            "sw_up" => self.region.sw_up = self.key_u8(value),
+            "sw_previous" => self.region.sw_previous = self.key_u8(value),
+            "sw_vel" => {
                 left_out.insert(LeftOut::Keyswitches);
             }
             "trigger" => {
@@ -844,6 +857,32 @@ impl<'a> RegionReader<'a> {
                 return;
             }
         }
+        if let Some((target, number)) = modulation(name) {
+            self.modulations
+                .insert((target.to_owned(), number), real(value).unwrap_or(0.0));
+            return;
+        }
+        match depth_kind(name) {
+            Some(Depth::Lfo) => {
+                self.lfo_depths
+                    .insert(name.to_owned(), real(value).unwrap_or(0.0));
+                return;
+            }
+            Some(Depth::Envelope) => {
+                self.envelope_depths
+                    .insert(name.to_owned(), real(value).unwrap_or(0.0));
+                return;
+            }
+            Some(Depth::Setting) => return,
+            None => {}
+        }
+        if let Some(part) = numbered_part(name, "eq") {
+            // An equaliser band changes the sound only with a gain.
+            if part == "gain" && real(value).is_some_and(|g| g != 0.0) {
+                left_out.insert(LeftOut::Equalizers);
+            }
+            return;
+        }
         match family(name) {
             Some(Family::LeftOut(part)) => {
                 left_out.insert(part);
@@ -853,6 +892,69 @@ impl<'a> RegionReader<'a> {
                 other.insert(name.to_owned());
             }
         }
+    }
+
+    /// Applies the settings controllers move, at the controllers' starting
+    /// values; notes LFOs and envelopes that move anything. `None` if the
+    /// region is started by a controller, never by a key.
+    fn apply_modulations(&mut self, left_out: &mut BTreeSet<LeftOut>) -> Option<(f32, f32)> {
+        let mut lfo: f32 = self.lfo_depths.values().map(|d| d.abs()).sum();
+        let mut envelope: f32 = self.envelope_depths.values().map(|d| d.abs()).sum();
+        let (mut cutoff_cents, mut offset) = (0.0_f32, 0.0_f32);
+        for ((target, number), depth) in &self.modulations {
+            let amount = depth * self.cc[*number] / 127.0;
+            let (amp, fil) = (&mut self.region.ampeg, &mut self.fileg);
+            match target.as_str() {
+                "ampeg_delay" => amp.delay += amount,
+                "ampeg_start" => amp.start += amount / 100.0,
+                "ampeg_attack" => amp.attack += amount,
+                "ampeg_hold" => amp.hold += amount,
+                "ampeg_decay" => amp.decay += amount,
+                "ampeg_sustain" => amp.sustain += amount / 100.0,
+                "ampeg_release" => amp.release += amount,
+                "fileg_delay" => fil.delay += amount,
+                "fileg_start" => fil.start += amount / 100.0,
+                "fileg_attack" => fil.attack += amount,
+                "fileg_hold" => fil.hold += amount,
+                "fileg_decay" => fil.decay += amount,
+                "fileg_sustain" => fil.sustain += amount / 100.0,
+                "fileg_release" => fil.release += amount,
+                "fileg_depth" => fil.depth += amount,
+                "cutoff" => cutoff_cents += amount,
+                "resonance" => self.resonance += amount,
+                "volume" | "gain" => self.region.volume += amount,
+                "pan" => self.region.pan += amount / 100.0,
+                "width" => self.region.width += amount / 100.0,
+                "tune" | "pitch" => self.region.tune += amount,
+                "offset" => offset += amount,
+                "delay" => self.region.delay += amount,
+                // Started by a controller moving, never by a key.
+                "on_lo" | "on_hi" => return None,
+                other => match depth_kind(other) {
+                    Some(Depth::Lfo) => lfo += amount.abs(),
+                    Some(Depth::Envelope) => envelope += amount.abs(),
+                    Some(Depth::Setting) => {}
+                    // How a controller's movement is smoothed or shaped
+                    // changes nothing at its starting value.
+                    None if other.ends_with("_curve")
+                        || other.ends_with("_smooth")
+                        || other.ends_with("_step")
+                        || other == "label" => {}
+                    None => {
+                        if amount != 0.0 {
+                            left_out.insert(LeftOut::ControllerChanges);
+                        }
+                    }
+                },
+            }
+        }
+        if lfo > 0.0 {
+            left_out.insert(LeftOut::Lfos);
+        }
+        if envelope > 0.0 {
+            left_out.insert(LeftOut::Envelopes);
+        }
+        Some((cutoff_cents, offset))
     }
 
     /// The region, if it can ever play.
@@ -874,6 +976,19 @@ impl<'a> RegionReader<'a> {
         }
         if cc_gain <= 0.0 {
             return None;
+        }
+        let (cutoff_cents, offset) = self.apply_modulations(left_out)?;
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            reason = "a frame position"
+        )]
+        {
+            self.region.offset = (self.region.offset as f32 + offset).max(0.0) as u64;
+        }
+        if let Some(cutoff) = &mut self.cutoff {
+            *cutoff *= 2.0_f32.powf(cutoff_cents.clamp(-12_000.0, 12_000.0) / 1200.0);
         }
         self.region.amplitude *= cc_gain * self.extra_amplitude;
         self.region.volume += self.extra_volume;
@@ -1012,28 +1127,12 @@ enum Family {
 
 /// What kind of setting `name` is, if this reader knows it.
 fn family(name: &str) -> Option<Family> {
-    let starts_with_numbered = |prefix: &str| {
-        name.strip_prefix(prefix)
-            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
-    };
-    let controller = name.contains("_oncc")
-        || name.contains("_curvecc")
-        || name.contains("_smoothcc")
-        || name.contains("_stepcc")
-        || name.contains("chanaft")
-        || name.contains("polyaft")
-        || name
-            .trim_end_matches(|c: char| c.is_ascii_digit())
-            .ends_with("cc");
-    let part = if name.starts_with("amplfo_")
-        || name.starts_with("pitchlfo_")
-        || name.starts_with("fillfo_")
-        || starts_with_numbered("lfo")
-    {
-        LeftOut::Lfos
-    } else if name.starts_with("label_cc")
+    let part = if name.starts_with("label_cc")
         || name.starts_with("hint_")
         || name.ends_with("_label")
+        // Aftertouch never comes: what it would move stays put.
+        || name.contains("chanaft")
+        || name.contains("polyaft")
         || matches!(
             name,
             "bend_up"
@@ -1063,18 +1162,16 @@ fn family(name: &str) -> Option<Family> {
                 | "default_path"
                 | "position"
                 | "output"
-        )
-    {
+        ) {
         return Some(Family::Ignored);
-    } else if controller {
-        LeftOut::ControllerChanges
-    } else if name.starts_with("pitcheg_") || starts_with_numbered("eg") {
-        LeftOut::Envelopes
     } else if name.starts_with("fil2") || name == "cutoff2" || name == "resonance2" {
         LeftOut::Filters
-    } else if starts_with_numbered("eq") {
-        LeftOut::Equalizers
-    } else if starts_with_numbered("effect") || name == "bus" {
+    } else if numbered_part(name, "effect").is_some()
+        || name
+            .strip_prefix("effect")
+            .is_some_and(|n| n.parse::<u32>().is_ok())
+        || name == "bus"
+    {
         LeftOut::Effects
     } else if name.starts_with("oscillator") {
         LeftOut::Waves
@@ -1082,6 +1179,86 @@ fn family(name: &str) -> Option<Family> {
         return None;
     };
     Some(Family::LeftOut(part))
+}
+
+/// What a setting of an LFO or an envelope the sampler lacks does.
+enum Depth {
+    /// How far an LFO moves something.
+    Lfo,
+    /// How far a pitch or extra envelope moves something.
+    Envelope,
+    /// Its speed, shape or timing: nothing moves without a depth.
+    Setting,
+}
+
+/// The settings of numbered LFOs that move nothing by themselves.
+const LFO_SETTINGS: [&str; 13] = [
+    "freq", "wave", "delay", "fade", "phase", "count", "offset", "ratio", "scale", "smooth",
+    "step", "beats", "sub",
+];
+/// The settings of numbered envelopes that move nothing by themselves.
+const ENVELOPE_SETTINGS: [&str; 10] = [
+    "time", "level", "shape", "sustain", "loop", "points", "dynamic", "ampeg", "freq_lfo", "depth",
+];
+
+/// Whether `name` sets an LFO or an envelope the sampler lacks, and what.
+fn depth_kind(name: &str) -> Option<Depth> {
+    if matches!(name, "amplfo_depth" | "pitchlfo_depth" | "fillfo_depth") {
+        return Some(Depth::Lfo);
+    }
+    if name == "pitcheg_depth" {
+        return Some(Depth::Envelope);
+    }
+    if ["amplfo_", "pitchlfo_", "fillfo_", "pitcheg_"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+    {
+        return Some(Depth::Setting);
+    }
+    if let Some(part) = numbered_part(name, "lfo") {
+        return Some(if LFO_SETTINGS.iter().any(|s| part.starts_with(s)) {
+            Depth::Setting
+        } else {
+            Depth::Lfo
+        });
+    }
+    if let Some(part) = numbered_part(name, "eg") {
+        return Some(if ENVELOPE_SETTINGS.iter().any(|s| part.starts_with(s)) {
+            Depth::Setting
+        } else {
+            Depth::Envelope
+        });
+    }
+    None
+}
+
+/// For a numbered setting (`lfo01_pitch`, `eq2_gain`): what follows the
+/// number, if `name` is `prefix`, digits, `_` and more.
+fn numbered_part<'n>(name: &'n str, prefix: &str) -> Option<&'n str> {
+    let rest = name.strip_prefix(prefix)?;
+    let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    if digits == 0 {
+        return None;
+    }
+    rest[digits..].strip_prefix('_')
+}
+
+/// For a setting a controller moves (`cutoff_cc1`, `ampeg_attack_oncc74`,
+/// `ampeg_attackcc1`): what it moves, and the controller.
+fn modulation(name: &str) -> Option<(&str, usize)> {
+    let stem = name.trim_end_matches(|c: char| c.is_ascii_digit());
+    if stem.len() == name.len() {
+        return None;
+    }
+    let number = name[stem.len()..]
+        .parse::<usize>()
+        .ok()
+        .filter(|&n| n < 128)?;
+    ["_oncc", "_cc", "cc"]
+        .iter()
+        .find_map(|suffix| stem.strip_suffix(suffix))
+        .filter(|target| !target.is_empty())
+        .map(|target| (target, number))
 }
 
 /// The filter of a `fil_type` (`None` for a kind the sampler lacks).
@@ -1555,7 +1732,7 @@ mod tests {
 <region> sample=cut.wav end=-1
 <region> sample=*sine key=69
 <region> sample=*saw
-<region> sample=fancy.wav amplfo_freq=5 pitcheg_attack=1 cutoff_oncc1=1200 frobnicate=3
+<region> sample=fancy.wav amplfo_depth=3 pitcheg_depth=100 amplitude_oncc7=50 cutoff_oncc1=1200 pitchlfo_freq=4 frobnicate=3
 <region> sample=switched.wav sw_last=c1 sw_lokey=24 sw_hikey=26 fil_type=lpf_4p cutoff=900 fileg_depth=1200
 <region> sample=swapped.wav sw_last=25 amp_velcurve_64=0.25
 ";
@@ -1601,6 +1778,50 @@ mod tests {
         assert!(
             (curve[32] - 0.125).abs() < 1e-6,
             "filled in a straight line"
+        );
+    }
+
+    #[test]
+    fn controllers_at_their_starting_values_set_what_they_move() {
+        // As some instruments expose their envelope and filter: settings
+        // moved by controllers, with the controllers' starting values.
+        let text = "
+<control> set_cc100=63.5 set_cc103=127 set_cc107=127
+<global> ampeg_attack=0.001 ampeg_sustain=0 ampeg_attack_oncc100=2 ampeg_sustain_oncc103=100
+cutoff=220 cutoff_cc107=6000 pitchlfo_depthcc105=10 pitchlfo_freqcc106=10 volume_oncc7=-6.35
+<region> sample=a.wav
+<region> sample=b.wav ampeg_attack=0.5
+<region> sample=pedal.wav on_locc64=64
+";
+        let parsed = parse(text, Path::new(".")).unwrap();
+        assert_eq!(
+            parsed.regions.len(),
+            2,
+            "a region started by a controller never plays"
+        );
+        let a = &parsed.regions[0].region;
+        assert!((a.ampeg.attack - 1.001).abs() < 1e-5, "{}", a.ampeg.attack);
+        assert!(
+            (a.ampeg.sustain - 1.0).abs() < 1e-6,
+            "sustained by its controller"
+        );
+        let cutoff = a.filter.unwrap().cutoff;
+        assert!((cutoff - 7040.0).abs() < 0.5, "five octaves up: {cutoff}");
+        assert!(
+            (a.volume + 5.0).abs() < 1e-4,
+            "-6.35 dB at 100 of 127: {}",
+            a.volume
+        );
+        let b = &parsed.regions[1].region;
+        assert!(
+            (b.ampeg.attack - 1.5).abs() < 1e-5,
+            "the controller still moves an attack set lower down: {}",
+            b.ampeg.attack
+        );
+        assert_eq!(
+            parsed.left_out,
+            BTreeSet::new(),
+            "a vibrato with no depth leaves nothing out"
         );
     }
 

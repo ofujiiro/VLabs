@@ -2530,7 +2530,7 @@ fn instrument_folder() -> PathBuf {
     std::fs::copy(tone_file("a4.wav", 1.0), &sound).unwrap();
     std::fs::write(
         folder.join("Strings").join("Strings.sfz"),
-        "// A test instrument.\n<region> sample=samples\\a4.wav loop_mode=loop_continuous amplfo_freq=5\n",
+        "// A test instrument.\n<region> sample=samples\\a4.wav loop_mode=loop_continuous amplfo_depth=2\n",
     )
     .unwrap();
     folder

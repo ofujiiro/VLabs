@@ -445,6 +445,8 @@ pub struct Sampler {
     velocity: [u8; 128],
     pressed_at: [u64; 128],
     keyswitch: Option<u8>,
+    /// The key played before the present note.
+    previous: Option<u8>,
     /// Frames played so far.
     clock: u64,
     /// Voices started so far.
@@ -483,6 +485,7 @@ impl Sampler {
             held: [false; 128],
             velocity: [0; 128],
             pressed_at: [0; 128],
+            previous: None,
             clock: 0,
             starts: 0,
             random: Random::new(0x5EED_5A3F),
@@ -520,6 +523,16 @@ impl Sampler {
                 continue;
             }
             if region.sw_last.is_some() && region.sw_last != self.keyswitch {
+                continue;
+            }
+            if region
+                .sw_down
+                .is_some_and(|k| !self.held[usize::from(k & 0x7F)])
+                || region
+                    .sw_up
+                    .is_some_and(|k| self.held[usize::from(k & 0x7F)])
+                || (region.sw_previous.is_some() && region.sw_previous != self.previous)
+            {
                 continue;
             }
             match region.trigger {
@@ -834,6 +847,7 @@ impl Instrument for Sampler {
         self.held[k] = true;
         self.velocity[k] = velocity;
         self.pressed_at[k] = self.clock;
+        self.previous = Some(key);
         self.start_all(&chosen[..count], key, velocity, |_| 1.0);
     }
 
@@ -1106,6 +1120,56 @@ mod tests {
             (peak(&render(&mut sampler, 1000).0) - 0.8).abs() < 0.01,
             "switched"
         );
+    }
+
+    #[test]
+    fn held_keys_and_the_previous_note_choose_regions() {
+        let chirp = Region {
+            sample: Some(0),
+            lokey: 64,
+            hikey: 64,
+            sw_down: Some(41),
+            amp_veltrack: 0.0,
+            ..Region::default()
+        };
+        let after_c = Region {
+            sample: Some(1),
+            lokey: 62,
+            hikey: 62,
+            sw_previous: Some(60),
+            amp_veltrack: 0.0,
+            ..Region::default()
+        };
+        let plain = Region {
+            sample: Some(0),
+            hikey: 61,
+            sw_up: Some(41),
+            amp_veltrack: 0.0,
+            ..Region::default()
+        };
+        let mut sampler = Sampler::new(
+            bank(
+                vec![chirp, after_c, plain],
+                vec![tone(440.0, 0.2), tone(440.0, 0.8)],
+            ),
+            RATE,
+        );
+        sampler.note_on(64, 1.0);
+        assert!(!sampler.is_sounding(), "only while key 41 is held");
+        sampler.note_on(41, 1.0);
+        sampler.note_on(64, 1.0);
+        assert!(sampler.is_sounding());
+        sampler.all_notes_off(true);
+        render(&mut sampler, 2000);
+        sampler.note_on(60, 1.0);
+        assert!(sampler.is_sounding(), "41 is up again");
+        sampler.note_on(62, 1.0);
+        let (after, _) = render(&mut sampler, 1000);
+        assert!(peak(&after) > 0.9, "62 after 60 plays its region");
+        sampler.all_notes_off(true);
+        render(&mut sampler, 2000);
+        sampler.note_on(62, 1.0);
+        assert!(!sampler.is_sounding(), "62 after 62 does not");
     }
 
     #[test]
