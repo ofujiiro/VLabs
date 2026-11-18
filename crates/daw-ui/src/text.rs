@@ -127,8 +127,10 @@ pub fn command_name(command: crate::keys::Command) -> &'static str {
         C::Deselect => "Clear the selection",
         C::MoveEarlier => "Move notes earlier",
         C::MoveLater => "Move notes later",
-        C::TransposeUp => "Move notes up a semitone",
-        C::TransposeDown => "Move notes down a semitone",
+        C::TransposeUp => "Move notes up a semitone (a step, in the key)",
+        C::TransposeDown => "Move notes down a semitone (a step, in the key)",
+        C::InvertUp => "Invert chords up",
+        C::InvertDown => "Invert chords down",
         C::OctaveUp => "Move notes up an octave",
         C::OctaveDown => "Move notes down an octave",
         C::KeyboardOctaveUp => "Computer keyboard an octave up",
@@ -211,12 +213,29 @@ pub fn grid_name(grid: crate::session::Grid) -> String {
     }
 }
 
-/// The name of a note value, 1/`n` of a whole note: "1/8", "1/8 triplet".
+/// The name of a note value, 1/`n` of a whole note: "1/8", "1/8 triplet",
+/// "1/16 quintuplet" (five in the time of four), "1/16 septuplet".
 pub fn note_value_name(n: i64) -> String {
     if n % 3 == 0 {
         format!("1/{} triplet", n * 2 / 3)
+    } else if n % 5 == 0 {
+        format!("1/{} quintuplet", n * 4 / 5)
+    } else if n % 7 == 0 {
+        format!("1/{} septuplet", n * 4 / 7)
     } else {
         format!("1/{n}")
+    }
+}
+
+/// The name of a note length, `numerator`/`denominator` of a whole note:
+/// "1/4", "1/4 dotted", "1/8 triplet".
+pub fn length_name(numerator: i64, denominator: i64) -> String {
+    if numerator == 3 && denominator % 2 == 0 {
+        format!("1/{} dotted", denominator / 2)
+    } else if numerator == 1 {
+        note_value_name(denominator)
+    } else {
+        format!("{numerator}/{denominator}")
     }
 }
 
@@ -977,4 +996,308 @@ pub fn could_not_record(error: &str) -> String {
 
 pub fn unreadable_sound(name: &str, error: &str) -> String {
     format!("The sound of \"{name}\" could not be read: {error}")
+}
+
+// ----- Theory and rhythm (decision 0018)
+
+pub const EDIT_ADD_CHORD: &str = "place chord";
+pub const EDIT_INVERT: &str = "invert chord";
+pub const EDIT_SWING: &str = "change swing";
+pub const EDIT_KEY: &str = "change key";
+pub const EDIT_ADD_TEMPO_CHANGE: &str = "add tempo change";
+pub const EDIT_REMOVE_TEMPO_CHANGE: &str = "remove tempo change";
+pub const EDIT_MOVE_TEMPO_CHANGE: &str = "move tempo change";
+pub const EDIT_GLIDE: &str = "change tempo glide";
+pub const EDIT_MOVE_SIGNATURE: &str = "move signature change";
+pub const EDIT_REMOVE_SIGNATURE: &str = "remove signature change";
+
+pub const NOTHING_TO_INVERT: &str = "Select a chord first: two or more notes that start together";
+pub const WOULD_LEAVE_KEYBOARD: &str = "That would move notes off the keyboard";
+
+/// Said after a chord stamp places a chord.
+pub fn placed(name: &str) -> String {
+    format!("Placed {name}")
+}
+
+/// Tonic names, spelled the way musicians spell major keys (D flat major)
+/// and minor keys (C sharp minor). ASCII signs, like note names.
+const MAJOR_TONICS: [&str; 12] = [
+    "C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B",
+];
+const MINOR_TONICS: [&str; 12] = [
+    "C", "C#", "D", "Eb", "E", "F", "F#", "G", "G#", "A", "Bb", "B",
+];
+
+/// A pitch class's name as the tonic of a key of this kind.
+pub fn tonic_name(tonic: u8, kind: daw_model::ScaleKind) -> &'static str {
+    let names = if kind.is_minor() {
+        &MINOR_TONICS
+    } else {
+        &MAJOR_TONICS
+    };
+    names[usize::from(tonic % 12)]
+}
+
+/// A scale's name: "major", "harmonic minor", "Dorian".
+pub fn scale_kind_name(kind: daw_model::ScaleKind) -> &'static str {
+    use daw_model::ScaleKind as K;
+    match kind {
+        K::Major => "major",
+        K::Minor => "minor",
+        K::HarmonicMinor => "harmonic minor",
+        K::MelodicMinor => "melodic minor",
+        K::Dorian => "Dorian",
+        K::Phrygian => "Phrygian",
+        K::Lydian => "Lydian",
+        K::Mixolydian => "Mixolydian",
+        K::Locrian => "Locrian",
+        K::MajorPentatonic => "major pentatonic",
+        K::MinorPentatonic => "minor pentatonic",
+        K::Blues => "blues",
+    }
+}
+
+/// A key's name: "A minor", or "No key".
+pub fn song_key_name(scale: Option<daw_model::Scale>) -> String {
+    match scale {
+        Some(scale) => format!(
+            "{} {}",
+            tonic_name(scale.tonic, scale.kind),
+            scale_kind_name(scale.kind)
+        ),
+        None => NO_KEY.to_owned(),
+    }
+}
+
+pub const KEY: &str = "Key";
+pub const NO_KEY: &str = "No key";
+pub const KEY_HINT: &str = "The song's key at the play position. With a key, the piano roll shades \
+     the notes outside it and chord stamps build chords in it.";
+pub const TONIC: &str = "Tonic";
+pub const SCALE: &str = "Scale";
+
+/// A chord's name: "D minor", "G7", "Fmaj7".
+pub fn chord_name(root: u8, kind: daw_model::ChordKind) -> String {
+    use daw_model::ChordKind as K;
+    let r = NOTE_NAMES[usize::from(root % 12)];
+    match kind {
+        K::Major => format!("{r} major"),
+        K::Minor => format!("{r} minor"),
+        K::Diminished => format!("{r} diminished"),
+        K::Augmented => format!("{r} augmented"),
+        K::Sus2 => format!("{r}sus2"),
+        K::Sus4 => format!("{r}sus4"),
+        K::Power => format!("{r}5"),
+        K::Sixth => format!("{r}6"),
+        K::MinorSixth => format!("{r}m6"),
+        K::Seventh => format!("{r}7"),
+        K::MajorSeventh => format!("{r}maj7"),
+        K::MinorSeventh => format!("{r}m7"),
+        K::HalfDiminished => format!("{r}m7b5"),
+        K::DiminishedSeventh => format!("{r}dim7"),
+        K::AddNine => format!("{r}add9"),
+        K::Ninth => format!("{r}9"),
+        K::MajorNinth => format!("{r}maj9"),
+        K::MinorNinth => format!("{r}m9"),
+    }
+}
+
+/// A chord kind's name in the Draw menu.
+pub fn chord_kind_name(kind: daw_model::ChordKind) -> &'static str {
+    use daw_model::ChordKind as K;
+    match kind {
+        K::Major => "Major",
+        K::Minor => "Minor",
+        K::Diminished => "Diminished",
+        K::Augmented => "Augmented",
+        K::Sus2 => "Suspended second (sus2)",
+        K::Sus4 => "Suspended fourth (sus4)",
+        K::Power => "Power chord (5)",
+        K::Sixth => "Sixth (6)",
+        K::MinorSixth => "Minor sixth (m6)",
+        K::Seventh => "Seventh (7)",
+        K::MajorSeventh => "Major seventh (maj7)",
+        K::MinorSeventh => "Minor seventh (m7)",
+        K::HalfDiminished => "Half-diminished (m7b5)",
+        K::DiminishedSeventh => "Diminished seventh (dim7)",
+        K::AddNine => "Added ninth (add9)",
+        K::Ninth => "Ninth (9)",
+        K::MajorNinth => "Major ninth (maj9)",
+        K::MinorNinth => "Minor ninth (m9)",
+    }
+}
+
+/// What the Draw button says: "Notes", "Triads in key", "maj7".
+pub fn draw_name(draw: crate::session::Draw) -> String {
+    use crate::session::Draw;
+    use daw_model::ChordShape;
+    match draw {
+        Draw::Note => DRAW_NOTES.to_owned(),
+        Draw::Chord(ChordShape::InKey(3)) => TRIADS_IN_KEY.to_owned(),
+        Draw::Chord(ChordShape::InKey(_)) => SEVENTHS_IN_KEY.to_owned(),
+        Draw::Chord(ChordShape::Kind(kind)) => chord_kind_name(kind).to_owned(),
+    }
+}
+
+pub const DRAW: &str = "Draw";
+pub const DRAW_HINT: &str = "What a click places: one note, or a whole chord on the note you click";
+pub const DRAW_NOTES: &str = "Single notes";
+pub const TRIADS_IN_KEY: &str = "Triads in the key";
+pub const SEVENTHS_IN_KEY: &str = "Seventh chords in the key";
+pub const IN_KEY_NEEDS_KEY: &str = "Choose the song's key first (Key, in the bar at the top)";
+pub const CHORD_KINDS: &str = "Chords of one kind";
+pub const INVERSION: &str = "Inversion";
+
+/// An inversion's name.
+pub fn inversion_name(inversion: usize) -> &'static str {
+    match inversion {
+        0 => "Root position",
+        1 => "1st inversion",
+        2 => "2nd inversion",
+        _ => "3rd inversion",
+    }
+}
+
+pub const KEEP_IN_KEY: &str = "Keep notes in the key";
+pub const KEEP_IN_KEY_HINT: &str = "New and moved notes land on notes of the song's key, and the \
+     up and down arrows move by steps of the key";
+pub const KEEP_IN_KEY_NEEDS_KEY: &str = "Choose the song's key first";
+pub const IN_KEY: &str = "In key";
+pub const STRAIGHT_GRIDS: &str = "Straight";
+pub const TRIPLETS: &str = "Triplets";
+pub const QUINTUPLETS: &str = "Quintuplets";
+pub const SEPTUPLETS: &str = "Septuplets";
+pub const DOTTED: &str = "Dotted";
+
+/// An interval's name, in semitones from 1 to 12.
+pub fn interval_name(semitones: u8) -> &'static str {
+    match semitones {
+        1 => "a minor second",
+        2 => "a major second",
+        3 => "a minor third",
+        4 => "a major third",
+        5 => "a perfect fourth",
+        6 => "a tritone",
+        7 => "a perfect fifth",
+        8 => "a minor sixth",
+        9 => "a major sixth",
+        10 => "a minor seventh",
+        11 => "a major seventh",
+        _ => "an octave",
+    }
+}
+
+/// A number of steps of the key, from 1 to 7: "a step", "a third".
+pub fn steps_name(steps: u8) -> &'static str {
+    match steps {
+        1 => "a step",
+        2 => "a third",
+        3 => "a fourth",
+        4 => "a fifth",
+        5 => "a sixth",
+        6 => "a seventh",
+        _ => "an octave",
+    }
+}
+
+/// A transposition menu entry: "Up a perfect fifth", "Down a third".
+pub fn by_interval(up: bool, name: &str) -> String {
+    if up {
+        format!("Up {name}")
+    } else {
+        format!("Down {name}")
+    }
+}
+
+pub const NOTES_MENU: &str = "Notes";
+pub const NOTES_MENU_HINT: &str = "Transpose and invert the selected notes";
+pub const TRANSPOSE_UP: &str = "Transpose up";
+pub const TRANSPOSE_DOWN: &str = "Transpose down";
+pub const TRANSPOSE_IN_KEY: &str = "Transpose in the key";
+pub const INVERT_UP: &str = "Invert up";
+pub const INVERT_DOWN: &str = "Invert down";
+pub const SELECT_NOTES_FIRST: &str = "Select notes first";
+
+/// What the swing button says: "Straight" or "Swing 54%".
+pub fn swing_name(percent: u8) -> String {
+    if percent == 0 {
+        STRAIGHT.to_owned()
+    } else {
+        format!("Swing {percent}%")
+    }
+}
+
+pub const SWING: &str = "Swing";
+pub const STRAIGHT: &str = "Straight";
+pub const SWING_HINT: &str = "How late every second eighth or sixteenth plays: 0% is straight, \
+     67% the triplet feel, 100% a dotted rhythm. The notes stay where they are written.";
+pub const SWING_AMOUNT: &str = "Swing amount";
+pub const SWING_EIGHTHS: &str = "On eighths";
+pub const SWING_SIXTEENTHS: &str = "On sixteenths";
+pub const TRIPLET_FEEL: &str = "Triplet feel";
+
+/// A pattern's length that is not whole bars: "3 beats", "12 steps".
+pub fn beats(count: i64) -> String {
+    if count == 1 {
+        "1 beat".to_owned()
+    } else {
+        format!("{count} beats")
+    }
+}
+
+/// A pattern's length in steps of the step grid: "12 steps".
+pub fn steps(count: i64) -> String {
+    if count == 1 {
+        "1 step".to_owned()
+    } else {
+        format!("{count} steps")
+    }
+}
+
+pub const PATTERN_END: &str = "End of the pattern";
+pub const PATTERN_END_HINT: &str = "Drag to make the pattern end on any step: a pattern of \
+     another length turns against the others as it repeats";
+pub const OTHER_SIGNATURE: &str = "Other…";
+pub const BEATS: &str = "Beats";
+pub const NOTE_VALUE: &str = "Note value";
+
+pub const SIGNATURE_ROW: &str = "Tempo and signatures";
+pub const SIGNATURE_ROW_HINT: &str = "Changes of tempo, time signature and key along the song";
+pub const SIGNATURES: &str = "Signatures";
+pub const SIGNATURES_HINT: &str =
+    "Click a bar to change the time signature or the key from there; drag a change to move it";
+pub const TEMPO_LANE: &str = "Tempo";
+pub const TEMPO_LANE_HINT: &str = "Click to add a tempo change; drag a point to change it, \
+     click it for its exact tempo, right-click it to remove it";
+pub const SHOW_SIGNATURES: &str = "Show tempo and signature changes";
+pub const HIDE_SIGNATURES: &str = "Hide tempo and signature changes";
+pub const SAME_AS_BEFORE: &str = "Same as before";
+pub const REMOVE_CHANGES: &str = "Remove these changes";
+pub const GLIDE: &str = "Glide to the next tempo";
+pub const GLIDE_HINT: &str = "Speed up or slow down gradually until the next tempo change";
+pub const REMOVE_TEMPO_CHANGE: &str = "Remove this tempo change";
+pub const TEMPO_CHANGE: &str = "Tempo change";
+
+/// The summary of the signature row: "120 BPM · 4/4 · C major".
+pub fn signature_summary(bpm: f64, numerator: u8, denominator: u8, key: &str) -> String {
+    format!(
+        "{} {BPM}  ·  {}  ·  {key}",
+        self::bpm(bpm),
+        time_signature(numerator, denominator)
+    )
+}
+
+/// The title of the panel of a bar's changes: "From bar 9".
+pub fn from_bar(bar: u32) -> String {
+    format!("From bar {}", bar + 1)
+}
+
+/// The label of a signature tag, for screen readers: "Bar 9: 7/8, A minor".
+pub fn signature_tag(bar: u32, what: &str) -> String {
+    format!("Bar {}: {what}", bar + 1)
+}
+
+/// The label of a tempo point, for screen readers: "Tempo 96 at bar 5".
+pub fn tempo_point(bpm: f64, bar: u32) -> String {
+    format!("Tempo {} at bar {}", self::bpm(bpm), bar + 1)
 }

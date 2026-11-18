@@ -13,7 +13,12 @@
 //! - hold Alt while dragging to ignore the grid;
 //! - the wheel scrolls, Shift+wheel scrolls in time, Ctrl+wheel zooms in
 //!   time, Alt+wheel zooms the keys; drag with the middle button to pan;
-//! - click the ruler to move the play position; click a key to hear it.
+//! - click the ruler to move the play position; click a key to hear it;
+//! - drag the tab at the end of the pattern (on the ruler) to make it end
+//!   on any grid step (decision 0018);
+//! - with the song's key set, rows outside the key are shaded; "Keep notes
+//!   in the key" puts new and dragged notes on notes of the key; a chord
+//!   stamp ("Draw") shows its notes under the pointer and places them all.
 //!
 //! Only what is visible is drawn, and all notes go into one triangle mesh
 //! (from the phase 0 spike), so the cost per frame depends on what is on
@@ -21,13 +26,13 @@
 
 use std::collections::HashSet;
 
-use daw_model::{MAX_KEY, Note, NoteId, Ticks};
+use daw_model::{MAX_KEY, MeterMap, Note, NoteId, Ticks};
 use egui::{
     Align2, Color32, CornerRadius, CursorIcon, FontId, Mesh, PointerButton, Pos2, Rect, Response,
     Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2,
 };
 
-use crate::session::{Grid, Session};
+use crate::session::{Draw, Grid, Session};
 use crate::text;
 use crate::theme::{Palette, size};
 
@@ -39,15 +44,18 @@ const VELOCITY_GAP: f32 = 6.0;
 const EDGE_GRAB: f32 = 7.0;
 /// How far the pointer must move before a click becomes a drag.
 const DRAG_THRESHOLD: f32 = 3.0;
+/// How close to the end of the pattern the pointer must be, on the ruler,
+/// to take its handle.
+const END_GRAB: f32 = 7.0;
 
 /// What a mouse drag is doing.
 #[derive(Clone, Debug, Default)]
 enum Drag {
     #[default]
     None,
-    /// Stretching a just-placed note.
+    /// Stretching a just-placed note or chord.
     Create {
-        id: NoteId,
+        ids: Vec<NoteId>,
         start: Ticks,
         origin: Pos2,
     },
@@ -78,6 +86,8 @@ enum Drag {
     Velocity { originals: Vec<Note>, grabbed: Note },
     /// Moving the play position along the ruler.
     Scrub,
+    /// Moving the end of the pattern.
+    End,
     /// Playing the keys on the left.
     Keys,
     /// Moving the view.
@@ -104,6 +114,8 @@ pub struct PianoRoll {
     hovered: Option<Note>,
     /// Scroll so every note is visible on the next frame.
     reveal: bool,
+    /// Where the pattern ends (its handle on the ruler), this frame.
+    pattern_end: Ticks,
 }
 
 impl Default for PianoRoll {
@@ -119,6 +131,7 @@ impl Default for PianoRoll {
             scrolled_at: f64::NEG_INFINITY,
             hovered: None,
             reveal: false,
+            pattern_end: Ticks::WHOLE,
         }
     }
 }
@@ -178,6 +191,7 @@ impl PianoRoll {
         response
             .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Canvas, true, text::PIANO_ROLL));
         let layout = Layout::new(rect);
+        self.pattern_end = session.pattern().length;
         if !self.fitted && layout.grid.width() > 50.0 {
             self.fit(session, layout.grid);
             self.fitted = true;
@@ -504,7 +518,7 @@ impl PianoRoll {
             );
         };
         let alt = modifiers.alt;
-        let meter = session.project().meter.clone();
+        let meter = session.pattern_meter();
         let pattern = session.pattern_id();
         match std::mem::take(&mut self.drag) {
             Drag::None => {}
@@ -518,7 +532,7 @@ impl PianoRoll {
                 self.erase_at(notes, grid, pos, session);
                 self.drag = Drag::Erase;
             }
-            Drag::Create { id, start, origin } => {
+            Drag::Create { ids, start, origin } => {
                 if (pos.x - origin.x).abs() > DRAG_THRESHOLD {
                     let tick = Ticks(self.x_to_tick(grid, pos.x) as i64);
                     let step = session.grid.step(&meter, start);
@@ -528,12 +542,23 @@ impl PianoRoll {
                         (tick - start).ceil_to(step).max(step)
                     };
                     session.document_mut().edit(text::EDIT_ADD_NOTE, |p| {
-                        p.update_notes(pattern, &[id], |n| n.length = length);
+                        p.update_notes(pattern, &ids, |n| n.length = length);
                     });
                     session.note_length = length;
                     Self::grow_if_needed(session, start + length);
                 }
-                self.drag = Drag::Create { id, start, origin };
+                self.drag = Drag::Create { ids, start, origin };
+            }
+            Drag::End => {
+                let tick = Ticks(self.x_to_tick(grid, pos.x).max(0.0) as i64);
+                let step = session.grid.step(&meter, tick);
+                let length = if alt || session.grid == Grid::Off {
+                    tick
+                } else {
+                    session.grid.snap_nearest(&meter, tick).max(step)
+                };
+                session.set_pattern_length(length);
+                self.drag = Drag::End;
             }
             Drag::Move {
                 origin,
@@ -586,22 +611,39 @@ impl PianoRoll {
                     .map(|n| i32::from(n.key))
                     .max()
                     .unwrap_or(0);
-                let dk = (i32::from(self.key_at(grid, pos.y)) - anchor_key)
-                    .clamp(-lowest, i32::from(MAX_KEY) - highest);
+                let rows = i32::from(self.key_at(grid, pos.y)) - anchor_key;
+                let dk = rows.clamp(-lowest, i32::from(MAX_KEY) - highest);
+                // Kept in the key, every note moves by the same number of
+                // steps of the scale (decision 0018); otherwise by semitones.
+                let pointer = u8::try_from((i32::from(grabbed.key) + rows).clamp(0, 127))
+                    .unwrap_or(grabbed.key);
+                let keys: Vec<u8> = originals.iter().map(|n| n.key).collect();
+                let moved: Vec<u8> = if session.keeps_in_key() {
+                    session
+                        .moved_keys(&keys, grabbed.key, pointer)
+                        .unwrap_or_else(|| keys.clone())
+                } else {
+                    keys.iter()
+                        .map(|&k| u8::try_from(i32::from(k) + dk).unwrap_or(k))
+                        .collect()
+                };
+                let by_id: std::collections::HashMap<NoteId, (Note, u8)> = originals
+                    .iter()
+                    .zip(moved)
+                    .map(|(n, key)| (n.id, (*n, key)))
+                    .collect();
                 let ids: Vec<NoteId> = originals.iter().map(|n| n.id).collect();
-                let by_id: std::collections::HashMap<NoteId, Note> =
-                    originals.iter().map(|n| (n.id, *n)).collect();
                 let end = originals.iter().map(Note::end).max().unwrap_or(Ticks::ZERO) + dt;
                 session.document_mut().edit(text::EDIT_MOVE_NOTES, |p| {
                     p.update_notes(pattern, &ids, |n| {
-                        if let Some(o) = by_id.get(&n.id) {
+                        if let Some((o, key)) = by_id.get(&n.id) {
                             n.start = o.start + dt;
-                            n.key = u8::try_from(i32::from(o.key) + dk).unwrap_or(o.key);
+                            n.key = *key;
                         }
                     });
                 });
                 Self::grow_if_needed(session, end);
-                let key = u8::try_from(i32::from(grabbed.key) + dk).unwrap_or(grabbed.key);
+                let key = by_id.get(&grabbed.id).map_or(grabbed.key, |(_, key)| *key);
                 if key != last_key {
                     session.pointer_on(key, grabbed.velocity);
                 }
@@ -777,7 +819,14 @@ impl PianoRoll {
         let grid = layout.grid;
         let additive = modifiers.shift || modifiers.command || modifiers.ctrl;
         if layout.ruler.contains(pos) {
-            self.drag = Drag::Scrub;
+            if self.near_end(layout, pos) {
+                session
+                    .document_mut()
+                    .begin_gesture(text::EDIT_PATTERN_LENGTH);
+                self.drag = Drag::End;
+            } else {
+                self.drag = Drag::Scrub;
+            }
             return;
         }
         if layout.keys.contains(pos) {
@@ -843,27 +892,44 @@ impl PianoRoll {
             };
             return;
         }
-        // An empty spot: place a note there and play it.
-        let meter = session.project().meter.clone();
-        let raw = Ticks(tick.max(0.0) as i64);
-        let start = if modifiers.alt {
-            raw
-        } else {
-            session.grid.snap_down(&meter, raw)
-        };
+        // An empty spot: place a note (or the chosen chord) there and play
+        // it.
+        let start = Self::place_at(session, tick, modifiers.alt);
         let key = self.key_at(grid, pos.y);
         let velocity = session.keyboard_velocity();
-        session.document_mut().begin_gesture(text::EDIT_ADD_NOTE);
-        if let Some(id) = session.add_note(start, key, velocity) {
-            session.pointer_on(key, velocity);
+        let label = match session.draw {
+            Draw::Note => text::EDIT_ADD_NOTE,
+            Draw::Chord(_) => text::EDIT_ADD_CHORD,
+        };
+        session.document_mut().begin_gesture(label);
+        let ids = session.add_chord(start, key, velocity);
+        if ids.is_empty() {
+            session.document_mut().end_gesture();
+        } else {
             self.drag = Drag::Create {
-                id,
+                ids,
                 start,
                 origin: pos,
             };
-        } else {
-            session.document_mut().end_gesture();
         }
+    }
+
+    /// Where a note placed at `tick` starts: on the grid (counted from the
+    /// bar line), or exactly with Alt.
+    fn place_at(session: &Session, tick: f64, alt: bool) -> Ticks {
+        let raw = Ticks(tick.max(0.0) as i64);
+        if alt {
+            raw
+        } else {
+            session.grid.snap_down(&session.pattern_meter(), raw)
+        }
+    }
+
+    /// Whether a point on the ruler is on the handle at the end of the
+    /// pattern.
+    fn near_end(&self, layout: &Layout, pos: Pos2) -> bool {
+        let x = self.tick_to_x(layout.grid, self.pattern_end);
+        layout.ruler.contains(pos) && (pos.x - x).abs() <= END_GRAB
     }
 
     fn erase_at(&self, notes: &[Note], grid: Rect, pos: Pos2, session: &mut Session) {
@@ -877,8 +943,7 @@ impl PianoRoll {
 
     fn grow_if_needed(session: &mut Session, end: Ticks) {
         if end > session.pattern().length {
-            let bar = session.time_signature().bar_length();
-            let bars = u32::try_from(end.ceil_to(bar).0 / bar.0).unwrap_or(1);
+            let bars = session.pattern_meter().position(end - Ticks(1)).bar + 1;
             session.set_pattern_bars(bars);
         }
     }
@@ -897,7 +962,7 @@ impl PianoRoll {
         }
         let icon = match &self.drag {
             Drag::Move { .. } => CursorIcon::Grabbing,
-            Drag::Resize { .. } | Drag::Create { .. } => CursorIcon::ResizeHorizontal,
+            Drag::Resize { .. } | Drag::Create { .. } | Drag::End => CursorIcon::ResizeHorizontal,
             Drag::Velocity { .. } => CursorIcon::ResizeVertical,
             Drag::Pan => CursorIcon::AllScroll,
             Drag::Erase | Drag::Select { .. } | Drag::Scrub | Drag::Keys => CursorIcon::Default,
@@ -914,6 +979,8 @@ impl PianoRoll {
                     }
                 } else if layout.grid.contains(pos) {
                     CursorIcon::Crosshair
+                } else if self.near_end(layout, pos) {
+                    CursorIcon::ResizeHorizontal
                 } else if layout.ruler.contains(pos) || layout.keys.contains(pos) {
                     CursorIcon::PointingHand
                 } else {
@@ -932,38 +999,62 @@ impl PianoRoll {
         let painter = ui.painter_at(grid);
         let first_key = self.y_to_key(grid, grid.bottom()).floor().max(0.0) as u8;
         let last_key = self.top_key.ceil().clamp(0.0, 127.0) as u8;
+        // With a key, the rows outside it are shaded instead of the black
+        // keys, and the tonic's rows are marked (decision 0018).
+        let scale = session.pattern_key();
         for key in first_key..=last_key {
             let y = self.key_top(grid, key);
             let row =
                 Rect::from_min_size(pos2(grid.left(), y), vec2(grid.width(), self.key_height));
-            if is_black_key(key) {
+            let shaded = scale.map_or_else(|| is_black_key(key), |s| !s.contains(key));
+            if shaded {
                 painter.rect_filled(row, CornerRadius::ZERO, p.grid_dark_row);
             }
-            if key % 12 == 0 {
+            if scale.is_some_and(|s| s.is_tonic(key)) {
+                painter.rect_filled(row, CornerRadius::ZERO, p.accent.gamma_multiply(0.10));
+            }
+            if scale.map_or(key % 12 == 0, |s| s.is_tonic(key)) {
                 painter.hline(grid.x_range(), row.bottom(), Stroke::new(1.0, p.grid_beat));
             }
         }
 
-        let meter = &session.project().meter;
+        // Vertical lines: every grid step from each bar line, so the grid
+        // meets the bars after an odd bar.
+        let meter = session.pattern_meter();
         let (left, right) = self.visible_ticks(grid);
-        let step = self.line_step(session);
-        let mut tick = (left / step.0 as f64).floor() as i64 * step.0;
-        while (tick as f64) <= right {
-            let x = self.tick_to_x(grid, Ticks(tick));
-            let position = meter.position(Ticks(tick));
-            let on_bar = position.beat == 0 && position.ticks == Ticks::ZERO;
-            let on_beat = position.ticks == Ticks::ZERO;
-            let color = if on_bar {
-                p.grid_bar
-            } else if on_beat {
-                p.grid_beat
-            } else {
-                p.grid_line
-            };
-            if x >= grid.left() {
-                painter.vline(x.round() + 0.5, grid.y_range(), Stroke::new(1.0, color));
+        let step = self.line_step(session, &meter);
+        let bar_every = self.bar_every(&meter);
+        let mut bar = meter.position(Ticks(left.max(0.0) as i64)).bar;
+        loop {
+            let bar_start = meter.bar_start(bar);
+            if bar_start.0 as f64 > right {
+                break;
             }
-            tick += step.0;
+            let next = meter.bar_start(bar + 1);
+            let beat = meter.signature_at_bar(bar).beat_length();
+            if bar.is_multiple_of(bar_every) {
+                let x = self.tick_to_x(grid, bar_start);
+                if x >= grid.left() {
+                    painter.vline(
+                        x.round() + 0.5,
+                        grid.y_range(),
+                        Stroke::new(1.0, p.grid_bar),
+                    );
+                }
+            }
+            if let Some(step) = step {
+                let mut tick = bar_start + step;
+                while tick < next {
+                    let x = self.tick_to_x(grid, tick);
+                    if x >= grid.left() && x <= grid.right() {
+                        let on_beat = (tick - bar_start).0 % beat.0 == 0;
+                        let color = if on_beat { p.grid_beat } else { p.grid_line };
+                        painter.vline(x.round() + 0.5, grid.y_range(), Stroke::new(1.0, color));
+                    }
+                    tick += step;
+                }
+            }
+            bar += 1;
         }
 
         // After the end of the pattern: shaded, nothing plays there.
@@ -975,26 +1066,31 @@ impl PianoRoll {
         }
     }
 
-    /// The spacing of vertical lines: the grid, or coarser when lines would
-    /// be closer than 8 points.
-    fn line_step(&self, session: &Session) -> Ticks {
-        let meter = &session.project().meter;
-        let signature = meter.initial();
-        let mut step = match session.grid {
-            Grid::Off => signature.beat_length(),
-            grid => grid.step(meter, Ticks::ZERO),
-        };
+    /// The spacing of the lines inside bars: the grid, or the beat when the
+    /// grid's lines would be closer than 8 points; `None` when even beats
+    /// would be (only bar lines then).
+    fn line_step(&self, session: &Session, meter: &MeterMap) -> Option<Ticks> {
+        let beat = meter.initial().beat_length();
         let points = |t: Ticks| t.0 as f64 / self.ticks_per_point;
-        if points(step) < 8.0 {
-            step = signature.beat_length();
+        let step = match session.grid {
+            Grid::Off | Grid::Bar => beat,
+            grid @ Grid::Note(_) => grid.step(meter, Ticks::ZERO),
+        };
+        if points(step) >= 8.0 {
+            Some(step)
+        } else if points(beat) >= 8.0 {
+            Some(beat)
+        } else {
+            None
         }
-        if points(step) < 8.0 {
-            step = signature.bar_length();
-        }
-        while points(step) < 8.0 {
-            step = step * 2;
-        }
-        step
+    }
+
+    /// Every how many bars a bar line is drawn, so they stay 8 points apart.
+    fn bar_every(&self, meter: &MeterMap) -> u32 {
+        let bar_points = meter.initial().bar_length().0 as f64 / self.ticks_per_point;
+        ((8.0 / bar_points).ceil() as u32)
+            .max(1)
+            .next_power_of_two()
     }
 
     fn paint_notes(&self, ui: &Ui, layout: &Layout, session: &Session) {
@@ -1045,6 +1141,7 @@ impl PianoRoll {
             }
         }
         painter.add(Shape::mesh(mesh));
+        self.paint_stamp(ui, layout, session);
         let font = FontId::proportional((self.key_height - 4.0).clamp(9.0, size::SMALL));
         for (body, name) in labels {
             painter.text(
@@ -1080,6 +1177,61 @@ impl PianoRoll {
         }
     }
 
+    /// Under the pointer, on an empty spot: the notes a click would place
+    /// when that is not simply the row under the pointer (a chord stamp, or
+    /// a note kept in the key), with the chord's name.
+    fn paint_stamp(&self, ui: &Ui, layout: &Layout, session: &Session) {
+        if self.is_dragging() || self.hovered.is_some() {
+            return;
+        }
+        let Some(pos) = ui.input(|i| i.pointer.hover_pos()) else {
+            return;
+        };
+        let grid = layout.grid;
+        if !grid.contains(pos)
+            || !(matches!(session.draw, Draw::Chord(_)) || session.keeps_in_key())
+        {
+            return;
+        }
+        let alt = ui.input(|i| i.modifiers.alt);
+        let start = Self::place_at(session, self.x_to_tick(grid, pos.x), alt);
+        let root = self.key_at(grid, pos.y);
+        let keys = session.chord_keys(root);
+        if keys == [root] {
+            return;
+        }
+        let p = Palette::of(ui.ctx());
+        let painter = ui.painter_at(grid);
+        for &key in &keys {
+            let ghost = Note {
+                id: NoteId(0),
+                start,
+                length: session.note_length.max(Ticks(1)),
+                key,
+                velocity: 1.0,
+                pitch_offset: 0.0,
+            };
+            painter.rect(
+                self.note_rect(grid, &ghost),
+                CornerRadius::same(2),
+                p.accent.gamma_multiply(0.25),
+                Stroke::new(1.0, p.accent.gamma_multiply(0.8)),
+                StrokeKind::Inside,
+            );
+        }
+        if let Some(name) = session.chord_name(root) {
+            let top = keys.iter().max().copied().unwrap_or(root);
+            let x = self.tick_to_x(grid, start);
+            painter.text(
+                pos2(x, self.key_top(grid, top) - 3.0),
+                Align2::LEFT_BOTTOM,
+                name,
+                FontId::proportional(size::SMALL),
+                p.text,
+            );
+        }
+    }
+
     fn paint_keys(&self, ui: &Ui, layout: &Layout, session: &Session) {
         let p = Palette::of(ui.ctx());
         let keys = layout.keys;
@@ -1092,6 +1244,7 @@ impl PianoRoll {
             .input(|i| i.pointer.hover_pos())
             .filter(|pos| grid.contains(*pos) || keys.contains(*pos))
             .map(|pos| self.key_at(grid, pos.y));
+        let scale = session.pattern_key();
         for key in first_key..=last_key {
             let y = self.key_top(grid, key);
             let row =
@@ -1121,13 +1274,21 @@ impl PianoRoll {
                     p.accent.gamma_multiply(0.25),
                 );
             }
-            if key % 12 == 0 && self.key_height >= 9.0 {
+            let labelled = scale.map_or(key % 12 == 0, |s| s.is_tonic(key));
+            if labelled && self.key_height >= 9.0 {
                 painter.text(
                     pos2(row.right() - 6.0, row.center().y),
                     Align2::RIGHT_CENTER,
                     text::note_name(key),
                     FontId::proportional((self.key_height - 3.0).min(size::SMALL)),
                     Color32::from_gray(90),
+                );
+            } else if scale.is_some_and(|s| s.contains(key)) && self.key_height >= 9.0 {
+                // A dot for each note of the key.
+                painter.circle_filled(
+                    pos2(row.right() - 8.0, row.center().y),
+                    2.0,
+                    Color32::from_gray(if black { 150 } else { 110 }),
                 );
             }
         }
@@ -1144,7 +1305,7 @@ impl PianoRoll {
         let painter = ui.painter_at(ruler);
         painter.rect_filled(ruler, CornerRadius::ZERO, p.surface);
         let grid = layout.grid;
-        let meter = &session.project().meter;
+        let meter = &session.pattern_meter();
         if let Some(region) = session.loop_in_play() {
             let placement = session.placement();
             let x0 = self.tick_to_x(grid, placement.to_pattern(region.start));
@@ -1181,6 +1342,25 @@ impl PianoRoll {
                 );
             }
             bar += 1;
+        }
+        // The handle at the end of the pattern (decision 0018).
+        let end_x = self.tick_to_x(grid, session.pattern().length);
+        if end_x >= ruler.left() - 6.0 && end_x <= ruler.right() + 6.0 {
+            let hot = matches!(self.drag, Drag::End)
+                || ui
+                    .input(|i| i.pointer.hover_pos())
+                    .is_some_and(|pos| self.near_end(layout, pos));
+            let tab = Rect::from_min_max(
+                pos2(end_x - 4.0, ruler.top() + 6.0),
+                pos2(end_x + 4.0, ruler.bottom() - 2.0),
+            );
+            let color = if hot { p.accent } else { p.grid_bar };
+            painter.rect_filled(tab, CornerRadius::same(2), color);
+            painter.vline(
+                end_x,
+                (tab.top() + 4.0)..=(tab.bottom() - 4.0),
+                Stroke::new(1.0, p.surface),
+            );
         }
         let x = self.tick_to_x(grid, session.position());
         if x >= ruler.left() - 6.0 && x <= ruler.right() + 6.0 {

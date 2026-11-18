@@ -582,8 +582,10 @@ impl Workspace {
             }
             Command::MoveEarlier => s.nudge(-1),
             Command::MoveLater => s.nudge(1),
-            Command::TransposeUp => s.transpose(1),
-            Command::TransposeDown => s.transpose(-1),
+            Command::TransposeUp => s.step_selection(true),
+            Command::TransposeDown => s.step_selection(false),
+            Command::InvertUp => s.invert_selection(true),
+            Command::InvertDown => s.invert_selection(false),
             Command::OctaveUp => s.transpose(12),
             Command::OctaveDown => s.transpose(-12),
             Command::KeyboardOctaveUp => s.shift_keyboard_octave(1),
@@ -677,7 +679,9 @@ impl Workspace {
             | Command::TransposeUp
             | Command::TransposeDown
             | Command::OctaveUp
-            | Command::OctaveDown => {}
+            | Command::OctaveDown
+            | Command::InvertUp
+            | Command::InvertDown => {}
             _ => return false,
         }
         true

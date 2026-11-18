@@ -6,15 +6,17 @@
 //! is on screen).
 
 use daw_engine::RecordState;
-use daw_model::{TEMPO_RANGE, Ticks, TimeSignature};
+use daw_model::{
+    ChordKind, ChordShape, Scale, ScaleKind, Swing, TEMPO_RANGE, Ticks, TimeSignature,
+};
 use egui::{
     Align, Align2, Button, CornerRadius, DragValue, FontId, Layout, Popup, PopupCloseBehavior,
-    RichText, Sense, Ui, vec2,
+    RichText, Sense, Slider, Ui, vec2,
 };
 
 use crate::icons::{Icon, Look, icon_button};
 use crate::keys::{Command, Keymap};
-use crate::session::{Grid, NOTE_LENGTHS, Session, View};
+use crate::session::{Draw, Grid, NOTE_LENGTHS, Session, View};
 use crate::text;
 use crate::theme::{Palette, size};
 use crate::workspace::Intent;
@@ -53,6 +55,7 @@ pub fn transport_bar(
         ui.add_space(12.0);
         tempo_field(ui, session);
         time_signature_button(ui, session);
+        key_button(ui, session);
         ui.add_space(12.0);
         let metronome_hint = with_hint(text::METRONOME_HINT, &keymap.text(Command::Metronome));
         let look = Look::on(session.metronome());
@@ -325,13 +328,22 @@ fn tempo_field(ui: &mut Ui, session: &mut Session) {
             )
         })
         .inner;
+    // A drag changes the part of the song it started in, even if the play
+    // position moves on into another (decision 0018).
+    let target = response.id.with("tempo-target");
     if response.drag_started() {
+        let at = session.tempo_change_at_position();
+        ui.data_mut(|d| d.insert_temp(target, at));
         session.document_mut().begin_gesture(text::EDIT_TEMPO);
     }
     if response.changed() {
-        session.set_tempo(bpm);
+        match ui.data(|d| d.get_temp::<Ticks>(target)) {
+            Some(at) if response.dragged() => session.set_tempo_at(at, bpm),
+            _ => session.set_tempo(bpm),
+        }
     }
     if response.drag_stopped() {
+        ui.data_mut(|d| d.remove::<Ticks>(target));
         session.document_mut().end_gesture();
     }
     response.on_hover_text(text::TEMPO);
@@ -345,19 +357,123 @@ fn time_signature_button(ui: &mut Ui, session: &mut Session) {
     let response = ui
         .add(Button::new(label).min_size(vec2(56.0, BIG - 6.0)))
         .on_hover_text(text::TIME_SIGNATURE);
-    Popup::menu(&response).show(|ui| {
-        for (numerator, denominator) in SIGNATURES {
-            let selected = current.numerator == numerator && current.denominator == denominator;
-            if ui
-                .selectable_label(selected, text::time_signature(numerator, denominator))
-                .clicked()
-                && let Some(signature) = TimeSignature::new(numerator, denominator)
-            {
+    Popup::menu(&response)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            signature_choices(ui, current, |signature| {
                 session.set_time_signature(signature);
-                ui.close();
+            });
+        });
+}
+
+/// The common time signatures, then any other: beats and note value. Each
+/// choice calls `choose` (the transport, and the signature row's panel).
+pub fn signature_choices(
+    ui: &mut Ui,
+    current: TimeSignature,
+    mut choose: impl FnMut(TimeSignature),
+) {
+    ui.set_min_width(150.0);
+    for (numerator, denominator) in SIGNATURES {
+        let selected = current.numerator == numerator && current.denominator == denominator;
+        if ui
+            .selectable_label(selected, text::time_signature(numerator, denominator))
+            .clicked()
+            && let Some(signature) = TimeSignature::new(numerator, denominator)
+        {
+            choose(signature);
+            ui.close();
+        }
+    }
+    ui.separator();
+    ui.label(RichText::new(text::OTHER_SIGNATURE).weak());
+    ui.horizontal(|ui| {
+        let mut beats = current.numerator;
+        let changed = ui
+            .add(DragValue::new(&mut beats).range(1..=64).speed(0.1))
+            .on_hover_text(text::BEATS)
+            .changed();
+        if changed && let Some(signature) = TimeSignature::new(beats, current.denominator) {
+            choose(signature);
+        }
+        ui.label("/");
+        for denominator in [2_u8, 4, 8, 16, 32] {
+            if ui
+                .selectable_label(current.denominator == denominator, denominator.to_string())
+                .on_hover_text(text::NOTE_VALUE)
+                .clicked()
+                && let Some(signature) = TimeSignature::new(current.numerator, denominator)
+            {
+                choose(signature);
             }
         }
     });
+}
+
+/// The song's key at the play position (decision 0018).
+fn key_button(ui: &mut Ui, session: &mut Session) {
+    let current = session.key();
+    let mut label = RichText::new(text::song_key_name(current)).size(size::BODY);
+    if current.is_none() {
+        label = label.weak();
+    }
+    let response = ui
+        .add(Button::new(label).min_size(vec2(0.0, BIG - 6.0)))
+        .on_hover_text(text::KEY_HINT);
+    Popup::menu(&response)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            key_choices(ui, current, |scale| session.set_key(scale));
+        });
+}
+
+/// No key, the twelve tonics and the scales. Each choice calls `choose`
+/// (the transport, and the signature row's panel).
+pub fn key_choices(ui: &mut Ui, current: Option<Scale>, mut choose: impl FnMut(Option<Scale>)) {
+    ui.set_min_width(260.0);
+    if ui
+        .selectable_label(current.is_none(), text::NO_KEY)
+        .clicked()
+    {
+        choose(None);
+        ui.close();
+    }
+    ui.separator();
+    let kind = current.map_or(ScaleKind::Major, |s| s.kind);
+    ui.label(RichText::new(text::TONIC).weak());
+    for row in [0_u8..6, 6..12] {
+        ui.horizontal(|ui| {
+            for tonic in row {
+                let selected = current.is_some_and(|s| s.tonic == tonic);
+                let name = text::tonic_name(tonic, kind);
+                if ui
+                    .add(Button::selectable(selected, name).min_size(vec2(34.0, 26.0)))
+                    .clicked()
+                {
+                    choose(Some(Scale::new(tonic, kind)));
+                }
+            }
+        });
+    }
+    ui.add_space(4.0);
+    ui.label(RichText::new(text::SCALE).weak());
+    let tonic = current.map_or(0, |s| s.tonic);
+    egui::Grid::new("scale-kinds")
+        .num_columns(2)
+        .show(ui, |ui| {
+            for (index, kind) in ScaleKind::ALL.into_iter().enumerate() {
+                let selected = current.is_some_and(|s| s.kind == kind);
+                if ui
+                    .selectable_label(selected, text::scale_kind_name(kind))
+                    .clicked()
+                {
+                    choose(Some(Scale::new(tonic, kind)));
+                }
+                if index % 2 == 1 {
+                    ui.end_row();
+                }
+            }
+        });
 }
 
 /// The line under the transport (decision 0014): where you are, as a
@@ -441,28 +557,45 @@ pub fn location_bar(
                 return;
             }
             ui.add_space(12.0);
-            if session.is_drum_track() {
-                pattern_length(ui, session);
-                ui.add_space(12.0);
-                steps_menu(ui, session);
-                ui.label(RichText::new(text::STEPS).weak())
-                    .on_hover_text(text::STEPS_HINT);
-                ui.add_space(12.0);
-                kit_menu(ui, session);
-                ui.label(RichText::new(text::KIT).weak())
-                    .on_hover_text(text::KIT_HINT);
-            } else {
-                note_length_menu(ui, session);
-                ui.label(RichText::new(text::NOTE_LENGTH).weak());
-                ui.add_space(12.0);
-                grid_menu(ui, session);
-                ui.label(RichText::new(text::SNAP).weak())
-                    .on_hover_text(text::SNAP_HINT);
-                ui.add_space(12.0);
-                pattern_length(ui, session);
-            }
+            pattern_tools(ui, session);
         });
     });
+}
+
+/// The settings of the open pattern, laid out from the right (decision
+/// 0018 adds swing, chord stamps and the notes menu).
+fn pattern_tools(ui: &mut Ui, session: &mut Session) {
+    // Laid out from the right.
+    if session.is_drum_track() {
+        pattern_length(ui, session);
+        ui.add_space(12.0);
+        swing_menu(ui, session);
+        ui.add_space(12.0);
+        steps_menu(ui, session);
+        ui.label(RichText::new(text::STEPS).weak())
+            .on_hover_text(text::STEPS_HINT);
+        ui.add_space(12.0);
+        kit_menu(ui, session);
+        ui.label(RichText::new(text::KIT).weak())
+            .on_hover_text(text::KIT_HINT);
+    } else {
+        notes_menu(ui, session);
+        ui.add_space(12.0);
+        note_length_menu(ui, session);
+        ui.label(RichText::new(text::NOTE_LENGTH).weak());
+        ui.add_space(12.0);
+        grid_menu(ui, session);
+        ui.label(RichText::new(text::SNAP).weak())
+            .on_hover_text(text::SNAP_HINT);
+        ui.add_space(12.0);
+        draw_menu(ui, session);
+        ui.label(RichText::new(text::DRAW).weak())
+            .on_hover_text(text::DRAW_HINT);
+        ui.add_space(12.0);
+        swing_menu(ui, session);
+        ui.add_space(12.0);
+        pattern_length(ui, session);
+    }
 }
 
 /// For a plugin track, the button that opens the plugin's own window.
@@ -597,7 +730,7 @@ fn kit_menu(ui: &mut Ui, session: &mut Session) {
 }
 
 /// Step sizes offered for the step grid: 1/`n` of a whole note.
-const STEP_SIZES: [i64; 5] = [8, 16, 32, 12, 24];
+const STEP_SIZES: [i64; 7] = [8, 16, 32, 12, 24, 20, 28];
 
 fn steps_menu(ui: &mut Ui, session: &mut Session) {
     let current = session.step();
@@ -624,61 +757,314 @@ fn steps_menu(ui: &mut Ui, session: &mut Session) {
 }
 
 fn grid_menu(ui: &mut Ui, session: &mut Session) {
+    let mut name = text::grid_name(session.grid);
+    if session.keeps_in_key() {
+        name = format!("{name}  ·  {}", text::IN_KEY);
+    }
     let response = ui
-        .add(Button::new(text::grid_name(session.grid)).min_size(vec2(84.0, 28.0)))
+        .add(Button::new(name).min_size(vec2(84.0, 28.0)))
         .on_hover_text(text::SNAP_HINT);
-    Popup::menu(&response).show(|ui| {
-        for grid in Grid::CHOICES {
+    Popup::menu(&response)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            let groups: [(&str, &[Grid]); 4] = [
+                (text::STRAIGHT_GRIDS, &Grid::CHOICES[0..6]),
+                (text::TRIPLETS, &Grid::CHOICES[6..9]),
+                (text::QUINTUPLETS, &Grid::CHOICES[9..11]),
+                (text::SEPTUPLETS, &Grid::CHOICES[11..13]),
+            ];
+            ui.horizontal_top(|ui| {
+                for (title, grids) in groups {
+                    ui.vertical(|ui| {
+                        ui.set_min_width(118.0);
+                        ui.label(RichText::new(title).small().weak());
+                        for &grid in grids {
+                            if ui
+                                .selectable_label(session.grid == grid, text::grid_name(grid))
+                                .clicked()
+                            {
+                                session.grid = grid;
+                                ui.close();
+                            }
+                        }
+                    });
+                }
+            });
             if ui
-                .selectable_label(session.grid == grid, text::grid_name(grid))
+                .selectable_label(session.grid == Grid::Off, text::grid_name(Grid::Off))
                 .clicked()
             {
-                session.grid = grid;
+                session.grid = Grid::Off;
                 ui.close();
             }
-        }
-    });
+            ui.separator();
+            let has_key = session.pattern_key().is_some();
+            let hint = if has_key {
+                text::KEEP_IN_KEY_HINT
+            } else {
+                text::KEEP_IN_KEY_NEEDS_KEY
+            };
+            ui.add_enabled(
+                has_key,
+                egui::Checkbox::new(&mut session.keep_in_key, text::KEEP_IN_KEY),
+            )
+            .on_hover_text(hint)
+            .on_disabled_hover_text(hint);
+        });
+}
+
+/// What a click places: a note or a chord (decision 0018).
+fn draw_menu(ui: &mut Ui, session: &mut Session) {
+    let response = ui
+        .add(Button::new(text::draw_name(session.draw)).min_size(vec2(84.0, 28.0)))
+        .on_hover_text(text::DRAW_HINT);
+    Popup::menu(&response)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            ui.set_min_width(320.0);
+            if ui
+                .selectable_label(session.draw == Draw::Note, text::DRAW_NOTES)
+                .clicked()
+            {
+                session.draw = Draw::Note;
+                ui.close();
+            }
+            ui.separator();
+            let has_key = session.pattern_key().is_some();
+            for (size, name) in [(3, text::TRIADS_IN_KEY), (4, text::SEVENTHS_IN_KEY)] {
+                let draw = Draw::Chord(ChordShape::InKey(size));
+                let response = ui
+                    .add_enabled(has_key, Button::selectable(session.draw == draw, name))
+                    .on_disabled_hover_text(text::IN_KEY_NEEDS_KEY);
+                if response.clicked() {
+                    session.draw = draw;
+                    ui.close();
+                }
+            }
+            ui.add_space(4.0);
+            ui.label(RichText::new(text::CHORD_KINDS).small().weak());
+            egui::Grid::new("chord-kinds")
+                .num_columns(2)
+                .spacing(vec2(12.0, 2.0))
+                .show(ui, |ui| {
+                    for (index, kind) in ChordKind::ALL.into_iter().enumerate() {
+                        let draw = Draw::Chord(ChordShape::Kind(kind));
+                        if ui
+                            .selectable_label(session.draw == draw, text::chord_kind_name(kind))
+                            .clicked()
+                        {
+                            session.draw = draw;
+                            ui.close();
+                        }
+                        if index % 2 == 1 {
+                            ui.end_row();
+                        }
+                    }
+                });
+            ui.separator();
+            ui.label(RichText::new(text::INVERSION).small().weak());
+            ui.horizontal(|ui| {
+                for inversion in 0..=3 {
+                    if ui
+                        .selectable_label(
+                            session.chord_inversion == inversion,
+                            text::inversion_name(inversion),
+                        )
+                        .clicked()
+                    {
+                        session.chord_inversion = inversion;
+                    }
+                }
+            });
+        });
 }
 
 fn note_length_menu(ui: &mut Ui, session: &mut Session) {
     let current = NOTE_LENGTHS
         .iter()
-        .find(|&&n| Ticks(Ticks::WHOLE.0 / n) == session.note_length)
+        .find(|&&(n, d)| Ticks::note_value(n, d) == session.note_length)
         .map_or_else(
             || text::CUSTOM_LENGTH.to_owned(),
-            |&n| text::note_value_name(n),
+            |&(n, d)| text::length_name(n, d),
         );
     let response = ui
         .add(Button::new(current).min_size(vec2(84.0, 28.0)))
         .on_hover_text(text::NOTE_LENGTH_HINT);
     Popup::menu(&response).show(|ui| {
-        for n in NOTE_LENGTHS {
-            let length = Ticks(Ticks::WHOLE.0 / n);
-            if ui
-                .selectable_label(session.note_length == length, text::note_value_name(n))
-                .clicked()
-            {
-                session.note_length = length;
-                ui.close();
+        let groups: [(&str, &[(i64, i64)]); 3] = [
+            (text::STRAIGHT_GRIDS, &NOTE_LENGTHS[0..6]),
+            (text::DOTTED, &NOTE_LENGTHS[6..10]),
+            (text::TRIPLETS, &NOTE_LENGTHS[10..15]),
+        ];
+        ui.horizontal_top(|ui| {
+            for (title, lengths) in groups {
+                ui.vertical(|ui| {
+                    ui.set_min_width(118.0);
+                    ui.label(RichText::new(title).small().weak());
+                    for &(n, d) in lengths {
+                        let length = Ticks::note_value(n, d);
+                        if ui
+                            .selectable_label(
+                                session.note_length == length,
+                                text::length_name(n, d),
+                            )
+                            .clicked()
+                        {
+                            session.note_length = length;
+                            ui.close();
+                        }
+                    }
+                });
             }
-        }
+        });
     });
 }
 
+/// The pattern's swing (decision 0018): an amount, and the note value
+/// that swings.
+fn swing_menu(ui: &mut Ui, session: &mut Session) {
+    let swing = session.swing();
+    let response = ui
+        .add(Button::new(text::swing_name(swing.percent)).min_size(vec2(84.0, 28.0)))
+        .on_hover_text(text::SWING_HINT);
+    Popup::menu(&response)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            ui.set_min_width(240.0);
+            let mut percent = swing.percent;
+            let slider = ui.add(
+                Slider::new(&mut percent, 0..=Swing::MAX_PERCENT)
+                    .suffix("%")
+                    .text(text::SWING_AMOUNT),
+            );
+            if slider.drag_started() {
+                session.begin_gesture(text::EDIT_SWING);
+            }
+            if slider.changed() {
+                session.set_swing(Swing { percent, ..swing });
+            }
+            if slider.drag_stopped() {
+                session.end_gesture();
+            }
+            ui.horizontal(|ui| {
+                for (name, value) in [(text::STRAIGHT, 0), (text::TRIPLET_FEEL, 67)] {
+                    if ui.selectable_label(swing.percent == value, name).clicked() {
+                        session.set_swing(Swing {
+                            percent: value,
+                            ..swing
+                        });
+                    }
+                }
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                for (name, unit) in [
+                    (text::SWING_EIGHTHS, Ticks::note_value(1, 8)),
+                    (text::SWING_SIXTEENTHS, Ticks::note_value(1, 16)),
+                ] {
+                    if ui.selectable_label(swing.unit == unit, name).clicked() {
+                        session.set_swing(Swing { unit, ..swing });
+                    }
+                }
+            });
+        });
+}
+
+/// Transposing and inverting the selected notes (decision 0018).
+fn notes_menu(ui: &mut Ui, session: &mut Session) {
+    let response = dropdown(ui, RichText::new(text::NOTES_MENU), text::NOTES_MENU_HINT);
+    Popup::menu(&response).show(|ui| {
+        ui.set_min_width(220.0);
+        let selected = !session.selection().is_empty();
+        if !selected {
+            ui.label(RichText::new(text::SELECT_NOTES_FIRST).weak());
+        }
+        ui.add_enabled_ui(selected, |ui| {
+            for up in [true, false] {
+                let title = if up {
+                    text::TRANSPOSE_UP
+                } else {
+                    text::TRANSPOSE_DOWN
+                };
+                ui.menu_button(title, |ui| {
+                    for semitones in daw_model::INTERVALS {
+                        let name = text::by_interval(up, text::interval_name(semitones));
+                        if ui.button(name).clicked() {
+                            let semitones = i32::from(semitones);
+                            session.transpose_by(if up { semitones } else { -semitones });
+                            ui.close();
+                        }
+                    }
+                });
+            }
+            if session.pattern_key().is_some() {
+                ui.menu_button(text::TRANSPOSE_IN_KEY, |ui| {
+                    for up in [true, false] {
+                        for steps in 1..=7_u8 {
+                            let name = text::by_interval(up, text::steps_name(steps));
+                            if ui.button(name).clicked() {
+                                let steps = i32::from(steps);
+                                session.transpose_in_key(if up { steps } else { -steps });
+                                ui.close();
+                            }
+                        }
+                        if up {
+                            ui.separator();
+                        }
+                    }
+                });
+            }
+            ui.separator();
+            if ui.button(text::INVERT_UP).clicked() {
+                session.invert_selection(true);
+                ui.close();
+            }
+            if ui.button(text::INVERT_DOWN).clicked() {
+                session.invert_selection(false);
+                ui.close();
+            }
+        });
+    });
+}
+
+/// The pattern's length: whole bars with the buttons; a length that is not
+/// whole bars (dragged at the end of the pattern) shows in steps or beats.
 fn pattern_length(ui: &mut Ui, session: &mut Session) {
+    let length = session.pattern().length;
+    let meter = session.pattern_meter();
+    let end = meter.position(length);
+    let whole = end.beat == 0 && end.ticks == Ticks::ZERO;
     let bars = session.pattern_bars();
     if icon_button(ui, Icon::Plus, text::LONGER, "", Look::Normal, 26.0).clicked() {
-        session.set_pattern_bars(bars + 1);
+        session.set_pattern_bars(if whole { bars + 1 } else { bars });
     }
-    ui.label(RichText::new(text::bars(bars)).monospace())
+    let shown = if whole {
+        text::bars(bars)
+    } else {
+        let step = session.step();
+        let beat = meter.initial().beat_length();
+        if session.is_drum_track() && length.0 % step.0 == 0 {
+            text::steps(length.0 / step.0)
+        } else if length.0 % beat.0 == 0 {
+            text::beats(length.0 / beat.0)
+        } else {
+            text::CUSTOM_LENGTH.to_owned()
+        }
+    };
+    ui.label(RichText::new(shown).monospace())
         .on_hover_text(text::PATTERN_LENGTH_HINT);
+    let fewer = if whole {
+        bars - 1
+    } else {
+        bars.saturating_sub(1)
+    };
     let shorter = ui
-        .add_enabled_ui(bars > 1, |ui| {
+        .add_enabled_ui(fewer >= 1, |ui| {
             icon_button(ui, Icon::Minus, text::SHORTER, "", Look::Normal, 26.0)
         })
         .inner;
     if shorter.clicked() {
-        session.set_pattern_bars(bars - 1);
+        session.set_pattern_bars(fewer);
     }
     ui.label(RichText::new(text::PATTERN_LENGTH).weak());
 }

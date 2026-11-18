@@ -11,6 +11,7 @@ pub mod mixer;
 pub mod piano_roll;
 pub mod session;
 pub mod settings;
+pub mod signature_row;
 pub mod song_view;
 pub mod step_grid;
 pub mod text;

@@ -692,7 +692,8 @@ fn the_location_line_and_the_song_view_lead_everywhere() {
 
     // The drum clip's menu (top row, from bar 1) opens its beat. (A
     // double-click does the same; the test clock is too slow for one.)
-    let clip = Pos2::new(song.left() + 236.0 + 60.0, song.top() + 28.0 + 32.0);
+    // Under the ruler and the folded signature row.
+    let clip = Pos2::new(song.left() + 236.0 + 60.0, song.top() + 28.0 + 28.0 + 32.0);
     f.harness.hover_at(clip);
     f.harness.step();
     f.press(clip, PointerButton::Secondary, true, Modifiers::NONE);
@@ -1193,10 +1194,11 @@ impl Fixture {
         timeline_left + (tick.0 as f64 / per_point) as f32
     }
 
-    /// The top of a track's row in the song view (no lanes open).
+    /// The top of a track's row in the song view (no lanes open): under
+    /// the ruler and the folded signature row, 28 points each.
     fn row_top(&self, index: usize) -> f32 {
         let song = self.harness.get_by_label(text::SONG_VIEW).rect();
-        song.top() + 28.0 + 64.0 * index as f32
+        song.top() + 28.0 + 28.0 + 64.0 * index as f32
     }
 }
 

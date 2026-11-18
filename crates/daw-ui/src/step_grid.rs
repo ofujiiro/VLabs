@@ -8,7 +8,10 @@
 //! - right-click a square to remove its hit;
 //! - click a sound's name to hear it, choose it for the loudness strip, and
 //!   change its sound (volume, pan, tune, length);
-//! - drag the bars in the loudness strip to change how hard hits play.
+//! - drag the bars in the loudness strip to change how hard hits play;
+//! - drag the tab at the end of the steps (on the ruler) to give the
+//!   pattern any number of steps (decision 0018); with swing, the hits of
+//!   swung steps are drawn late in their squares, as they sound.
 //!
 //! Each square is also in the accessibility tree ("Kick, step 1"), so
 //! screen readers and the interface tests can find it.
@@ -65,6 +68,8 @@ enum Drag {
     Loudness,
     /// Holding a sound's name: it plays.
     Pad,
+    /// Moving the end of the pattern.
+    End,
 }
 
 /// The step sequencer's state between frames.
@@ -77,6 +82,9 @@ pub struct StepGrid {
     settings: Option<(PadSound, Pos2)>,
     /// How far the steps are scrolled to the left, in points.
     scroll: f32,
+    /// The width of a step while the end of the pattern is dragged, so the
+    /// squares keep their size under the pointer.
+    frozen_width: Option<f32>,
 }
 
 impl Default for StepGrid {
@@ -86,9 +94,14 @@ impl Default for StepGrid {
             drag: Drag::None,
             settings: None,
             scroll: 0.0,
+            frozen_width: None,
         }
     }
 }
+
+/// How close to the end of the steps the pointer must be, on the ruler, to
+/// take its handle.
+const END_GRAB: f32 = 7.0;
 
 /// The parts of the editor, worked out for each frame.
 #[derive(Clone, Copy, Debug)]
@@ -107,7 +120,7 @@ struct Layout {
 }
 
 impl Layout {
-    fn new(whole: Rect, session: &Session, scroll: f32) -> Self {
+    fn new(whole: Rect, session: &Session, scroll: f32, frozen_width: Option<f32>) -> Self {
         let step = session.step();
         let length = session.pattern().length.max(step);
         let steps = usize::try_from((length.0 + step.0 - 1) / step.0.max(1))
@@ -120,8 +133,9 @@ impl Layout {
         #[allow(clippy::cast_precision_loss, reason = "small counts")]
         let row_height = (room / PAD_ORDER.len() as f32).clamp(MIN_ROW_HEIGHT, MAX_ROW_HEIGHT);
         #[allow(clippy::cast_precision_loss, reason = "small counts")]
-        let step_width =
-            ((whole.right() - left - 8.0) / steps as f32).clamp(MIN_STEP_WIDTH, MAX_STEP_WIDTH);
+        let step_width = frozen_width.unwrap_or_else(|| {
+            ((whole.right() - left - 8.0) / steps as f32).clamp(MIN_STEP_WIDTH, MAX_STEP_WIDTH)
+        });
         #[allow(clippy::cast_precision_loss, reason = "small counts")]
         let rows_bottom = whole.top() + RULER_HEIGHT + row_height * PAD_ORDER.len() as f32;
         #[allow(clippy::cast_precision_loss, reason = "small counts")]
@@ -198,6 +212,12 @@ impl Layout {
     fn step_start(&self, step: usize) -> Ticks {
         self.step * i64::try_from(step).unwrap_or(0)
     }
+
+    /// Whether a point on the ruler is on the handle at the end of the
+    /// steps.
+    fn near_end(&self, pos: Pos2) -> bool {
+        self.ruler.contains(pos) && (pos.x - self.step_x(self.steps)).abs() <= END_GRAB
+    }
 }
 
 impl StepGrid {
@@ -206,7 +226,7 @@ impl StepGrid {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         response
             .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Canvas, true, text::STEP_GRID));
-        let layout = Layout::new(rect, session, self.scroll);
+        let layout = Layout::new(rect, session, self.scroll, self.frozen_width);
         self.scroll = layout.scroll;
         self.handle_scroll(ui, &layout);
         self.pad_names(ui, session, &layout);
@@ -217,7 +237,7 @@ impl StepGrid {
         ui.painter_at(rect)
             .rect_filled(rect, CornerRadius::ZERO, p.grid);
         self.paint_cells(ui, session, &layout);
-        Self::paint_ruler(ui, session, &layout);
+        self.paint_ruler(ui, session, &layout);
         self.paint_names(ui, session, labels, &layout);
         self.paint_strip(ui, session, &layout);
         self.paint_hint(ui, session, labels, &layout);
@@ -308,7 +328,11 @@ impl StepGrid {
             && self.drag == Drag::None
             && primary_pressed
         {
-            if let (Some(row), Some(step)) = (layout.row_at(pos.y), layout.step_at(pos.x))
+            if layout.near_end(pos) {
+                session.begin_gesture(text::EDIT_PATTERN_LENGTH);
+                self.frozen_width = Some(layout.step_width);
+                self.drag = Drag::End;
+            } else if let (Some(row), Some(step)) = (layout.row_at(pos.y), layout.step_at(pos.x))
                 && layout.grid.contains(pos)
             {
                 let sound = PAD_ORDER[row];
@@ -390,19 +414,34 @@ impl StepGrid {
                     session.set_velocities(&ids, velocity);
                 }
             }
+            Drag::End if primary_down => {
+                if let Some(pos) = pos {
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        reason = "a small count of steps, clamped"
+                    )]
+                    let steps = ((pos.x - layout.grid.left() + layout.scroll) / layout.step_width)
+                        .round()
+                        .clamp(1.0, 4096.0) as i64;
+                    session.set_pattern_length(layout.step * steps);
+                }
+            }
             Drag::Pad if primary_down => {}
             Drag::None => {}
             _ => {
                 // The button came up: the drag is over.
-                if matches!(self.drag, Drag::Paint { .. } | Drag::Loudness) {
+                if matches!(self.drag, Drag::Paint { .. } | Drag::Loudness | Drag::End) {
                     session.end_gesture();
                 }
+                self.frozen_width = None;
                 session.pointer_off();
                 self.drag = Drag::None;
             }
         }
         if let Some(pos) = pos.filter(|_| ui.rect_contains_pointer(layout.whole)) {
-            let icon = if layout.grid.contains(pos) || layout.strip.contains(pos) {
+            let icon = if self.drag == Drag::End || layout.near_end(pos) {
+                CursorIcon::ResizeHorizontal
+            } else if layout.grid.contains(pos) || layout.strip.contains(pos) {
                 CursorIcon::PointingHand
             } else {
                 CursorIcon::Default
@@ -480,10 +519,8 @@ impl StepGrid {
     fn paint_cells(&self, ui: &Ui, session: &Session, layout: &Layout) {
         let p = Palette::of(ui.ctx());
         let painter = ui.painter_at(layout.grid);
-        let meter = &session.project().meter;
-        let signature = meter.initial();
-        let beat = signature.beat_length();
-        let bar = signature.bar_length();
+        let meter = session.pattern_meter();
+        let swing = session.swing();
         let playing = session.is_playing();
         let play_step = playing
             .then(|| usize::try_from(session.position().0 / layout.step.0.max(1)).ok())
@@ -497,22 +534,38 @@ impl StepGrid {
                     continue;
                 }
                 let start = layout.step_start(step);
-                let beat_index = start.0 / beat.0.max(1);
-                let shade = if beat_index % 2 == 0 {
+                let at = meter.position(start);
+                let shade = if at.beat.is_multiple_of(2) {
                     p.raised
                 } else {
                     p.raised_hover
                 };
                 let inner = cell.shrink2(vec2(2.0, 2.0));
                 let velocity = Self::hit_velocity(session, sound, layout, step);
-                let fill = match velocity {
+                match velocity {
                     Some(v) => {
                         let color = if muted { p.text_weak } else { p.accent };
-                        color.gamma_multiply(0.45 + 0.55 * v)
+                        // A swung hit sits late in its square, as it sounds.
+                        #[allow(clippy::cast_precision_loss, reason = "a fraction of a step")]
+                        let late = ((swing.apply(start) - start).0 as f32
+                            / layout.step.0.max(1) as f32
+                            * cell.width())
+                        .min(inner.width() * 0.6);
+                        if late > 0.5 {
+                            painter.rect_filled(inner, CornerRadius::same(4), shade);
+                        }
+                        let hit =
+                            Rect::from_min_max(pos2(inner.left() + late, inner.top()), inner.max);
+                        painter.rect_filled(
+                            hit,
+                            CornerRadius::same(4),
+                            color.gamma_multiply(0.45 + 0.55 * v),
+                        );
                     }
-                    None => shade,
-                };
-                painter.rect_filled(inner, CornerRadius::same(4), fill);
+                    None => {
+                        painter.rect_filled(inner, CornerRadius::same(4), shade);
+                    }
+                }
                 if play_step == Some(step) {
                     painter.rect_stroke(
                         inner,
@@ -531,11 +584,11 @@ impl StepGrid {
                 }
             }
         }
-        // Bars and beats.
+        // Bars.
         for step in 1..layout.steps {
-            let start = layout.step_start(step);
-            let x = layout.step_x(step);
-            if start.0 % bar.0.max(1) == 0 {
+            let at = meter.position(layout.step_start(step));
+            if at.beat == 0 && at.ticks == Ticks::ZERO {
+                let x = layout.step_x(step);
                 painter.vline(x, layout.grid.y_range(), Stroke::new(2.0, p.grid_bar));
             }
         }
@@ -556,20 +609,17 @@ impl StepGrid {
         }
     }
 
-    fn paint_ruler(ui: &Ui, session: &Session, layout: &Layout) {
+    fn paint_ruler(&self, ui: &Ui, session: &Session, layout: &Layout) {
         let p = Palette::of(ui.ctx());
         let ruler = layout.ruler;
         let painter = ui.painter_at(ruler);
         painter.rect_filled(ruler, CornerRadius::ZERO, p.surface);
-        let meter = &session.project().meter;
-        let signature = meter.initial();
-        let beat = signature.beat_length();
+        let meter = session.pattern_meter();
         for step in 0..layout.steps {
-            let start = layout.step_start(step);
-            if start.0 % beat.0.max(1) != 0 {
+            let at = meter.position(layout.step_start(step));
+            if at.ticks != Ticks::ZERO {
                 continue;
             }
-            let at = meter.position(start);
             let x = layout.step_x(step);
             let label = if at.beat == 0 {
                 (at.bar + 1).to_string()
@@ -601,6 +651,23 @@ impl StepGrid {
                 p.accent
             };
             painter.vline(x, ruler.y_range(), Stroke::new(2.0, color));
+        }
+        // The handle at the end of the steps (decision 0018).
+        let end_x = layout.step_x(layout.steps);
+        if end_x <= ruler.right() + 6.0 {
+            let hot = self.drag == Drag::End
+                || ui
+                    .input(|i| i.pointer.hover_pos())
+                    .is_some_and(|pos| layout.near_end(pos));
+            let tab = Rect::from_min_max(
+                pos2(end_x - 4.0, ruler.top() + 5.0),
+                pos2(end_x + 4.0, ruler.bottom() - 2.0),
+            );
+            painter.rect_filled(
+                tab,
+                CornerRadius::same(2),
+                if hot { p.accent } else { p.grid_bar },
+            );
         }
         let corner =
             Rect::from_min_max(layout.whole.min, pos2(layout.names.right(), ruler.bottom()));
