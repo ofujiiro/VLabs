@@ -2375,9 +2375,7 @@ fn the_library_browses_folders_and_plays_a_sound_when_clicked() {
     assert!(f.session().previewing().is_none());
     assert!(loudest(&mut f) < 1e-6);
     // Back up to the top.
-    f.harness
-        .get_by_label(&format!("‹ {}", text::LIBRARY_UP))
-        .click();
+    f.harness.get_by_label(text::LIBRARY_UP).click();
     f.harness.run_steps(2);
     f.harness.get_by_label("Loops");
 }
@@ -2446,13 +2444,13 @@ fn a_soundfont_from_the_library_becomes_an_instrument_with_its_presets() {
         }
     );
     f.harness.get_by_label(&text::soundfont_track("Tones.sf2"));
-    // Its presets, on the location line of its pattern.
+    // Its presets, in the track menu of its pattern.
     f.workspace_mut().session_mut().open_track(track.id);
     f.harness.run_steps(3);
     f.harness
         .get_by(|node| {
             node.role() == egui::accesskit::Role::Button
-                && node.label().is_some_and(|label| label.trim() == "Sine")
+                && node.label().is_some_and(|label| label.trim() == "Tones")
         })
         .click();
     f.harness.run_steps(2);

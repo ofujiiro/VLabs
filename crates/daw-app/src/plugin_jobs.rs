@@ -155,6 +155,7 @@ fn set_up(own: &Path) -> PluginJobDone {
     let bridge = install::find_bridge();
     PluginJobDone {
         bridge: bridge.is_ready().then(|| bridge_all(&bridge, own, true)),
+        bridge_missing: !bridge.is_ready(),
         ..PluginJobDone::default()
     }
 }

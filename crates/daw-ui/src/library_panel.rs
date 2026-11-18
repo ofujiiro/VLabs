@@ -119,8 +119,6 @@ impl Drop for Root {
 /// One row of the list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Row {
-    /// Back to the folder above.
-    Up,
     /// A folder inside the one shown, by name.
     Folder(String),
     /// A file: which library folder, and where in its listing.
@@ -372,9 +370,6 @@ impl LibraryPanel {
         self.found = 0;
         if key.search.is_empty() {
             if let Some(listing) = &self.roots[self.current].listing {
-                if !self.folder.is_empty() {
-                    self.rows.push(Row::Up);
-                }
                 let inside = listing.inside(&self.folder);
                 self.rows
                     .extend(inside.folders.into_iter().map(Row::Folder));
@@ -411,7 +406,6 @@ impl LibraryPanel {
             file: None,
         };
         match row {
-            Row::Up => Some(folder_look(format!("‹ {}", text::LIBRARY_UP))),
             Row::Folder(name) => Some(folder_look(name.clone())),
             Row::Item { root, index } => {
                 let root = &self.roots[*root];
@@ -465,11 +459,6 @@ impl LibraryPanel {
             );
         }
         match (row, look.file) {
-            (Row::Up, _) => {
-                if response.clicked() {
-                    self.go_up();
-                }
-            }
             (Row::Folder(name), _) => {
                 if response.clicked() {
                     self.folder = if self.folder.is_empty() {
@@ -548,7 +537,7 @@ fn paint_row(ui: &Ui, rect: egui::Rect, look: &Look, (lit, selected, playing): (
     let painter = ui.painter_at(rect);
     if lit {
         let fill = if selected {
-            p.selected.gamma_multiply(0.35)
+            p.accent.gamma_multiply(0.22)
         } else {
             p.raised_hover
         };
@@ -581,16 +570,18 @@ fn paint_row(ui: &Ui, rect: egui::Rect, look: &Look, (lit, selected, playing): (
 
 /// The name of a file being dragged, beside the pointer.
 fn follow_pointer(ui: &Ui, id: egui::Id, label: &str) {
-    if let Some(pointer) = ui.ctx().pointer_latest_pos() {
-        let layer = egui::LayerId::new(egui::Order::Tooltip, id);
-        ui.ctx().layer_painter(layer).text(
-            pointer + vec2(14.0, 0.0),
-            Align2::LEFT_CENTER,
-            label,
-            FontId::proportional(size::BODY),
-            Palette::of(ui.ctx()).text,
-        );
-    }
+    let Some(mouse) = ui.ctx().pointer_latest_pos() else {
+        return;
+    };
+    let p = Palette::of(ui.ctx());
+    let layer = ui
+        .ctx()
+        .layer_painter(egui::LayerId::new(egui::Order::Tooltip, id));
+    let galley = layer.layout_no_wrap(label.to_owned(), FontId::proportional(size::BODY), p.text);
+    let at = mouse + vec2(16.0, -galley.size().y / 2.0);
+    let back = egui::Rect::from_min_size(at, galley.size()).expand2(vec2(8.0, 4.0));
+    layer.rect_filled(back, CornerRadius::same(4), p.raised);
+    layer.galley(at, galley, p.text);
 }
 
 /// Adds a folder to the library's folders (once).

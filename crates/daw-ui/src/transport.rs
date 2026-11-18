@@ -521,7 +521,6 @@ pub fn location_bar(
                 ui.label(RichText::new("›").color(p.text_weak));
                 track_menu(ui, session);
                 plugin_button(ui, session);
-                soundfont_menu(ui, session);
                 ui.label(RichText::new("›").color(p.text_weak));
                 pattern_menu(ui, session, intents);
                 if !session.is_placed() {
@@ -655,40 +654,6 @@ fn plugin_button(ui: &mut Ui, session: &mut Session) {
     }
 }
 
-/// The preset a track plays from a SoundFont the person chose (decision
-/// 0023).
-fn soundfont_menu(ui: &mut Ui, session: &mut Session) {
-    let track = session.track_id();
-    if session.soundfont_file(track).is_none() {
-        return;
-    }
-    let presets = session.soundfont_presets(track);
-    let current = session.soundfont_preset(track);
-    let name = presets
-        .iter()
-        .find(|p| Some((p.bank, p.program)) == current)
-        .map_or_else(|| text::PRESET.to_owned(), |p| p.name.clone());
-    let response = dropdown(ui, RichText::new(name), text::PRESET_HINT);
-    Popup::menu(&response).show(|ui| {
-        egui::ScrollArea::vertical()
-            .max_height(360.0)
-            .show(ui, |ui| {
-                for preset in &presets {
-                    let chosen = current == Some((preset.bank, preset.program));
-                    let label = format!(
-                        "{}  {}",
-                        text::preset_number(preset.bank, preset.program),
-                        preset.name
-                    );
-                    if ui.selectable_label(chosen, label).clicked() {
-                        session.set_soundfont_preset(track, preset.bank, preset.program);
-                        ui.close();
-                    }
-                }
-            });
-    });
-}
-
 /// A button that opens a menu, with a small arrow.
 fn dropdown(ui: &mut Ui, label: RichText, hint: &str) -> egui::Response {
     let response = ui
@@ -714,7 +679,13 @@ fn dropdown(ui: &mut Ui, label: RichText, hint: &str) -> egui::Response {
 /// The track in the path: a menu of every track, to open another.
 fn track_menu(ui: &mut Ui, session: &mut Session) {
     let name = RichText::new(session.track_name()).size(size::HEADING);
-    let response = dropdown(ui, name, text::OPEN_TRACK_HINT);
+    let soundfont = session.soundfont_file(session.track_id()).is_some();
+    let hint = if soundfont {
+        text::OPEN_TRACK_OR_PRESET_HINT
+    } else {
+        text::OPEN_TRACK_HINT
+    };
+    let response = dropdown(ui, name, hint);
     Popup::menu(&response).show(|ui| {
         ui.set_min_width(200.0);
         let tracks: Vec<_> = session
@@ -732,7 +703,38 @@ fn track_menu(ui: &mut Ui, session: &mut Session) {
                 ui.close();
             }
         }
+        if soundfont {
+            soundfont_presets(ui, session);
+        }
     });
+}
+
+/// In the track menu of a track playing a SoundFont the person chose: its
+/// presets, the one playing ticked (decision 0023).
+fn soundfont_presets(ui: &mut Ui, session: &mut Session) {
+    let track = session.track_id();
+    let presets = session.soundfont_presets(track);
+    let current = session.soundfont_preset(track);
+    ui.separator();
+    ui.label(RichText::new(text::PRESET).weak())
+        .on_hover_text(text::PRESET_HINT);
+    egui::ScrollArea::vertical()
+        .id_salt("soundfont-presets")
+        .max_height(280.0)
+        .show(ui, |ui| {
+            for preset in &presets {
+                let chosen = current == Some((preset.bank, preset.program));
+                let label = format!(
+                    "{}  {}",
+                    text::preset_number(preset.bank, preset.program),
+                    preset.name
+                );
+                if ui.selectable_label(chosen, label).clicked() {
+                    session.set_soundfont_preset(track, preset.bank, preset.program);
+                    ui.close();
+                }
+            }
+        });
 }
 
 /// The pattern in the path: a menu to switch, add, copy, rename or delete.

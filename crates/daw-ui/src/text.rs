@@ -728,6 +728,8 @@ pub const SOUNDFONT_FILE_TYPE: &str = "SoundFont";
 pub const CHOOSE_SOUNDFONT_TITLE: &str = "Choose a SoundFont";
 pub const PRESET: &str = "Preset";
 pub const PRESET_HINT: &str = "The sound of the SoundFont this track plays";
+pub const OPEN_TRACK_OR_PRESET_HINT: &str =
+    "Open another track, or choose the preset this SoundFont plays";
 pub const EDIT_ADD_SOUNDFONT: &str = "add SoundFont track";
 pub const EDIT_SOUNDFONT_PRESET: &str = "choose SoundFont preset";
 
@@ -1214,6 +1216,12 @@ pub fn plugin_job_lines(done: &crate::plugin_manager::PluginJobDone) -> Vec<Stri
             "{} could not be removed ({why}).",
             file_title(path)
         ));
+    }
+    if done.bridge_missing {
+        lines.push(
+            "Not ready yet: install what is missing (see Windows plugins below), then click Check again."
+                .to_owned(),
+        );
     }
     lines
 }

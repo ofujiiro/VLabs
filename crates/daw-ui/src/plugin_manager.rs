@@ -84,6 +84,8 @@ pub struct PluginJobDone {
     pub bridge: Option<Result<(), String>>,
     /// A plugin that could not be removed, and why.
     pub remove_failed: Option<(PathBuf, String)>,
+    /// Wine or yabridge was looked for and is still missing.
+    pub bridge_missing: bool,
 }
 
 /// Whether a dropped file or folder is for the Plugins window: a plugin, a
@@ -223,12 +225,21 @@ impl PluginsWindow {
             self.focused = true;
         }
         ui.add_space(6.0);
-        self.list(ui, parts);
-        ui.add_space(6.0);
-        if let Some(bridge) = parts.places.bridge {
-            windows_plugins(ui, parts, bridge);
-        }
-        folders(ui, parts);
+        // The list and the sections under it scroll together, so the
+        // window always fits the screen.
+        let room = (ui.ctx().content_rect().height() - 300.0).max(160.0);
+        egui::ScrollArea::vertical()
+            .id_salt("plugins-window")
+            .max_height(room)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                self.list(ui, parts);
+                ui.add_space(6.0);
+                if let Some(bridge) = parts.places.bridge {
+                    windows_plugins(ui, parts, bridge);
+                }
+                folders(ui, parts);
+            });
         ui.add_space(10.0);
         if ui.button(text::CLOSE).clicked() {
             close = true;
@@ -248,10 +259,8 @@ impl PluginsWindow {
         let instruments = parts.session.plugins_of(PluginKind::Instrument);
         let effects = parts.session.plugins_of(PluginKind::Effect);
         let search = parts.session.plugin_search().clone();
-        egui::ScrollArea::vertical()
-            .max_height(260.0)
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
+        {
+            {
                 let mut shown = 0;
                 for (heading, plugins) in [
                     (text::INSTRUMENTS_HEADING, &instruments),
@@ -285,9 +294,10 @@ impl PluginsWindow {
                     ui.label(RichText::new(text::WINDOWS_PLUGINS_WAITING).weak());
                     for path in waiting {
                         ui.horizontal(|ui| {
-                            ui.add_sized(
-                                [NAME_WIDTH + DETAIL_WIDTH, 22.0],
-                                egui::Label::new(file_title(path)).truncate(),
+                            cell(
+                                ui,
+                                NAME_WIDTH + DETAIL_WIDTH,
+                                RichText::new(file_title(path)),
                             );
                             remove_button(ui, path, parts);
                         });
@@ -296,7 +306,8 @@ impl PluginsWindow {
                 }
                 let none = instruments.is_empty() && effects.is_empty();
                 crate::workspace::search_state(ui, &search, none, shown);
-            });
+            }
+        }
     }
 }
 
@@ -304,22 +315,30 @@ impl PluginsWindow {
 /// here.
 fn plugin_row(ui: &mut Ui, info: &PluginInfo, parts: &mut Parts<'_>) {
     ui.horizontal(|ui| {
-        ui.add_sized(
-            [NAME_WIDTH, 22.0],
-            egui::Label::new(RichText::new(&info.name).strong()).truncate(),
-        )
-        .on_hover_text(info.path.display().to_string());
-        ui.add_sized(
-            [DETAIL_WIDTH, 22.0],
-            egui::Label::new(
-                RichText::new(text::plugin_detail(&info.vendor, format_name(info))).weak(),
-            )
-            .truncate(),
+        cell(ui, NAME_WIDTH, RichText::new(&info.name).strong())
+            .on_hover_text(info.path.display().to_string());
+        cell(
+            ui,
+            DETAIL_WIDTH,
+            RichText::new(text::plugin_detail(&info.vendor, format_name(info))).weak(),
         );
         if let Some(target) = removal_target(&info.path, &parts.places.added) {
             remove_button(ui, &target, parts);
         }
     });
+}
+
+/// A column of a row: text from the left, cut short with "…" if too long.
+fn cell(ui: &mut Ui, width: f32, words: RichText) -> egui::Response {
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, 22.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_width(width);
+            ui.add(egui::Label::new(words).truncate())
+        },
+    )
+    .inner
 }
 
 fn remove_button(ui: &mut Ui, path: &Path, parts: &mut Parts<'_>) {
