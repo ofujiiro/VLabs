@@ -103,7 +103,10 @@ impl SoundLibrary {
             let result = if !path.is_file() {
                 Err(Problem::MissingFile(file.clone()))
             } else if let Some(reader) = reader {
-                reader(path)
+                // A file from anywhere may still find a corner of the
+                // reader: it fails, and the track does not wait forever.
+                std::panic::catch_unwind(|| reader(path))
+                    .unwrap_or_else(|_| Err("the reader gave up on it".to_owned()))
                     .map(Arc::new)
                     .map_err(|reason| Problem::UnreadableSound {
                         sound: file.clone(),

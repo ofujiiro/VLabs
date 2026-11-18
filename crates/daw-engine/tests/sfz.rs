@@ -45,6 +45,7 @@ fn reader(path: &Path) -> Result<SamplerBank, String> {
     if text.contains("broken") {
         return Err("it is damaged".to_owned());
     }
+    assert!(!text.contains("panic"), "a reader that fails badly");
     let left = (0..48_000)
         .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
         .collect();
@@ -210,6 +211,24 @@ fn a_missing_or_broken_instrument_plays_a_plain_sound_and_says_why() {
     engine.play();
     let plain = run(&mut engine, &mut processor, 9600);
     assert!(rms(&plain[2400..]) > 0.01, "a plain sound plays instead");
+
+    // A reader that panics does not leave the track waiting forever.
+    let panicking = instrument_file("Panicking.sfz", "panic");
+    let mut reading = library();
+    reading.set_background_loading(true);
+    let (mut engine, _processor) = Engine::new(config(), reading);
+    let project = song(&panicking);
+    engine.sync(&project, 1, PlaybackScope::Song);
+    let started = Instant::now();
+    while !engine.loading_sounds().is_empty() {
+        assert!(started.elapsed() < Duration::from_secs(10), "waits forever");
+        std::thread::sleep(Duration::from_millis(10));
+        engine.sync(&project, 1, PlaybackScope::Song);
+    }
+    assert!(matches!(
+        engine.take_problems().as_slice(),
+        [Problem::UnreadableSound { .. }]
+    ));
 
     let broken = instrument_file("Broken.sfz", "broken");
     let (mut engine, _processor) = Engine::new(config(), library());
