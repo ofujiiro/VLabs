@@ -1477,7 +1477,7 @@ fn a_chord_stamp_places_a_chord_of_the_key_with_one_click() {
     let mut f = fixture();
     f.workspace_mut().session_mut().set_key(Some(c_major()));
     f.harness.run_steps(2);
-    f.harness.get_by_label(text::DRAW_NOTES).click();
+    f.harness.get_by_label(text::DRAW_NOTES_SHORT).click();
     f.harness.run_steps(3);
     f.harness.get_by_label(text::TRIADS_IN_KEY).click();
     f.harness.run_steps(3);
@@ -1634,6 +1634,10 @@ fn the_signature_row_changes_the_time_signature_from_a_bar() {
     f.key(Key::Escape, Key::Escape, true, Modifiers::NONE);
     f.key(Key::Escape, Key::Escape, false, Modifiers::NONE);
     f.harness.run_steps(2);
+    assert!(
+        f.harness.query_by_label(&text::from_bar(2)).is_none(),
+        "Escape closes the panel"
+    );
     f.harness
         .get_by_label(&text::signature_tag(2, &text::time_signature(7, 8)));
     f.workspace_mut().session_mut().undo();
@@ -1650,6 +1654,32 @@ fn the_tempo_line_takes_changes_that_are_dragged_and_removed() {
     let changes = f.session().tempo_changes().to_vec();
     assert_eq!(changes.len(), 2, "a click adds a tempo change");
     assert_eq!(changes[1].at, bar5, "on the beat");
+    f.harness.get_by_label(text::GLIDE);
+    f.key(Key::Escape, Key::Escape, true, Modifiers::NONE);
+    f.key(Key::Escape, Key::Escape, false, Modifiers::NONE);
+    f.harness.run_steps(2);
+    assert!(f.harness.query_by_label(text::GLIDE).is_none(), "closed");
+    // A quick click (press and release in one frame) opens it too, and a
+    // click elsewhere closes it.
+    let point = f
+        .harness
+        .get_by_label(&text::tempo_point(changes[1].bpm, 4))
+        .rect()
+        .center();
+    f.harness.hover_at(point);
+    f.harness.step();
+    f.press(point, PointerButton::Primary, true, Modifiers::NONE);
+    f.press(point, PointerButton::Primary, false, Modifiers::NONE);
+    f.harness.run_steps(3);
+    f.harness.get_by_label(text::GLIDE);
+    f.click(
+        Pos2::new(point.x - 200.0, strip.top() - 60.0),
+        Modifiers::NONE,
+    );
+    assert!(
+        f.harness.query_by_label(text::GLIDE).is_none(),
+        "closed again"
+    );
     f.key(Key::Escape, Key::Escape, true, Modifiers::NONE);
     f.key(Key::Escape, Key::Escape, false, Modifiers::NONE);
     f.harness.run_steps(2);

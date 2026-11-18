@@ -382,6 +382,15 @@ impl SongView {
         true
     }
 
+    /// Closes the clip menu and the signature row's panel, if one is open
+    /// (Escape: the keymap takes the key before the view sees it); returns
+    /// whether one was.
+    pub fn close_popups(&mut self) -> bool {
+        let menu = self.menu_clip.take().is_some();
+        let panel = self.signatures.close_panel();
+        menu || panel
+    }
+
     /// Zooms in time around the middle (a factor above 1 zooms in).
     pub fn zoom(&mut self, factor: f64) {
         self.ticks_per_point = (self.ticks_per_point / factor).clamp(min_zoom(), max_zoom());

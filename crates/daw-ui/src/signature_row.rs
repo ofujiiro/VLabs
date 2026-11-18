@@ -139,6 +139,20 @@ impl SignatureRow {
         self.drag != Drag::None
     }
 
+    /// Opens the panel of a change at `at`. The press that opened it (on
+    /// this frame) does not count as a press outside it, even when press
+    /// and release come in the same frame.
+    fn open_panel(&mut self, panel: Panel, at: Pos2) {
+        self.panel = Some((panel, at));
+        self.panel_fresh = true;
+    }
+
+    /// Closes the panel of a change, if one is open (Escape); returns
+    /// whether one was.
+    pub fn close_panel(&mut self) -> bool {
+        self.panel.take().is_some()
+    }
+
     /// Abandons the drag in progress, putting everything back.
     pub fn cancel_drag(&mut self, session: &mut Session) -> bool {
         let gesture = match self.drag {
@@ -385,8 +399,7 @@ impl SignatureRow {
             } else {
                 let bar = session.project().meter.position(axis.tick(pos.x)).bar;
                 let x = axis.x(session.project().meter.bar_start(bar));
-                self.panel = Some((Panel::Bar(bar), pos2(x, strip.bottom())));
-                self.panel_fresh = true;
+                self.open_panel(Panel::Bar(bar), pos2(x, strip.bottom()));
             }
         }
         if let Drag::Tag { bar, origin, moved } = self.drag {
@@ -414,7 +427,7 @@ impl SignatureRow {
                     if moved {
                         session.end_gesture();
                     } else if let Some(tag) = tags.iter().find(|t| t.bar == bar) {
-                        self.panel = Some((Panel::Bar(bar), tag.rect.left_bottom()));
+                        self.open_panel(Panel::Bar(bar), tag.rect.left_bottom());
                     }
                     self.drag = Drag::None;
                 }
@@ -676,7 +689,7 @@ impl SignatureRow {
                         session.end_gesture();
                     }
                     if pos.is_none_or(|p| p.distance(origin) <= DRAG_THRESHOLD) {
-                        self.panel = Some((Panel::Tempo(at), pos2(axis.x(at), strip.bottom())));
+                        self.open_panel(Panel::Tempo(at), pos2(axis.x(at), strip.bottom()));
                     }
                     self.drag = Drag::None;
                 }
@@ -770,8 +783,10 @@ impl SignatureRow {
                     Panel::Tempo(at) => close = Self::tempo_panel(ui, session, at),
                 });
             });
+        // Only the frame the panel opened on is spared.
+        let fresh = std::mem::take(&mut self.panel_fresh);
         let pressed_outside = ui.input(|i| i.pointer.any_pressed())
-            && !std::mem::take(&mut self.panel_fresh)
+            && !fresh
             && !area.response.contains_pointer()
             && ui
                 .input(|i| i.pointer.interact_pos())
@@ -798,13 +813,16 @@ impl SignatureRow {
                 {
                     session.set_meter_change(bar, None);
                 }
-                let current = session.project().meter.signature_at_bar(bar);
-                let shown = change.unwrap_or(current);
-                signature_choices(ui, shown, |signature| {
+                // The signature in effect is the base for "Other…"; a choice
+                // is highlighted only when this bar has its own change.
+                let current = change.unwrap_or(session.project().meter.signature_at_bar(bar));
+                signature_choices(ui, current, change.is_some(), |signature| {
                     session.set_meter_change(bar, Some(signature));
                 });
             });
-            ui.separator();
+            // (Space, not a separator: a vertical separator would take all
+            // the height there is and grow the panel to the window's edge.)
+            ui.add_space(16.0);
             ui.vertical(|ui| {
                 ui.set_width(KEY_COLUMN);
                 ui.label(RichText::new(text::KEY).small().weak());
@@ -817,7 +835,7 @@ impl SignatureRow {
                     session.set_key_change(bar, None);
                 }
                 let current = session.project().key.at_bar(bar);
-                key_choices(ui, current, |scale| {
+                key_choices(ui, current, change.is_some(), |scale| {
                     session.set_key_change(bar, Some(scale));
                 });
             });

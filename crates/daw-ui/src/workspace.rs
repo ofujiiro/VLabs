@@ -666,7 +666,7 @@ impl Workspace {
                 s.split_at_play_position();
             }
             Command::Deselect => {
-                if !self.song.cancel_drag(s) {
+                if !self.song.close_popups() && !self.song.cancel_drag(s) {
                     s.select_clip(None);
                 }
             }

@@ -248,7 +248,6 @@ pub fn bars(count: u32) -> String {
     }
 }
 
-pub const PATTERN_LENGTH: &str = "Length";
 pub const LONGER: &str = "One bar longer";
 pub const SHORTER: &str = "One bar shorter";
 pub const CUSTOM_LENGTH: &str = "As drawn";
@@ -1127,19 +1126,44 @@ pub fn chord_kind_name(kind: daw_model::ChordKind) -> &'static str {
     }
 }
 
-/// What the Draw button says: "Notes", "Triads in key", "maj7".
-pub fn draw_name(draw: crate::session::Draw) -> String {
+/// What the Draw button says, short so the location line fits: "Notes",
+/// "Triads in key", "maj7", with the inversion if there is one.
+pub fn draw_button(draw: crate::session::Draw, inversion: usize) -> String {
     use crate::session::Draw;
-    use daw_model::ChordShape;
-    match draw {
-        Draw::Note => DRAW_NOTES.to_owned(),
-        Draw::Chord(ChordShape::InKey(3)) => TRIADS_IN_KEY.to_owned(),
-        Draw::Chord(ChordShape::InKey(_)) => SEVENTHS_IN_KEY.to_owned(),
-        Draw::Chord(ChordShape::Kind(kind)) => chord_kind_name(kind).to_owned(),
+    use daw_model::{ChordKind as K, ChordShape};
+    let name = match draw {
+        Draw::Note => return DRAW_NOTES_SHORT.to_owned(),
+        Draw::Chord(ChordShape::InKey(3)) => "Triads in key",
+        Draw::Chord(ChordShape::InKey(_)) => "7ths in key",
+        Draw::Chord(ChordShape::Kind(kind)) => match kind {
+            K::Major => "Major",
+            K::Minor => "Minor",
+            K::Diminished => "dim",
+            K::Augmented => "aug",
+            K::Sus2 => "sus2",
+            K::Sus4 => "sus4",
+            K::Power => "5",
+            K::Sixth => "6",
+            K::MinorSixth => "m6",
+            K::Seventh => "7",
+            K::MajorSeventh => "maj7",
+            K::MinorSeventh => "m7",
+            K::HalfDiminished => "m7b5",
+            K::DiminishedSeventh => "dim7",
+            K::AddNine => "add9",
+            K::Ninth => "9",
+            K::MajorNinth => "maj9",
+            K::MinorNinth => "m9",
+        },
+    };
+    match inversion {
+        0 => name.to_owned(),
+        n => format!("{name}, inv. {n}"),
     }
 }
 
 pub const DRAW: &str = "Draw";
+pub const DRAW_NOTES_SHORT: &str = "Notes";
 pub const DRAW_HINT: &str = "What a click places: one note, or a whole chord on the note you click";
 pub const DRAW_NOTES: &str = "Single notes";
 pub const TRIADS_IN_KEY: &str = "Triads in the key";
@@ -1209,7 +1233,7 @@ pub fn by_interval(up: bool, name: &str) -> String {
     }
 }
 
-pub const NOTES_MENU: &str = "Notes";
+pub const NOTES_MENU: &str = "Transpose";
 pub const NOTES_MENU_HINT: &str = "Transpose and invert the selected notes";
 pub const TRANSPOSE_UP: &str = "Transpose up";
 pub const TRANSPOSE_DOWN: &str = "Transpose down";

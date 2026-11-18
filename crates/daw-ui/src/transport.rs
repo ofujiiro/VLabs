@@ -360,7 +360,7 @@ fn time_signature_button(ui: &mut Ui, session: &mut Session) {
     Popup::menu(&response)
         .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
-            signature_choices(ui, current, |signature| {
+            signature_choices(ui, current, true, |signature| {
                 session.set_time_signature(signature);
             });
         });
@@ -368,14 +368,18 @@ fn time_signature_button(ui: &mut Ui, session: &mut Session) {
 
 /// The common time signatures, then any other: beats and note value. Each
 /// choice calls `choose` (the transport, and the signature row's panel).
+/// `current` is shown as chosen when `highlight` is set (the signature
+/// row's panel does not, when its bar keeps the signature before it).
 pub fn signature_choices(
     ui: &mut Ui,
     current: TimeSignature,
+    highlight: bool,
     mut choose: impl FnMut(TimeSignature),
 ) {
     ui.set_min_width(150.0);
     for (numerator, denominator) in SIGNATURES {
-        let selected = current.numerator == numerator && current.denominator == denominator;
+        let selected =
+            highlight && current.numerator == numerator && current.denominator == denominator;
         if ui
             .selectable_label(selected, text::time_signature(numerator, denominator))
             .clicked()
@@ -399,7 +403,10 @@ pub fn signature_choices(
         ui.label("/");
         for denominator in [2_u8, 4, 8, 16, 32] {
             if ui
-                .selectable_label(current.denominator == denominator, denominator.to_string())
+                .selectable_label(
+                    highlight && current.denominator == denominator,
+                    denominator.to_string(),
+                )
                 .on_hover_text(text::NOTE_VALUE)
                 .clicked()
                 && let Some(signature) = TimeSignature::new(current.numerator, denominator)
@@ -423,16 +430,22 @@ fn key_button(ui: &mut Ui, session: &mut Session) {
     Popup::menu(&response)
         .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
-            key_choices(ui, current, |scale| session.set_key(scale));
+            key_choices(ui, current, true, |scale| session.set_key(scale));
         });
 }
 
 /// No key, the twelve tonics and the scales. Each choice calls `choose`
-/// (the transport, and the signature row's panel).
-pub fn key_choices(ui: &mut Ui, current: Option<Scale>, mut choose: impl FnMut(Option<Scale>)) {
+/// (the transport, and the signature row's panel). `current` is shown as
+/// chosen when `highlight` is set.
+pub fn key_choices(
+    ui: &mut Ui,
+    current: Option<Scale>,
+    highlight: bool,
+    mut choose: impl FnMut(Option<Scale>),
+) {
     ui.set_min_width(260.0);
     if ui
-        .selectable_label(current.is_none(), text::NO_KEY)
+        .selectable_label(highlight && current.is_none(), text::NO_KEY)
         .clicked()
     {
         choose(None);
@@ -444,7 +457,7 @@ pub fn key_choices(ui: &mut Ui, current: Option<Scale>, mut choose: impl FnMut(O
     for row in [0_u8..6, 6..12] {
         ui.horizontal(|ui| {
             for tonic in row {
-                let selected = current.is_some_and(|s| s.tonic == tonic);
+                let selected = highlight && current.is_some_and(|s| s.tonic == tonic);
                 let name = text::tonic_name(tonic, kind);
                 if ui
                     .add(Button::selectable(selected, name).min_size(vec2(34.0, 26.0)))
@@ -462,7 +475,7 @@ pub fn key_choices(ui: &mut Ui, current: Option<Scale>, mut choose: impl FnMut(O
         .num_columns(2)
         .show(ui, |ui| {
             for (index, kind) in ScaleKind::ALL.into_iter().enumerate() {
-                let selected = current.is_some_and(|s| s.kind == kind);
+                let selected = highlight && current.is_some_and(|s| s.kind == kind);
                 if ui
                     .selectable_label(selected, text::scale_kind_name(kind))
                     .clicked()
@@ -762,7 +775,7 @@ fn grid_menu(ui: &mut Ui, session: &mut Session) {
         name = format!("{name}  ·  {}", text::IN_KEY);
     }
     let response = ui
-        .add(Button::new(name).min_size(vec2(84.0, 28.0)))
+        .add(Button::new(name).min_size(vec2(56.0, 28.0)))
         .on_hover_text(text::SNAP_HINT);
     Popup::menu(&response)
         .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
@@ -816,7 +829,10 @@ fn grid_menu(ui: &mut Ui, session: &mut Session) {
 /// What a click places: a note or a chord (decision 0018).
 fn draw_menu(ui: &mut Ui, session: &mut Session) {
     let response = ui
-        .add(Button::new(text::draw_name(session.draw)).min_size(vec2(84.0, 28.0)))
+        .add(
+            Button::new(text::draw_button(session.draw, session.chord_inversion))
+                .min_size(vec2(56.0, 28.0)),
+        )
         .on_hover_text(text::DRAW_HINT);
     Popup::menu(&response)
         .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
@@ -845,7 +861,7 @@ fn draw_menu(ui: &mut Ui, session: &mut Session) {
             ui.label(RichText::new(text::CHORD_KINDS).small().weak());
             egui::Grid::new("chord-kinds")
                 .num_columns(2)
-                .spacing(vec2(12.0, 2.0))
+                .spacing(vec2(24.0, 2.0))
                 .show(ui, |ui| {
                     for (index, kind) in ChordKind::ALL.into_iter().enumerate() {
                         let draw = Draw::Chord(ChordShape::Kind(kind));
@@ -888,7 +904,7 @@ fn note_length_menu(ui: &mut Ui, session: &mut Session) {
             |&(n, d)| text::length_name(n, d),
         );
     let response = ui
-        .add(Button::new(current).min_size(vec2(84.0, 28.0)))
+        .add(Button::new(current).min_size(vec2(56.0, 28.0)))
         .on_hover_text(text::NOTE_LENGTH_HINT);
     Popup::menu(&response).show(|ui| {
         let groups: [(&str, &[(i64, i64)]); 3] = [
@@ -925,7 +941,7 @@ fn note_length_menu(ui: &mut Ui, session: &mut Session) {
 fn swing_menu(ui: &mut Ui, session: &mut Session) {
     let swing = session.swing();
     let response = ui
-        .add(Button::new(text::swing_name(swing.percent)).min_size(vec2(84.0, 28.0)))
+        .add(Button::new(text::swing_name(swing.percent)).min_size(vec2(56.0, 28.0)))
         .on_hover_text(text::SWING_HINT);
     Popup::menu(&response)
         .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
@@ -1066,5 +1082,6 @@ fn pattern_length(ui: &mut Ui, session: &mut Session) {
     if shorter.clicked() {
         session.set_pattern_bars(fewer);
     }
-    ui.label(RichText::new(text::PATTERN_LENGTH).weak());
+    // (No "Length" label: "− 4 bars +" says it, and the line has to fit a
+    // laptop's width with the pattern tools of phase 5.)
 }
