@@ -26,18 +26,24 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   reproduce on Linux; the owner was asked to retry.
 - The roadmap has the owner's later request: singing voices with open
   voicebanks (OpenUtau-style; OpenUtau is MIT), after v1.
-- `cargo xtask ci` passed locally on the last code commit (fmt, clippy,
-  build, all tests, cargo-deny on both targets).
+- `cargo xtask ci` passed locally on the final commit (fmt, clippy, build,
+  all tests, cargo-deny on both targets).
 
 ## Waiting on the owner
 
-- Permission to push: the repository went public, and pushing the phase 4
-  commits was blocked by the session's permission check (pushing now
-  publishes). Nothing of phase 4 is on GitHub until it is pushed; CI on
-  Windows has therefore not run on it yet.
 - The hands-on checks of the phase 3 and phase 4 builds (ROADMAP.md, "things
   to try"), and whether the drum-name noise still happens (and on which
-  system).
+  system). No downloadable build of phase 4 exists yet: start the
+  "Program builds" workflow (by hand, or with a `milestone-*` tag).
+
+## First thing for the next session
+
+- All phase 4 work is pushed to `claude/relaxed-einstein-0sb43g` (not
+  merged into `main`, no pull request). `ci.yml` runs only on `main` and
+  pull requests, so CI was started by hand on the branch: CI run
+  44213391156 and Spikes run 44213410087 (plugin tests). Both were still
+  running when this session ended: check their results first (Windows has
+  not been tried by hand); fix anything they found.
 
 ## Not verified (say so if asked)
 
@@ -45,7 +51,7 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   program's own output: takes land within about 5 ms of the beat there).
 - The import file dialog (no dialog program on the test screen) and
   dragging files from a real file manager (simulated drops are tested).
-- Phase 4 on Windows, by hand or by CI (not pushed yet).
+- Phase 4 on Windows by hand; by CI, see the runs above.
 - Closing a plugin window with its own close button on a real desktop; the
   program with plugins on Windows by hand.
 
