@@ -135,4 +135,6 @@ impl Default for SongPosition {
 pub enum InstrumentSettings {
     /// A drum kit's pad settings, indexed by each pad's main key.
     Drums(Box<crate::drums::PadTable>),
+    /// The synth's settings (decision 0019).
+    Synth(crate::synth::SynthParams),
 }
