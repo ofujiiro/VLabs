@@ -364,7 +364,7 @@ impl SongView {
             }
             None => (None, session.song_position()),
         };
-        session.import_audio(files, track, at);
+        session.import_files(files, track, at);
     }
 
     /// Whether a drag is in progress.

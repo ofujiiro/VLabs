@@ -140,9 +140,9 @@ pub fn command_name(command: crate::keys::Command) -> &'static str {
         C::ToggleKeyboard => "Show or hide the keyboard",
         C::ToggleMixer => "Show or hide the mixer",
         C::SwitchView => "Switch between the song and the pattern",
-        C::Export => "Export as WAV",
+        C::Export => "Export",
         C::Split => "Split the clip at the play position",
-        C::ImportAudio => "Import audio",
+        C::ImportAudio => "Import",
     }
 }
 pub const ABOUT: &str = "About";
@@ -1130,11 +1130,20 @@ pub fn seconds(value: f32) -> String {
     format!("{value:.2} s")
 }
 
-// Export.
-pub const EXPORT: &str = "Export as WAV…";
+// Export (decision 0020).
+pub const EXPORT: &str = "Export…";
 pub const EXPORT_TITLE: &str = "Export the song";
-pub const EXPORT_HINT: &str =
-    "The whole song is written to a WAV file, with its echoes and reverb fading out at the end.";
+pub const EXPORT_HINT: &str = "Choose what to make of the song.";
+pub const EXPORT_SOUND: &str = "A sound file";
+pub const EXPORT_SOUND_HINT: &str = "The whole song as you hear it, with its echoes and reverb fading out at the end: to play anywhere or share.";
+pub const EXPORT_WAV: &str = "WAV";
+pub const EXPORT_WAV_HINT: &str = "Plays everywhere";
+pub const EXPORT_FLAC: &str = "FLAC";
+pub const EXPORT_FLAC_HINT: &str = "About half the size, with nothing lost";
+pub const EXPORT_DAWPROJECT: &str = "A project for another music program";
+pub const EXPORT_DAWPROJECT_HINT: &str = "DAWproject: tracks, notes, sound, mixer, plugins and automation, for Bitwig Studio, Studio One, Cubase and others.";
+pub const EXPORT_MIDI: &str = "The notes, as a MIDI file";
+pub const EXPORT_MIDI_HINT: &str = "Notes, tempo and time signatures, for any music program.";
 pub const EXPORT_CD: &str = "CD quality";
 pub const EXPORT_CD_HINT: &str = "16-bit, 44.1 kHz — plays everywhere";
 pub const EXPORT_STUDIO: &str = "Studio quality";
@@ -1143,6 +1152,22 @@ pub const EXPORT_BUTTON: &str = "Choose where and export…";
 pub const EXPORTING: &str = "Exporting the song…";
 pub const EXPORT_CANCELLED: &str = "Export cancelled";
 pub const EXPORT_FILE_TYPE: &str = "WAV sound file";
+pub const FLAC_FILE_TYPE: &str = "FLAC sound file";
+pub const DAWPROJECT_FILE_TYPE: &str = "DAWproject file";
+pub const MIDI_FILE_TYPE: &str = "MIDI file";
+/// Every kind of file Open takes.
+pub const ANY_SONG_FILE_TYPE: &str = "Songs";
+
+/// The file type an export writes, for the save dialog.
+pub fn export_file_type(target: crate::export::ExportTarget) -> &'static str {
+    use crate::export::ExportTarget as T;
+    match target {
+        T::Wav => EXPORT_FILE_TYPE,
+        T::Flac => FLAC_FILE_TYPE,
+        T::DawProject => DAWPROJECT_FILE_TYPE,
+        T::Midi => MIDI_FILE_TYPE,
+    }
+}
 
 pub fn exported(path: &str) -> String {
     format!("Exported {path}")
@@ -1160,9 +1185,12 @@ pub const ADD_AUDIO: &str = "Audio";
 pub const ADD_AUDIO_HINT: &str =
     "Add a track for recording from a microphone or importing sound files";
 pub const RECORD_SOUND: &str = "Record sound";
-pub const IMPORT_AUDIO: &str = "Import audio…";
-pub const IMPORT_FILE_TYPE: &str = "Sound files";
-pub const IMPORT_TITLE: &str = "Import sound files";
+pub const IMPORT_AUDIO: &str = "Import…";
+pub const IMPORT_FILE_TYPE: &str = "Sound and MIDI files";
+pub const IMPORT_TITLE: &str = "Import sound or MIDI files";
+pub const EDIT_IMPORT_MIDI: &str = "import MIDI file";
+/// A track named by its number ("Track 3").
+pub const TRACK: &str = "Track";
 pub const NO_INPUT_DEVICE: &str = "No microphone or sound input was found. Plug one in, or allow this program to use it, then record again.";
 pub const EDIT_ADD_AUDIO_TRACK: &str = "add audio track";
 pub const EDIT_IMPORT: &str = "import sound";
@@ -1206,6 +1234,58 @@ pub fn imported(name: &str) -> String {
 
 pub fn could_not_import(name: &str, error: &str) -> String {
     format!("Could not import {name}: {error}")
+}
+
+/// Said after a MIDI file's tracks were added to the song.
+pub fn imported_midi(name: &str, tracks: usize) -> String {
+    match tracks {
+        1 => format!("Imported {name}: one track of notes"),
+        n => format!("Imported {name}: {n} tracks of notes"),
+    }
+}
+
+pub fn no_notes_in(name: &str) -> String {
+    format!("{name} has no notes to import")
+}
+
+/// Said after another program's song was opened, with what it could not
+/// bring.
+pub fn opened_other(name: &str, left_out: &[daw_formats::dawproject::LeftOut]) -> String {
+    use daw_formats::dawproject::LeftOut as L;
+    let mut parts: Vec<String> = Vec::new();
+    let devices: Vec<&str> = left_out
+        .iter()
+        .filter_map(|l| match l {
+            L::Device(name) => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    if !devices.is_empty() {
+        parts.push(format!(
+            "devices {} cannot play ({})",
+            daw_ident::PRODUCT_NAME,
+            devices.join(", ")
+        ));
+    }
+    for item in left_out {
+        match item {
+            L::Device(_) => {}
+            L::Routing => parts.push("group tracks and sends".to_owned()),
+            L::StretchedAudio => {
+                parts.push("time-stretching (the sound plays at its own speed)".to_owned());
+            }
+            L::MissingAudio(file) => parts.push(format!("the missing sound file \"{file}\"")),
+            L::Scenes => parts.push("clip launcher scenes".to_owned()),
+        }
+    }
+    if parts.is_empty() {
+        format!("Opened {name} as a new song: save it to keep it")
+    } else {
+        format!(
+            "Opened {name} as a new song. Left out: {}",
+            parts.join("; ")
+        )
+    }
 }
 
 pub fn could_not_record(error: &str) -> String {

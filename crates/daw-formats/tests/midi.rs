@@ -34,7 +34,7 @@ fn note(start: Ticks, length: Ticks, key: u8) -> Note {
 /// synth bass, a glide, a 7/8 bar and a key.
 fn song() -> Project {
     let mut project = Project::starter("Melody", "Piano");
-    project.title = "Round trip".to_owned();
+    "Round trip".clone_into(&mut project.title);
     let (_, melody) = project.first_pattern().unwrap();
     let triplet = Ticks::note_value(1, 12);
     for (i, key) in [60_u8, 64, 67].iter().enumerate() {

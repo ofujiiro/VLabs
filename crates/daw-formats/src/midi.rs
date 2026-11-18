@@ -232,8 +232,7 @@ pub fn read(bytes: &[u8]) -> Result<MidiFile, MidiError> {
         Timing::PerQuarter(division)
     } else {
         let [high, low] = division.to_be_bytes();
-        #[allow(clippy::cast_possible_wrap, reason = "SMPTE frames are negative")]
-        let fps = (-(high as i8)) as u8;
+        let fps = high.cast_signed().wrapping_neg().cast_unsigned();
         if !matches!(fps, 24 | 25 | 29 | 30) || low == 0 {
             return Err(Reader::damaged("its time code is unknown"));
         }
@@ -610,6 +609,7 @@ fn tempo_events(tempo: &TempoMap) -> Vec<Event> {
 /// tempo, time and key signatures), then one track per instrument track
 /// with the notes the song plays: every clip's repeats, cut at the clip's
 /// end, swung. Audio tracks are left out.
+#[allow(clippy::too_many_lines, reason = "one pass over the song")]
 pub fn song_to_midi(project: &Project) -> MidiFile {
     let mut conductor = Vec::new();
     if !project.title.is_empty() {
@@ -625,7 +625,8 @@ pub fn song_to_midi(project: &Project) -> MidiFile {
             tick: to_file_ticks(project.meter.bar_start(change.bar)),
             kind: EventKind::TimeSignature {
                 numerator: signature.numerator,
-                denominator_power: signature.denominator.trailing_zeros() as u8,
+                denominator_power: u8::try_from(signature.denominator.trailing_zeros())
+                    .unwrap_or(2),
             },
         });
     }
@@ -785,6 +786,7 @@ fn scale_for(sharps: i8, minor: bool) -> Scale {
 
 /// Reads a MIDI file into tracks of notes, with its tempo, time and key
 /// signatures.
+#[allow(clippy::too_many_lines, reason = "one pass over the file")]
 pub fn import(bytes: &[u8]) -> Result<ImportedSong, MidiError> {
     let file = read(bytes)?;
     // Positions as our ticks.

@@ -14,7 +14,7 @@ use daw_model::{EffectId, Note, PatternId, Project, TrackId};
 use egui::{Button, Event, Key, Modal, Panel, RichText, ThemePreference, Ui, ViewportCommand};
 
 use crate::effect_ui::EffectWindows;
-use crate::export::ExportFormat;
+use crate::export::{ExportFormat, ExportTarget};
 use crate::keyboard_panel::{self, KeyboardPanel};
 use crate::keys::{BindError, Command, KeyLabels, Keymap, LayoutFamily, Shortcut, note_offset};
 use crate::mixer::{MIXER_HEIGHT, MixerPanel, format_name};
@@ -33,9 +33,12 @@ pub trait Host {
     fn choose_file_to_open(&mut self) -> Option<PathBuf>;
     /// Asks the person where to save the song.
     fn choose_file_to_save(&mut self, suggested_name: &str) -> Option<PathBuf>;
-    /// Asks the person where to export the song as a WAV file.
-    fn choose_export_file(&mut self, suggested_name: &str) -> Option<PathBuf>;
-    /// Asks the person which sound files to import (none if they cancel).
+    /// Asks the person where to export the song (a sound file, a
+    /// DAWproject or a MIDI file, as `target` says).
+    fn choose_export_file(&mut self, suggested_name: &str, target: ExportTarget)
+    -> Option<PathBuf>;
+    /// Asks the person which sound or MIDI files to import (none if they
+    /// cancel).
     fn choose_audio_files(&mut self) -> Vec<PathBuf> {
         Vec::new()
     }
@@ -109,6 +112,7 @@ enum Dialog {
     },
     Export {
         format: ExportFormat,
+        target: ExportTarget,
     },
     Exporting,
     Instruments {
@@ -217,10 +221,15 @@ impl Workspace {
         });
     }
 
-    /// Opens a song (from the command line, for instance).
+    /// Opens a song (from the command line, for instance): a VLabs song,
+    /// or another program's (DAWproject, MIDI) as a new unsaved song.
     pub fn open(&mut self, path: PathBuf) {
-        if self.session.open(&path).is_ok() {
-            self.settings.remember_file(path);
+        if self.session.open_any(&path).is_ok() {
+            if crate::session::SongFile::of(&path) != Some(crate::session::SongFile::Midi)
+                && crate::session::SongFile::of(&path) != Some(crate::session::SongFile::DawProject)
+            {
+                self.settings.remember_file(path);
+            }
             self.refit_views();
         }
     }
@@ -339,12 +348,11 @@ impl Workspace {
         self.schedule_repaint(&ctx);
     }
 
-    /// Sound files dropped while a pattern is open: the song comes on
-    /// screen with them (the song view takes them itself).
+    /// Files dropped on the window: a song file opens (after asking about
+    /// unsaved changes); sound and MIDI files dropped while a pattern is
+    /// open bring the song on screen with them (the song view takes them
+    /// itself otherwise).
     fn take_dropped_files(&mut self, ctx: &egui::Context) {
-        if self.session.view() != View::Pattern {
-            return;
-        }
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
                 .dropped_files
@@ -352,7 +360,21 @@ impl Workspace {
                 .map(|f| f.path().to_path_buf())
                 .collect()
         });
-        if !dropped.is_empty() {
+        if dropped.is_empty() {
+            return;
+        }
+        let song = dropped.iter().find(|p| {
+            matches!(
+                crate::session::SongFile::of(p),
+                Some(crate::session::SongFile::Native | crate::session::SongFile::DawProject)
+            )
+        });
+        if let Some(song) = song.cloned() {
+            ctx.input_mut(|i| i.raw.dropped_files.clear());
+            self.ask_then(ctx, Pending::Open(Some(song)));
+            return;
+        }
+        if self.session.view() == View::Pattern {
             ctx.input_mut(|i| i.raw.dropped_files.clear());
             self.import(dropped);
         }
@@ -626,6 +648,7 @@ impl Workspace {
                 } else {
                     self.dialog = Some(Dialog::Export {
                         format: ExportFormat::default(),
+                        target: ExportTarget::default(),
                     });
                 }
             }
@@ -650,7 +673,7 @@ impl Workspace {
             .audio_track_in_focus()
             .then(|| self.session.focused_track());
         let at = self.session.song_position();
-        self.session.import_audio(files, track, at);
+        self.session.import_files(files, track, at);
     }
 
     /// Commands that mean something else in the song view: they act on the
@@ -1001,27 +1024,64 @@ impl Workspace {
                 }
                 Dialog::Rename { what, name }
             }
-            Dialog::Export { mut format } => {
+            Dialog::Export {
+                mut format,
+                mut target,
+            } => {
                 let mut choice = None;
                 modal("export", ctx).show(ctx, |ui| {
-                    ui.set_width(420.0);
+                    ui.set_width(460.0);
                     ui.heading(text::EXPORT_TITLE);
                     ui.add_space(6.0);
                     ui.label(RichText::new(text::EXPORT_HINT).weak());
                     ui.add_space(10.0);
+                    let mut sound = target.is_sound();
+                    if ui.radio(sound, text::EXPORT_SOUND).clicked() && !sound {
+                        target = ExportTarget::Wav;
+                        sound = true;
+                    }
+                    ui.indent("export-sound", |ui| {
+                        ui.label(RichText::new(text::EXPORT_SOUND_HINT).small().weak());
+                        ui.add_enabled_ui(sound, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.radio_value(&mut target, ExportTarget::Wav, text::EXPORT_WAV)
+                                    .on_hover_text(text::EXPORT_WAV_HINT);
+                                ui.radio_value(&mut target, ExportTarget::Flac, text::EXPORT_FLAC)
+                                    .on_hover_text(text::EXPORT_FLAC_HINT);
+                            });
+                            for (value, label, hint) in [
+                                (
+                                    ExportFormat::Studio,
+                                    text::EXPORT_STUDIO,
+                                    text::EXPORT_STUDIO_HINT,
+                                ),
+                                (ExportFormat::Cd, text::EXPORT_CD, text::EXPORT_CD_HINT),
+                            ] {
+                                ui.radio_value(&mut format, value, label);
+                                ui.label(RichText::new(hint).small().weak());
+                            }
+                        });
+                    });
+                    ui.add_space(6.0);
                     for (value, label, hint) in [
                         (
-                            ExportFormat::Studio,
-                            text::EXPORT_STUDIO,
-                            text::EXPORT_STUDIO_HINT,
+                            ExportTarget::DawProject,
+                            text::EXPORT_DAWPROJECT,
+                            text::EXPORT_DAWPROJECT_HINT,
                         ),
-                        (ExportFormat::Cd, text::EXPORT_CD, text::EXPORT_CD_HINT),
+                        (
+                            ExportTarget::Midi,
+                            text::EXPORT_MIDI,
+                            text::EXPORT_MIDI_HINT,
+                        ),
                     ] {
-                        ui.radio_value(&mut format, value, label);
-                        ui.label(RichText::new(hint).small().weak());
-                        ui.add_space(4.0);
+                        ui.radio_value(&mut target, value, label);
+                        ui.indent(label, |ui| {
+                            ui.label(RichText::new(hint).small().weak());
+                        });
+                        ui.add_space(6.0);
                     }
-                    ui.add_space(10.0);
+                    ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         if ui.button(text::EXPORT_BUTTON).clicked() {
                             choice = Some(true);
@@ -1034,17 +1094,24 @@ impl Workspace {
                 match choice {
                     Some(true) => {
                         keep = false;
-                        let suggested = format!("{}.wav", self.session.display_name());
-                        if let Some(path) = self.host.choose_export_file(&suggested) {
-                            self.session.start_export(&path, format);
-                            self.dialog = Some(Dialog::Exporting);
-                            return;
+                        let suggested =
+                            format!("{}.{}", self.session.display_name(), target.extension());
+                        if let Some(path) = self.host.choose_export_file(&suggested, target) {
+                            if target.is_sound() {
+                                self.session.start_sound_export(&path, format, target);
+                                self.dialog = Some(Dialog::Exporting);
+                                return;
+                            }
+                            let _ = match target {
+                                ExportTarget::DawProject => self.session.export_dawproject(&path),
+                                _ => self.session.export_midi(&path),
+                            };
                         }
                     }
                     Some(false) => keep = false,
                     None => {}
                 }
-                Dialog::Export { format }
+                Dialog::Export { format, target }
             }
             Dialog::Instruments { search } => {
                 let (search, close) = self.instrument_chooser(ctx, search);

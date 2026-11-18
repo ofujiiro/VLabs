@@ -31,6 +31,10 @@ impl Element {
 
     /// Adds an attribute.
     #[must_use]
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "callers pass numbers and strings alike"
+    )]
     pub(super) fn attr(mut self, key: &'static str, value: impl ToString) -> Self {
         self.attributes.push((key, value.to_string()));
         self

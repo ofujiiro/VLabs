@@ -153,6 +153,10 @@ impl Unit {
     }
 }
 
+/// What makes two clips' patterns the same: the track, the notes (start,
+/// length, key, velocity bits) and the length.
+type PatternKey = (TrackId, Vec<(i64, i64, u8, u32)>, i64);
+
 struct Importer<'n, R: Read + Seek> {
     zip: zip::ZipArchive<R>,
     project: Project,
@@ -169,7 +173,7 @@ struct Importer<'n, R: Read + Seek> {
     audio: HashMap<String, Option<AudioId>>,
     /// Patterns made so far on each track, by their notes and length (clips
     /// with the same notes share one).
-    patterns: HashMap<(TrackId, Vec<(i64, i64, u8, u32)>, i64), PatternId>,
+    patterns: HashMap<PatternKey, PatternId>,
     track_count: usize,
 }
 
@@ -342,8 +346,7 @@ impl<R: Read + Seek> Importer<'_, R> {
             .map_or_else(|| (self.names.track)(self.track_count), str::to_owned);
         let devices: Vec<&Node> = channel
             .child("Devices")
-            .map(|d| d.children.iter().collect())
-            .unwrap_or_default();
+            .map_or_else(Vec::new, |d| d.children.iter().collect());
         let instrument_device = devices
             .iter()
             .find(|d| d.attr("deviceRole") == Some("instrument"))
@@ -362,6 +365,7 @@ impl<R: Read + Seek> Importer<'_, R> {
         }
         // The mixer.
         let gain = channel.child("Volume").and_then(volume_of);
+        #[allow(clippy::cast_possible_truncation, reason = "a pan position")]
         let pan = channel
             .child("Pan")
             .and_then(|p| p.number("value"))
@@ -766,9 +770,10 @@ impl<R: Read + Seek> Importer<'_, R> {
             .iter()
             .map(|n| (n.start.0, n.length.0, n.key, n.velocity.to_bits()))
             .collect();
-        let pattern = match self.patterns.get(&(track, key.clone(), length.0)) {
-            Some(&pattern) => pattern,
-            None => {
+        let pattern = if let Some(&pattern) = self.patterns.get(&(track, key.clone(), length.0)) {
+            pattern
+        } else {
+            {
                 let count = self.project.track_patterns(track).count() + 1;
                 let name = clip
                     .attr("name")
@@ -1103,6 +1108,7 @@ fn warped(warps: &[(f64, f64)], at: f64) -> Option<f64> {
     Some(c0 + (at - t0) / (t1 - t0) * (c1 - c0))
 }
 
+#[allow(clippy::cast_possible_truncation, reason = "checked by try_from")]
 fn signature_of(node: &Node) -> Option<TimeSignature> {
     let numerator = u8::try_from(node.number("numerator")? as i64).ok()?;
     let denominator = u8::try_from(node.number("denominator")? as i64).ok()?;

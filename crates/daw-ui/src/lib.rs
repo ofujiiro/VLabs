@@ -21,7 +21,7 @@ pub mod transport;
 pub mod widgets;
 pub mod workspace;
 
-pub use export::ExportFormat;
+pub use export::{ExportFormat, ExportTarget};
 pub use keys::{Command, KeyLabels, Keymap, LayoutFamily, Shortcut};
 pub use session::{Grid, LaneChoice, LiveTake, PluginSearch, Session, SoundState, View};
 pub use settings::{LabelChoice, Settings, ThemeChoice};

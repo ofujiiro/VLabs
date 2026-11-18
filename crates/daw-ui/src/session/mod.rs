@@ -12,6 +12,7 @@ mod arrange;
 mod audio;
 mod audio_store;
 mod conductor;
+mod files;
 mod mixing;
 mod plugins;
 mod recorder;
@@ -19,6 +20,7 @@ mod synth;
 mod theory;
 
 pub use audio::{LiveTake, SoundState};
+pub use files::SongFile;
 pub use mixing::MAX_GAIN;
 pub use plugins::{LaneChoice, PluginSearch};
 pub use theory::Draw;
@@ -34,7 +36,7 @@ use daw_model::{
 };
 use egui::Key;
 
-use crate::export::{Export, ExportFormat};
+use crate::export::{Export, ExportFormat, ExportTarget};
 use crate::keys::{HIGHEST_OFFSET, note_offset};
 use crate::settings::{Settings, clamp_base};
 use crate::text;
@@ -1495,12 +1497,18 @@ impl Session {
 
     // ----- Export
 
-    /// Starts writing the song to a WAV file in the background.
+    /// Starts writing the song to a sound file (WAV, or FLAC with
+    /// `target`) in the background.
     pub fn start_export(&mut self, path: &Path, format: ExportFormat) {
-        if self.export.is_some() {
+        self.start_sound_export(path, format, ExportTarget::Wav);
+    }
+
+    /// Starts writing the song to a WAV or FLAC file in the background.
+    pub fn start_sound_export(&mut self, path: &Path, format: ExportFormat, target: ExportTarget) {
+        if self.export.is_some() || !target.is_sound() {
             return;
         }
-        let path = crate::export::with_wav_extension(path);
+        let path = target.with_extension(path);
         self.capture_plugin_states();
         self.export = Some(Export::start(
             self.project().clone(),
@@ -1508,6 +1516,7 @@ impl Session {
             self.engine.config(),
             path,
             format,
+            target,
         ));
     }
 

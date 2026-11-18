@@ -49,7 +49,11 @@ impl Host for FakeHost {
         self.save_to.lock().unwrap().clone()
     }
 
-    fn choose_export_file(&mut self, _suggested_name: &str) -> Option<PathBuf> {
+    fn choose_export_file(
+        &mut self,
+        _suggested_name: &str,
+        _target: daw_ui::ExportTarget,
+    ) -> Option<PathBuf> {
         *self.asked.lock().unwrap() += 1;
         self.export_to.lock().unwrap().clone()
     }
@@ -1924,4 +1928,143 @@ fn a_track_places_and_swaps_any_of_its_patterns_from_a_right_click() {
     f.harness.run_steps(3);
     assert_eq!(f.session().project().track_patterns(drums).count(), 3);
     assert_eq!(f.session().project().track(drums).unwrap().clips.len(), 2);
+}
+
+/// Opens the Export dialog with Ctrl+E.
+fn open_export(f: &mut Fixture) {
+    f.key(Key::E, Key::E, true, Modifiers::COMMAND);
+    f.key(Key::E, Key::E, false, Modifiers::COMMAND);
+    f.harness.run_steps(3);
+    f.harness.get_by_label(text::EXPORT_TITLE);
+}
+
+#[test]
+fn the_export_dialog_writes_flac_dawproject_and_midi() {
+    let mut f = new_song();
+    // A note in the beat, so every file has something in it.
+    let kick = square(&f, PadSound::Kick, 1);
+    f.click(kick, Modifiers::NONE);
+    let folder = std::env::temp_dir().join(format!("export-kinds-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+
+    // FLAC, studio quality.
+    let flac = folder.join("song.flac");
+    *f.host.export_to.lock().unwrap() = Some(flac.clone());
+    open_export(&mut f);
+    f.harness.get_by_label(text::EXPORT_FLAC).click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::EXPORT_BUTTON).click();
+    f.harness.run_steps(2);
+    f.workspace_mut().session_mut().finish_export();
+    f.harness.run_steps(3);
+    let sound = daw_formats::audio::decode(&std::fs::read(&flac).unwrap()).unwrap();
+    assert_eq!(sound.format, daw_formats::audio::AudioFormat::Flac);
+    assert_eq!(sound.sample_rate, 48_000);
+    assert!(sound.frames() > 48_000, "the beat and its tail");
+    let peak = sound.channels[0]
+        .iter()
+        .fold(0.0_f32, |m, s| m.max(s.abs()));
+    assert!(peak > 0.05, "the kick is in it");
+
+    // DAWproject: the song for another program.
+    let project = folder.join("song");
+    *f.host.export_to.lock().unwrap() = Some(project.clone());
+    open_export(&mut f);
+    f.harness.get_by_label(text::EXPORT_DAWPROJECT).click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::EXPORT_BUTTON).click();
+    f.harness.run_steps(3);
+    let written = folder.join("song.dawproject");
+    assert!(written.is_file(), "the ending is added");
+    let names = daw_formats::dawproject::ImportNames {
+        track: &|n| format!("Track {n}"),
+        pattern: &|n| format!("Pattern {n}"),
+    };
+    let back = daw_formats::dawproject::import(&written, &folder.join("opened"), &names).unwrap();
+    assert_eq!(back.project.tracks.len(), 2);
+
+    // MIDI: the notes.
+    let midi = folder.join("song.mid");
+    *f.host.export_to.lock().unwrap() = Some(midi.clone());
+    open_export(&mut f);
+    f.harness.get_by_label(text::EXPORT_MIDI).click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::EXPORT_BUTTON).click();
+    f.harness.run_steps(3);
+    let file = daw_formats::midi::read(&std::fs::read(&midi).unwrap()).unwrap();
+    assert_eq!(
+        file.tracks.len(),
+        3,
+        "the conductor, the drums and the piano"
+    );
+    std::fs::remove_dir_all(folder).ok();
+}
+
+#[test]
+fn midi_and_dawproject_files_open_as_new_songs_and_import_into_one() {
+    let folder = std::env::temp_dir().join(format!("open-other-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    // A MIDI file of a song: a melody.
+    let mut source = daw_model::Project::starter("Tune", "Lead");
+    let (_, pattern) = source.first_pattern().unwrap();
+    for (i, key) in [60_u8, 62, 64].iter().enumerate() {
+        source.add_note(
+            pattern,
+            daw_model::Note {
+                id: daw_model::NoteId(0),
+                start: Ticks::QUARTER * i64::try_from(i).unwrap(),
+                length: Ticks::QUARTER,
+                key: *key,
+                velocity: 0.8,
+                pitch_offset: 0.0,
+            },
+        );
+    }
+    let midi = folder.join("tune.mid");
+    std::fs::write(
+        &midi,
+        daw_formats::midi::write(&daw_formats::midi::song_to_midi(&source)),
+    )
+    .unwrap();
+
+    // Opened: a new, unsaved song named after the file.
+    let mut f = new_song();
+    f.workspace_mut().open(midi.clone());
+    f.harness.run_steps(3);
+    let s = f.session();
+    assert_eq!(s.project().title, "tune");
+    assert_eq!(s.project().tracks.len(), 1);
+    assert_eq!(s.project().tracks[0].name, "Lead");
+    assert!(s.is_dirty() && s.path().is_none(), "Save asks where");
+    f.harness
+        .get_by_label_contains("Opened tune.mid as a new song");
+
+    // Imported into another song with Ctrl+I: a track of its own, one
+    // undo step.
+    let mut f = new_song();
+    *f.host.audio.lock().unwrap() = vec![midi.clone()];
+    f.key(Key::I, Key::I, true, Modifiers::COMMAND);
+    f.key(Key::I, Key::I, false, Modifiers::COMMAND);
+    f.harness.run_steps(3);
+    assert_eq!(f.session().project().tracks.len(), 3);
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_IMPORT_MIDI)
+    );
+    let lead = f.session().project().tracks.last().unwrap().clone();
+    assert_eq!(lead.name, "Lead");
+    f.key(Key::Z, Key::Z, true, Modifiers::COMMAND);
+    f.key(Key::Z, Key::Z, false, Modifiers::COMMAND);
+    assert_eq!(f.session().project().tracks.len(), 2);
+
+    // A DAWproject file opens too.
+    let project = folder.join("tune.dawproject");
+    let sounds = folder.join("sounds");
+    std::fs::create_dir_all(&sounds).unwrap();
+    daw_formats::dawproject::export(&source, &sounds, &project).unwrap();
+    f.workspace_mut().open(project);
+    f.harness.run_steps(3);
+    assert_eq!(f.session().project().tracks.len(), 1);
+    assert_eq!(f.session().project().tracks[0].name, "Lead");
+    std::fs::remove_dir_all(folder).ok();
 }

@@ -208,7 +208,7 @@ mod tests {
     fn vst3_settings_travel_as_vstpresets() {
         let mut state = Vec::new();
         for block in [&b"component"[..], &b"ctl"[..]] {
-            state.extend_from_slice(&(block.len() as u32).to_le_bytes());
+            state.extend_from_slice(&u32::try_from(block.len()).unwrap().to_le_bytes());
             state.extend_from_slice(block);
         }
         let id = "ABCDEF0123456789ABCDEF0123456789";

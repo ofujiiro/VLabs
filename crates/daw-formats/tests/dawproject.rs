@@ -11,6 +11,8 @@
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
     clippy::too_many_lines,
+    clippy::cast_possible_wrap,
+    clippy::similar_names,
     reason = "test code"
 )]
 
@@ -92,7 +94,7 @@ fn vst3_state() -> Vec<u8> {
 /// A song with every kind of track and setting VLabs has.
 fn song(audio: &Path) -> Project {
     let mut project = Project::starter("Melody", "Piano");
-    project.title = "Everything".to_owned();
+    "Everything".clone_into(&mut project.title);
     let (piano, melody) = project.first_pattern().unwrap();
     let triplet = Ticks::note_value(1, 12);
     for (i, key) in [60_u8, 64, 67].iter().enumerate() {
