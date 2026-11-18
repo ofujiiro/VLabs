@@ -7,6 +7,7 @@ mod click;
 pub mod drums;
 pub mod effects;
 mod instrument;
+pub mod sampler;
 pub mod sf2_writer;
 mod sine;
 mod soundfont;

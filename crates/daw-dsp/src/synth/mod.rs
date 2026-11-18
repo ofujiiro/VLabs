@@ -9,7 +9,7 @@
 //! engine turns the song's settings into them. Every method runs on the
 //! audio thread without allocating: the voices are a fixed array.
 
-mod parts;
+pub(crate) mod parts;
 
 use parts::{EnvRates, Envelope, Random, VoiceFilter, wave};
 
