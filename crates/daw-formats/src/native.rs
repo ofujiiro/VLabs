@@ -21,7 +21,7 @@ use crate::atomic::write_atomically_with;
 /// The version of the file format this program writes. Every version ever
 /// released keeps sample files in `tests/data`, and a test proves they still
 /// open.
-pub const FORMAT_VERSION: u32 = 4;
+pub const FORMAT_VERSION: u32 = 5;
 
 /// The name of the song description inside the container.
 const PROJECT_ENTRY: &str = "project.json";
@@ -328,13 +328,20 @@ fn migrate(value: Value, from: u32) -> Result<Value, FileError> {
     // default, so older versions need no rewriting.
     // Version 4 added audio tracks, audio clips and the audio files (in the
     // container); every new field has a default again.
-    // Each future format change adds a step here: `5 => migrate_4_to_5(value)`.
+    // Version 5 added the song's key changes, each pattern's swing and tempo
+    // glides (decision 0018); every new field has a default again.
+    // Each future format change adds a step here: `6 => migrate_5_to_6(value)`.
     Ok(value)
 }
 
 /// Makes a loaded project internally consistent, whatever wrote it: notes
 /// sorted, identifiers unique from now on.
 fn repair(project: &mut Project) {
+    // The maps over the song always start at its beginning, whatever the
+    // file said.
+    project.tempo.repair();
+    project.meter.repair();
+    project.key.repair();
     for pattern in &mut project.patterns {
         std::sync::Arc::make_mut(pattern).sort_notes();
     }

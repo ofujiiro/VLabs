@@ -18,7 +18,9 @@
 //!   trim (on beats; exactly with Alt), drag the small handles at their top
 //!   corners to fade in or out, drag one to another audio track; click an
 //!   empty spot of an audio track to start recording from there; drop sound
-//!   files on the view to import them.
+//!   files on the view to import them;
+//! - under the ruler, the signature row (decision 0018) holds the tempo,
+//!   time-signature and key changes (`signature_row`).
 
 use std::path::PathBuf;
 
@@ -37,6 +39,7 @@ use egui::{
 
 use crate::icons::{Icon, Look, icon_button};
 use crate::session::{LaneChoice, Session, SoundState};
+use crate::signature_row::{Axis, SignatureRow};
 use crate::step_grid::PAD_ORDER;
 use crate::text;
 use crate::theme::{Palette, size, track_color};
@@ -113,6 +116,8 @@ pub struct SongView {
     /// The settings offered while a track's lane chooser is open.
     lane_menu: Option<(TrackId, Vec<LaneChoice>)>,
     lane_search: String,
+    /// The tempo and signature changes, under the ruler.
+    signatures: SignatureRow,
 }
 
 impl Default for SongView {
@@ -130,6 +135,7 @@ impl Default for SongView {
             scrolled_at: f64::NEG_INFINITY,
             lane_menu: None,
             lane_search: String::new(),
+            signatures: SignatureRow::default(),
         }
     }
 }
@@ -161,6 +167,8 @@ struct Layout {
     whole: Rect,
     headers: Rect,
     ruler: Rect,
+    /// The signature row, across the whole width, under the ruler.
+    conductor: Rect,
     timeline: Rect,
     top: f32,
     rows: Vec<Row>,
@@ -169,9 +177,10 @@ struct Layout {
 }
 
 impl Layout {
-    fn new(whole: Rect, top: f32, project: &Project) -> Self {
+    fn new(whole: Rect, top: f32, project: &Project, conductor: f32) -> Self {
         let left = whole.left() + HEADER_WIDTH;
-        let below_ruler = whole.top() + RULER_HEIGHT;
+        let ruler_bottom = whole.top() + RULER_HEIGHT;
+        let below_ruler = ruler_bottom + conductor;
         let mut rows = Vec::new();
         let mut offset = 0.0;
         for (index, track) in project.tracks.iter().enumerate() {
@@ -200,7 +209,11 @@ impl Layout {
                 pos2(whole.left(), below_ruler),
                 pos2(left, whole.bottom()),
             ),
-            ruler: Rect::from_min_max(pos2(left, whole.top()), pos2(whole.right(), below_ruler)),
+            ruler: Rect::from_min_max(pos2(left, whole.top()), pos2(whole.right(), ruler_bottom)),
+            conductor: Rect::from_min_max(
+                pos2(whole.left(), ruler_bottom),
+                pos2(whole.right(), below_ruler),
+            ),
             timeline: Rect::from_min_max(pos2(left, below_ruler), whole.max),
             top,
             rows,
@@ -268,7 +281,7 @@ impl SongView {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         response
             .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Canvas, true, text::SONG_VIEW));
-        let mut layout = Layout::new(rect, self.top, session.project());
+        let mut layout = Layout::new(rect, self.top, session.project(), self.signatures.height());
         let content = layout.rows_end + ADD_ROW_HEIGHT;
         if !self.fitted && layout.timeline.width() > 50.0 {
             self.fit(session, &layout);
@@ -290,6 +303,13 @@ impl SongView {
         self.paint_lanes(ui, session, &layout);
         self.paint_clips(ui, session, &layout);
         self.paint_ruler(ui, session, &layout);
+        let axis = Axis {
+            left: layout.timeline.left(),
+            left_tick: self.left_tick,
+            ticks_per_point: self.ticks_per_point,
+        };
+        self.signatures
+            .ui(ui, session, layout.conductor, layout.headers.right(), axis);
         self.headers(ui, session, &layout, intents);
         self.clip_menu(ui, session);
         if ui.input(|i| !i.raw.hovered_files.is_empty()) {
@@ -344,11 +364,14 @@ impl SongView {
 
     /// Whether a drag is in progress.
     pub fn is_dragging(&self) -> bool {
-        self.drag != Drag::None
+        self.drag != Drag::None || self.signatures.is_dragging()
     }
 
     /// Abandons the drag in progress, putting everything back.
     pub fn cancel_drag(&mut self, session: &mut Session) -> bool {
+        if self.signatures.cancel_drag(session) {
+            return true;
+        }
         if self.drag == Drag::None {
             return false;
         }
@@ -357,6 +380,15 @@ impl SongView {
         }
         self.drag = Drag::None;
         true
+    }
+
+    /// Closes the clip menu and the signature row's panel, if one is open
+    /// (Escape: the keymap takes the key before the view sees it); returns
+    /// whether one was.
+    pub fn close_popups(&mut self) -> bool {
+        let menu = self.menu_clip.take().is_some();
+        let panel = self.signatures.close_panel();
+        menu || panel
     }
 
     /// Zooms in time around the middle (a factor above 1 zooms in).
@@ -390,25 +422,28 @@ impl SongView {
         )
     }
 
-    /// A tick snapped down to the bar (or beat, with Alt) it falls in.
+    /// A tick snapped down to the bar (or beat, with Alt) it falls in,
+    /// counted from the bar lines (decision 0018).
     fn snap(session: &Session, at: Ticks, fine: bool) -> Ticks {
         let meter = &session.project().meter;
+        let at = at.max(Ticks::ZERO);
         let unit = if fine {
             meter.signature_at(at).beat_length()
         } else {
             meter.signature_at(at).bar_length()
         };
-        at.max(Ticks::ZERO).floor_to(unit)
+        meter.grid_floor(at, unit)
     }
 
     fn snap_nearest(session: &Session, at: Ticks, fine: bool) -> Ticks {
         let meter = &session.project().meter;
+        let at = at.max(Ticks::ZERO);
         let unit = if fine {
             meter.signature_at(at).beat_length()
         } else {
             meter.signature_at(at).bar_length()
         };
-        at.max(Ticks::ZERO).round_to(unit)
+        meter.grid_round(at, unit)
     }
 
     /// Where a dragged clip edge lands: on bars for patterns (beats with
@@ -614,7 +649,9 @@ impl SongView {
         let Some(pos) = pos else {
             return;
         };
-        let inside = layout.whole.contains(pos) && !layout.headers.contains(pos);
+        let inside = layout.whole.contains(pos)
+            && !layout.headers.contains(pos)
+            && !layout.conductor.contains(pos);
         if response.double_clicked()
             && let Some((clip, _, _)) = self.clip_at(layout, session, pos)
             && let Some((track, c)) = session.project().clip(clip)

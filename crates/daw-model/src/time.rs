@@ -228,6 +228,70 @@ pub struct TempoChange {
     pub at: Ticks,
     /// Quarter notes per minute.
     pub bpm: f64,
+    /// Whether the tempo glides from here to the next change's tempo, in a
+    /// straight line over the ticks between them (decision 0018). The last
+    /// change holds its tempo either way.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub glide: bool,
+}
+
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes a reference"
+)]
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+impl TempoChange {
+    /// A sudden change of tempo at `at`.
+    pub fn new(at: Ticks, bpm: f64) -> Self {
+        Self {
+            at,
+            bpm,
+            glide: false,
+        }
+    }
+}
+
+/// How long the ticks from `from` to `to` last within one piece of a tempo
+/// map: from `start` at `bpm`, gliding to `next_bpm` at `end` if `glide`.
+/// A glide's tempo is a straight line in ticks, so its seconds are a
+/// logarithm (worked out with `ln_1p` to stay exact for small glides).
+#[allow(clippy::cast_precision_loss, reason = "tick counts are far below 2^52")]
+pub fn piece_seconds(start: f64, bpm: f64, end: f64, next_bpm: f64, from: f64, to: f64) -> f64 {
+    let quarter = TICKS_PER_QUARTER as f64;
+    let slope = if end > start {
+        (next_bpm - bpm) / (end - start)
+    } else {
+        0.0
+    };
+    let at = |tick: f64| {
+        let ticks = tick - start;
+        if slope.abs() < 1e-15 {
+            ticks * 60.0 / (bpm * quarter)
+        } else {
+            60.0 / quarter * (slope * ticks / bpm).ln_1p() / slope
+        }
+    };
+    at(to) - at(from)
+}
+
+/// The tick reached `seconds` after `start` within one piece of a tempo map
+/// (the inverse of [`piece_seconds`] from the piece's start).
+#[allow(clippy::cast_precision_loss, reason = "tick counts are far below 2^52")]
+pub fn piece_ticks(start: f64, bpm: f64, end: f64, next_bpm: f64, seconds: f64) -> f64 {
+    let quarter = TICKS_PER_QUARTER as f64;
+    let slope = if end > start {
+        (next_bpm - bpm) / (end - start)
+    } else {
+        0.0
+    };
+    if slope.abs() < 1e-15 {
+        start + seconds * bpm * quarter / 60.0
+    } else {
+        start + bpm * (seconds * slope * quarter / 60.0).exp_m1() / slope
+    }
 }
 
 /// The tempo over the whole song: a tempo at the start, and changes.
@@ -243,11 +307,49 @@ impl TempoMap {
     /// A constant tempo.
     pub fn constant(bpm: f64) -> Self {
         Self {
-            changes: vec![TempoChange {
-                at: Ticks::ZERO,
-                bpm: clamp_tempo(bpm),
-            }],
+            changes: vec![TempoChange::new(Ticks::ZERO, clamp_tempo(bpm))],
         }
+    }
+
+    /// A tempo map from a list of changes, in any order: tempos are kept in
+    /// range, a later change at the same tick wins, and the tempo at zero is
+    /// the first change's if none is at zero.
+    pub fn from_changes(changes: impl IntoIterator<Item = TempoChange>) -> Self {
+        let mut sorted: Vec<TempoChange> = changes
+            .into_iter()
+            .map(|c| TempoChange {
+                at: c.at.max(Ticks::ZERO),
+                bpm: clamp_tempo(c.bpm),
+                glide: c.glide,
+            })
+            .collect();
+        sorted.sort_by_key(|c| c.at);
+        let mut map = Self {
+            changes: Vec::with_capacity(sorted.len()),
+        };
+        for change in sorted {
+            match map.changes.last_mut() {
+                Some(last) if last.at == change.at => *last = change,
+                _ => map.changes.push(change),
+            }
+        }
+        match map.changes.first().copied() {
+            None => map.changes.push(TempoChange::new(Ticks::ZERO, 120.0)),
+            Some(first) if first.at > Ticks::ZERO => map.changes.insert(
+                0,
+                TempoChange {
+                    at: Ticks::ZERO,
+                    ..first
+                },
+            ),
+            Some(_) => {}
+        }
+        map
+    }
+
+    /// Makes the map valid whatever a file said (see [`Self::from_changes`]).
+    pub fn repair(&mut self) {
+        *self = Self::from_changes(std::mem::take(&mut self.changes));
     }
 
     /// The changes, in order; the first is at tick zero.
@@ -260,23 +362,74 @@ impl TempoMap {
         self.changes[0].bpm
     }
 
-    /// The tempo in effect at `at`.
-    pub fn bpm_at(&self, at: Ticks) -> f64 {
-        let index = self
-            .changes
+    /// The index of the change in effect at `at`.
+    fn index_at(&self, at: Ticks) -> usize {
+        self.changes
             .partition_point(|c| c.at <= at)
-            .saturating_sub(1);
-        self.changes[index].bpm
+            .saturating_sub(1)
     }
 
-    /// Sets the tempo from `at` onwards (replacing a change at the same
-    /// position). Setting it at zero changes the initial tempo.
+    /// The change in effect at `at` (the piece of the song it is in).
+    pub fn change_at(&self, at: Ticks) -> TempoChange {
+        self.changes[self.index_at(at)]
+    }
+
+    /// One piece of the map: (start tick, tempo, end tick, tempo at the
+    /// end); the end of the last piece is infinitely far.
+    #[allow(clippy::cast_precision_loss, reason = "tick counts are far below 2^52")]
+    fn piece(&self, index: usize) -> (f64, f64, f64, f64) {
+        let change = self.changes[index];
+        match self.changes.get(index + 1) {
+            Some(next) if change.glide => {
+                (change.at.0 as f64, change.bpm, next.at.0 as f64, next.bpm)
+            }
+            Some(next) => (change.at.0 as f64, change.bpm, next.at.0 as f64, change.bpm),
+            None => (change.at.0 as f64, change.bpm, f64::INFINITY, change.bpm),
+        }
+    }
+
+    /// The tempo at `at`: the change in effect, or on a glide the tempo
+    /// reached so far.
+    #[allow(clippy::cast_precision_loss, reason = "tick counts are far below 2^52")]
+    pub fn bpm_at(&self, at: Ticks) -> f64 {
+        let (start, bpm, end, next_bpm) = self.piece(self.index_at(at));
+        if end.is_finite() && end > start {
+            bpm + (next_bpm - bpm) * ((at.0 as f64 - start) / (end - start)).clamp(0.0, 1.0)
+        } else {
+            bpm
+        }
+    }
+
+    /// Sets the tempo from `at` onwards (replacing the tempo of a change at
+    /// the same position and keeping its glide). Setting it at zero changes
+    /// the initial tempo.
     pub fn set(&mut self, at: Ticks, bpm: f64) {
         let at = at.max(Ticks::ZERO);
         let bpm = clamp_tempo(bpm);
         match self.changes.binary_search_by(|c| c.at.cmp(&at)) {
             Ok(index) => self.changes[index].bpm = bpm,
-            Err(index) => self.changes.insert(index, TempoChange { at, bpm }),
+            Err(index) => self.changes.insert(index, TempoChange::new(at, bpm)),
+        }
+    }
+
+    /// Makes the change at `at` glide to the next one, or not.
+    pub fn set_glide(&mut self, at: Ticks, glide: bool) {
+        if let Some(change) = self.changes.iter_mut().find(|c| c.at == at) {
+            change.glide = glide;
+        }
+    }
+
+    /// Moves the change at `from` to `to` (replacing one there). The change
+    /// at zero does not move, and nothing moves onto zero.
+    pub fn move_change(&mut self, from: Ticks, to: Ticks) {
+        if from <= Ticks::ZERO || to <= Ticks::ZERO || from == to {
+            return;
+        }
+        if let Some(change) = self.changes.iter().find(|c| c.at == from).copied() {
+            self.remove(from);
+            let mut changes = std::mem::take(&mut self.changes);
+            changes.push(TempoChange { at: to, ..change });
+            *self = Self::from_changes(changes);
         }
     }
 
@@ -290,34 +443,31 @@ impl TempoMap {
     /// Seconds from the start of the song to `at`.
     #[allow(clippy::cast_precision_loss, reason = "tick counts are far below 2^52")]
     pub fn seconds_at(&self, at: Ticks) -> f64 {
+        let at = at.0 as f64;
         let mut seconds = 0.0;
-        for (index, change) in self.changes.iter().enumerate() {
-            if change.at >= at {
+        for index in 0..self.changes.len() {
+            let (start, bpm, end, next_bpm) = self.piece(index);
+            if start >= at {
                 break;
             }
-            let end = self
-                .changes
-                .get(index + 1)
-                .map_or(at, |next| next.at.min(at));
-            seconds += (end - change.at).0 as f64 * seconds_per_tick(change.bpm);
+            seconds += piece_seconds(start, bpm, end, next_bpm, start, end.min(at));
         }
         seconds
     }
 
     /// The position reached after `seconds`, as fractional ticks.
-    #[allow(clippy::cast_precision_loss, reason = "tick counts are far below 2^52")]
     pub fn ticks_at(&self, seconds: f64) -> f64 {
         let mut elapsed = 0.0;
-        for (index, change) in self.changes.iter().enumerate() {
-            let per_tick = seconds_per_tick(change.bpm);
-            if let Some(next) = self.changes.get(index + 1) {
-                let span = (next.at - change.at).0 as f64 * per_tick;
+        for index in 0..self.changes.len() {
+            let (start, bpm, end, next_bpm) = self.piece(index);
+            if end.is_finite() {
+                let span = piece_seconds(start, bpm, end, next_bpm, start, end);
                 if elapsed + span > seconds {
-                    return change.at.0 as f64 + (seconds - elapsed) / per_tick;
+                    return piece_ticks(start, bpm, end, next_bpm, seconds - elapsed);
                 }
                 elapsed += span;
             } else {
-                return change.at.0 as f64 + (seconds - elapsed) / per_tick;
+                return piece_ticks(start, bpm, end, next_bpm, seconds - elapsed);
             }
         }
         0.0
@@ -459,6 +609,104 @@ impl MeterMap {
     pub fn signature_at(&self, at: Ticks) -> TimeSignature {
         self.position(at).signature
     }
+
+    /// The signature of a bar.
+    pub fn signature_at_bar(&self, bar: u32) -> TimeSignature {
+        let index = self
+            .changes
+            .partition_point(|c| c.bar <= bar)
+            .saturating_sub(1);
+        self.changes[index].signature
+    }
+
+    /// The map as seen from `bar`: its bar zero is `bar` of this map (for a
+    /// pattern placed there, whose bars count from its start).
+    #[must_use]
+    pub fn from_bar(&self, bar: u32) -> Self {
+        let mut changes = vec![MeterChange {
+            bar: 0,
+            signature: self.signature_at_bar(bar),
+        }];
+        changes.extend(
+            self.changes
+                .iter()
+                .filter(|c| c.bar > bar)
+                .map(|c| MeterChange {
+                    bar: c.bar - bar,
+                    signature: c.signature,
+                }),
+        );
+        Self { changes }
+    }
+
+    /// Moves the change at `from` to bar `to` (replacing one there). The
+    /// change at bar zero does not move, and nothing moves onto bar zero.
+    pub fn move_change(&mut self, from: u32, to: u32) {
+        if from == 0 || to == 0 || from == to {
+            return;
+        }
+        if let Some(change) = self.changes.iter().find(|c| c.bar == from).copied() {
+            self.remove(from);
+            self.set(to, change.signature);
+        }
+    }
+
+    /// Makes the map valid whatever a file said: sorted, one change per
+    /// bar, a change at bar zero.
+    pub fn repair(&mut self) {
+        self.changes.sort_by_key(|c| c.bar);
+        self.changes.dedup_by_key(|c| c.bar);
+        if self.changes.first().is_none_or(|c| c.bar != 0) {
+            let signature = self
+                .changes
+                .first()
+                .map_or(TimeSignature::FOUR_FOUR, |c| c.signature);
+            self.changes.insert(0, MeterChange { bar: 0, signature });
+        }
+    }
+
+    /// The start of the bar `at` is in.
+    pub fn bar_floor(&self, at: Ticks) -> Ticks {
+        self.bar_start(self.position(at).bar)
+    }
+
+    /// The last grid line at or before `at`: grid lines are every `step`
+    /// from the start of each bar (decision 0018), so after an odd bar the
+    /// grid still meets the bar lines.
+    pub fn grid_floor(&self, at: Ticks, step: Ticks) -> Ticks {
+        let bar = self.bar_floor(at);
+        if step <= Ticks::ZERO {
+            return at;
+        }
+        bar + (at - bar).floor_to(step)
+    }
+
+    /// The grid line nearest `at` (halfway rounds up); the next bar line
+    /// counts as a grid line even when the steps do not fill the bar evenly.
+    pub fn grid_round(&self, at: Ticks, step: Ticks) -> Ticks {
+        if step <= Ticks::ZERO {
+            return at;
+        }
+        let before = self.grid_floor(at, step);
+        let next_bar = self.bar_start(self.position(at).bar + 1);
+        let after = (before + step).min(next_bar);
+        if (at - before) * 2 >= after - before {
+            after
+        } else {
+            before
+        }
+    }
+
+    /// Where a position under this map lands under `other` if it keeps its
+    /// bar and its distance from the bar line (decision 0018: changing a
+    /// time signature keeps the song in its bars).
+    pub fn keep_bars(&self, other: &Self, at: Ticks) -> Ticks {
+        if at <= Ticks::ZERO {
+            return at;
+        }
+        let bar = self.position(at).bar;
+        other.bar_start(bar) + (at - self.bar_start(bar))
+    }
 }
 
 impl Default for MeterMap {
@@ -591,6 +839,111 @@ mod tests {
         let p = meter.position(meter.bar_start(3) + Ticks::note_value(3, 8));
         assert_eq!((p.bar, p.beat, p.ticks), (3, 3, Ticks::ZERO));
         assert_eq!(p.signature.numerator, 7);
+    }
+
+    #[test]
+    fn tempo_glides_are_exact_both_ways() {
+        let mut map = TempoMap::constant(60.0);
+        map.set(Ticks::quarters(4), 120.0);
+        map.set_glide(Ticks::ZERO, true);
+        // A glide from 60 to 120 over four quarters lasts 4 * ln 2 seconds
+        // (the integral of 60 / bpm over the quarters).
+        let expected = 4.0 * std::f64::consts::LN_2;
+        assert!((map.seconds_at(Ticks::quarters(4)) - expected).abs() < 1e-9);
+        assert!((map.bpm_at(Ticks::quarters(2)) - 90.0).abs() < 1e-9);
+        assert_eq!(map.bpm_at(Ticks::quarters(5)), 120.0);
+        for quarters in [0.5, 1.0, 2.5, 3.99, 4.0, 7.0] {
+            let tick = Ticks::from_quarters_f64(quarters);
+            let back = map.ticks_at(map.seconds_at(tick));
+            assert!((back - tick.0 as f64).abs() < 1e-3, "{quarters} comes back");
+        }
+        // Past the glide the tempo holds: four more quarters at 120 BPM.
+        let after = map.seconds_at(Ticks::quarters(8)) - map.seconds_at(Ticks::quarters(4));
+        assert!((after - 2.0).abs() < 1e-9);
+        // A glide that hardly moves gives the same answer as no glide.
+        let mut flat = TempoMap::constant(100.0);
+        flat.set(Ticks::quarters(4), 100.000_001);
+        flat.set_glide(Ticks::ZERO, true);
+        assert!((flat.seconds_at(Ticks::quarters(4)) - 2.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tempo_changes_move_and_maps_are_repaired() {
+        let mut map = TempoMap::constant(120.0);
+        map.set(Ticks::quarters(4), 90.0);
+        map.set_glide(Ticks::quarters(4), true);
+        map.move_change(Ticks::quarters(4), Ticks::quarters(8));
+        assert_eq!(map.changes()[1].at, Ticks::quarters(8));
+        assert!(map.changes()[1].glide, "a moved change keeps its glide");
+        map.move_change(Ticks::ZERO, Ticks::quarters(2));
+        assert_eq!(map.changes()[0].at, Ticks::ZERO, "the start stays");
+        let repaired = TempoMap::from_changes([
+            TempoChange::new(Ticks::quarters(4), 5.0),
+            TempoChange::new(Ticks::quarters(2), 150.0),
+            TempoChange::new(Ticks::quarters(4), 80.0),
+        ]);
+        assert_eq!(repaired.changes().len(), 3);
+        assert_eq!(
+            repaired.initial_bpm(),
+            150.0,
+            "the first tempo starts the song"
+        );
+        assert_eq!(
+            repaired.bpm_at(Ticks::quarters(5)),
+            80.0,
+            "the later one wins"
+        );
+    }
+
+    #[test]
+    fn grids_count_from_each_bar_line() {
+        let mut meter = MeterMap::default();
+        meter.set(1, TimeSignature::new(7, 8).unwrap());
+        meter.set(2, TimeSignature::FOUR_FOUR);
+        let quarter = Ticks::QUARTER;
+        // Bar 2 starts three and a half quarters after bar 1.
+        let bar2 = meter.bar_start(2);
+        assert_eq!(bar2, Ticks::WHOLE + Ticks::note_value(7, 8));
+        assert_eq!(meter.grid_floor(bar2 + Ticks(5), quarter), bar2);
+        assert_eq!(
+            meter.grid_floor(bar2 + quarter + Ticks(5), quarter),
+            bar2 + quarter
+        );
+        // In the 7/8 bar, a quarter grid ends early at the bar line.
+        let last = meter.bar_start(1) + quarter * 3;
+        assert_eq!(meter.grid_round(last + Ticks(1), quarter), last);
+        assert_eq!(meter.grid_round(bar2 - Ticks(1), quarter), bar2);
+        assert_eq!(meter.bar_floor(bar2 - Ticks(1)), meter.bar_start(1));
+        assert_eq!(meter.signature_at_bar(1).numerator, 7);
+    }
+
+    #[test]
+    fn positions_keep_their_bars_when_the_meter_changes() {
+        let old = MeterMap::default();
+        let mut new = MeterMap::default();
+        new.set(2, TimeSignature::new(3, 4).unwrap());
+        new.set(3, TimeSignature::FOUR_FOUR);
+        // Bar 5, beat 2 in 4/4 everywhere moves a quarter earlier.
+        let at = old.bar_start(4) + Ticks::QUARTER;
+        assert_eq!(old.keep_bars(&new, at), at - Ticks::QUARTER);
+        assert_eq!(
+            old.keep_bars(&new, Ticks::QUARTER),
+            Ticks::QUARTER,
+            "before: unchanged"
+        );
+        let seen = new.from_bar(2);
+        assert_eq!(seen.initial().numerator, 3);
+        assert_eq!(seen.bar_start(1), Ticks::quarters(3));
+        let mut moved = new.clone();
+        moved.move_change(2, 5);
+        assert_eq!(moved.signature_at_bar(2), TimeSignature::FOUR_FOUR);
+        assert_eq!(moved.signature_at_bar(5).numerator, 3);
+        let mut damaged: MeterMap = serde_json::from_str(
+            r#"{"changes": [{"bar": 3, "signature": {"numerator": 3, "denominator": 4}}]}"#,
+        )
+        .unwrap();
+        damaged.repair();
+        assert_eq!(damaged.changes()[0].bar, 0);
     }
 
     #[test]

@@ -180,6 +180,55 @@ fn tempo_changes_move_notes_in_time() {
 }
 
 #[test]
+fn a_tempo_glide_speeds_up_smoothly() {
+    // From 60 BPM gliding to 120 BPM over four beats: the note on beat 4
+    // sounds after 4 * ln 2 seconds (about 2.77 s), between the 4 s it would
+    // take at 60 and the 2 s at 120.
+    let mut project = project_with(&[note(Ticks::QUARTER * 4, Ticks::QUARTER, 69)]);
+    project.tempo = daw_model::TempoMap::constant(60.0);
+    project.tempo.set(Ticks::QUARTER * 4, 120.0);
+    project.tempo.set_glide(Ticks::ZERO, true);
+    let (left, _) = render_offline(&project, library(), config(), 3.5);
+    let start = onset(&left, 0, 0.01).expect("the note never starts");
+    let expected = seconds(4.0 * std::f64::consts::LN_2);
+    // This moment is not on one of the SoundFont player's 16-frame blocks:
+    // allow for the block as well as the attack ramp.
+    assert!(
+        start >= expected.saturating_sub(1) && start < expected + 16 + 64,
+        "starts at {start}, expected {expected}"
+    );
+}
+
+#[test]
+fn swing_delays_the_off_beats_by_the_amount_chosen() {
+    // Straight eighths at 120 BPM fall every 0.25 s; with 100 % swing on
+    // eighths, the off-beats move to a dotted eighth: 0.375 s after the beat.
+    // Very short notes (a 1/128, about 16 ms), so each one's release has
+    // died away before the next starts.
+    let eighth = Ticks::note_value(1, 8);
+    let notes: Vec<Note> = (0..4)
+        .map(|i| note(eighth * i, eighth / 16, 69 + 2 * i as u8))
+        .collect();
+    let mut project = project_with(&notes);
+    let (_, pattern) = project.first_pattern().unwrap();
+    project.pattern_mut(pattern).unwrap().swing = daw_model::Swing {
+        percent: 100,
+        unit: eighth,
+    };
+    let (left, _) = render_offline(&project, library(), config(), 1.3);
+    let mut from = 0;
+    for (i, at) in [0.0, 0.375, 0.5, 0.875].into_iter().enumerate() {
+        let expected = seconds(at);
+        let start = onset(&left, from, 0.01).expect("a swung note is missing");
+        assert!(
+            start >= expected.saturating_sub(1) && start < expected + 64,
+            "note {i} at {start}, expected {expected}"
+        );
+        from = expected + seconds(0.1);
+    }
+}
+
+#[test]
 fn tuplets_land_exactly() {
     // Five quintuplet sixteenths in one beat, on different keys so one
     // note's release never overlaps the next one's start.

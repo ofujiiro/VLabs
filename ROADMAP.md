@@ -3,14 +3,15 @@
 The phases come from the project brief. Each ends with a build the owner can
 run and a checklist of things to try. Status is updated at every milestone.
 
-**Now:** phase 4 (audio: recording, importing, shaping clips) is built
-and its milestone build is ready for the owner to try; the phase 3 build
-(plugins and automation) also still awaits the owner's check. Phase 2 is
-complete and the owner confirmed its milestone build works. Phase 1 is
-complete and the owner confirmed its build works on Linux. Phase 0 is
-complete: all three risk spikes passed on Windows and Linux (decision
-0009). The repository has been public since November 2026 (the owner's
-decision).
+**Now:** phase 5 (theory and rhythm: the song's key, chord stamps,
+swing, tuplets, tempo and time-signature changes) is built and its
+milestone build is ready for the owner to try, on branch
+`phase-5-theory-rhythm` (not yet pushed). The phase 3 and phase 4 builds
+also still await the owner's check. Phase 2 is complete and the owner
+confirmed its milestone build works. Phase 1 is complete and the owner
+confirmed its build works on Linux. Phase 0 is complete: all three risk
+spikes passed on Windows and Linux (decision 0009). The repository has
+been public since November 2026 (the owner's decision).
 
 ## Phase 0 — Foundations and risk spikes
 
@@ -318,8 +319,87 @@ microphone back to you, and speakers would be recorded too.
 
 ## Phase 5 — Theory and rhythm
 
-Key and scale highlighting, snap-to-scale, chord stamps, inversions,
-transposition by interval, tempo and time-signature track, tuplets, swing.
+- [x] How it is shown and edited (decision 0018): the song has a key, with
+      changes at bars; chord stamps; a signature row in the song view for
+      tempo, time-signature and key changes; swing per pattern
+- [x] The song's key: a button in the transport bar for the key at the
+      play position; the piano roll shades the notes outside the key and
+      marks the tonic; "Keep notes in the key" (Snap menu) puts new and
+      dragged notes on notes of the key, and the arrows move by its steps
+- [x] Chord stamps ("Draw"): a click places a chord built in the key on
+      the clicked note (triads or seventh chords: in C major, D gives D
+      minor) or a chord of a chosen kind (18 kinds), in any inversion; the
+      pointer shows the chord and its name before the click
+- [x] Inversions (Alt+Up, Alt+Down) and transposition by any interval, or
+      by steps of the key ("Transpose" menu)
+- [x] Tempo changes anywhere, and glides (a gradual speeding up or slowing
+      down) worked out exactly, on the audio thread too
+- [x] Time-signature changes at any bar, any meter (1 to 64 beats over
+      1/2 to 1/32); changing a signature keeps the song in its bars: clips,
+      automation, tempo changes and the loop keep their bar and beat
+- [x] Tuplets: triplet, quintuplet and septuplet grids and note lengths,
+      dotted lengths, quintuplet and septuplet steps; every grid counts from
+      the bar line
+- [x] Swing per pattern (0 to 100 %, on eighths or sixteenths), applied as
+      it plays; notes recorded into a swung pattern are written where they
+      play back as heard
+- [x] Patterns of any length (drag the end of the pattern): patterns of
+      different lengths turn against each other
+- [x] File format version 5, with migration of phase 1 to 4 songs
+- [ ] The owner's hands-on check of the milestone build
+
+### Phase 5 milestone: things to try
+
+1. Choose the song's key: in the top bar, click "No key" (right of the
+   time signature), then A and minor. Open the piano (location line:
+   Drums › Piano): the rows outside A minor are shaded, the A rows are
+   marked, and the keys on the left have a dot for each note of the key.
+2. Open Snap and tick "Keep notes in the key". Click a shaded row: the
+   note lands on the nearest note of the key. With a note selected, the
+   up arrow moves it to the next note of the key.
+3. Draw › "Triads in the key". Move the pointer over the grid: the chord
+   a click would place is shown, with its name ("D minor"). Click: the
+   whole chord is placed and heard; drag to make it longer. Try a chord
+   of one kind (Major seventh) and an inversion.
+4. Select a chord, then Transpose › Transpose up › "Up a perfect fifth",
+   and Transpose › Invert up (or Alt+Up).
+5. Snap now has triplets, quintuplets and septuplets; New notes has
+   dotted lengths. Draw a line of quintuplets.
+6. On the drum beat, click "Straight" and choose "Triplet feel": the
+   hi-hats swing, and the swung hits are drawn late in their squares.
+7. Drag the small tab at the right end of the step grid's ruler to 12
+   steps: the beat now repeats every three beats against the piano's
+   four bars.
+8. Show the song (F5) and click the arrow next to "Tempo and
+   signatures" under the ruler. Click bar 9 in the Signatures strip and
+   choose 7/8: everything after it moves along with its bars. Click the
+   tempo line at bar 5: a tempo change; drag its point up. Click the first
+   point and tick "Glide to the next tempo": the song speeds up gradually
+   until bar 5.
+9. The tempo, time signature and key in the top bar show what is in
+   effect at the play position, and change that part of the song.
+10. Save, close and open the song again: the key, the changes, the swing
+    and the pattern lengths come back. A phase 4 song opens too.
+
+### Known gaps in this build
+
+- No chord track (chords per bar shown over the song), and no beat
+  grouping for odd meters: 7/8 is counted in seven, and the metronome
+  accents only the first beat.
+- Tuplets come from the grid; there is no command that turns existing
+  notes into a tuplet.
+- Swing is per pattern (no groove for the whole song), and the piano roll
+  shows notes where they are written (the step grid shows the swing).
+- The delay effect keeps the song's first tempo when the tempo changes.
+- Note names use sharps ("C#4") even in flat keys; key names follow the
+  usual spelling ("Bb minor", "C# minor").
+- Escape does not close the menus of the location line (Draw, Snap,
+  Swing); clicking elsewhere does.
+- What I could not check myself: listening (swing was measured in the
+  program's recorded output: hits alternate 167 and 83 ms at 120 BPM with
+  the triplet feel, as they should; glides and swing are also measured in
+  offline renders), and phase 5 on Windows: CI runs every test on Windows
+  once the branch is pushed.
 
 ## Phase 6 — Completing v1
 

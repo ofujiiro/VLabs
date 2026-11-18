@@ -24,6 +24,7 @@ considered instead.
 | [0015](0015-plugin-hosting.md) | Hosting plugins: one boundary, two halves, a scanner process | Accepted |
 | [0016](0016-plugin-screens.md) | Plugin screens: a chooser, separate editor windows, automation lanes | Accepted |
 | [0017](0017-audio-clips.md) | Audio: clips on the song timeline, recorded and imported sound | Accepted |
+| [0018](0018-theory-and-rhythm.md) | Theory and rhythm: the song's key, chord stamps, the signature row, swing | Accepted |
 
 ## Writing a new record
 

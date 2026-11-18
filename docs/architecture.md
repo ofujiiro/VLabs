@@ -94,8 +94,33 @@ travel as short messages on the same queues rather than recompiling.
 
 Positions and lengths are integer ticks, 2,882,880 per quarter note, so every
 common tuplet and polyrhythm is exact (decision 0007). A tempo map with
-changes anywhere converts ticks to seconds; time-signature changes define
-bars.
+changes anywhere converts ticks to seconds; a change can glide to the
+next one, the tempo moving in a straight line over the ticks between
+them, which makes its seconds a logarithm, worked out exactly both ways
+(`daw_model::piece_seconds`, `piece_ticks`; the engine's tempo table uses
+the same formulas). Time-signature changes define bars, and every grid
+counts from the bar line (`MeterMap::grid_floor`, `grid_round`), so after
+an odd bar the beats still fall on the bar lines. Changing the time
+signatures keeps the song in its bars (`Project::change_meter`, decision
+0018): every position keeps its bar and its distance from the bar line.
+
+## Theory and rhythm *(phase 5)*
+
+Decision 0018. The song's key is a map over bars like the time
+signatures (`KeyMap`: a key, or none, from bar zero, and changes). The
+model's `theory` module does the music theory on MIDI keys and pitch
+classes: scales (`Scale`, `ScaleKind`), moving by steps of the scale,
+chords built in the key by stacking every other note of the scale, chords
+of a fixed kind (`ChordKind`), inversions, and recognising a chord to name
+it. The interface draws on it for the piano roll's shading, keeping notes
+in the key, chord stamps and transposing.
+
+Swing belongs to a pattern (`Pattern::swing`): in each pair of swung units
+the first is stretched and the second squeezed, a smooth warp in integer
+arithmetic (`Swing::apply`); the engine's compiler applies it to each
+note's start and end before placing the pattern in the song, and the
+session applies the inverse (`Swing::remove`) to notes recorded into a
+swung pattern.
 
 ## Files *(phase 1 onwards)*
 
@@ -115,6 +140,9 @@ bars.
   in the audio folder of this running copy, inside its recovery folder:
   saving copies them in, opening extracts them there (never over a file
   already there), autosave copies refer to them in place.
+- **Format version 5** (decision 0018) adds the song's key changes, each
+  pattern's swing and tempo glides; all have defaults, so older files are
+  read unchanged.
 - **Interchange:** DAWproject and Standard MIDI Files, import and export
   (phase 6). Audio import: WAV, FLAC, MP3, OGG (phase 4); export: WAV,
   FLAC.
@@ -225,9 +253,14 @@ Built with egui (eframe, wgpu renderer). All interface code is in `daw-ui`:
   routing (note keys to the session, shortcuts to commands), menus,
   dialogs; the parts of the window ask it for dialogs and windows through
   `Intent`s.
+  In `session/theory` the key where the pattern is, keeping notes in it,
+  chord stamps, inversions, intervals, swing and any pattern length; in
+  `session/conductor` the tempo, time signature and key at the play
+  position and their changes along the song (decision 0018).
 - `song_view`, `step_grid`, `piano_roll`, `mixer`, `effect_ui`,
   `transport`, `keyboard_panel`: the views; the custom-drawn ones draw
-  only what is visible.
+  only what is visible. `signature_row` is the song view's row of tempo,
+  time-signature and key changes, pinned under its ruler.
 - `export`: writes the song to a WAV file on a background thread, with a
   second engine rendering it offline through the same processing as
   playback (`daw_engine::OfflineRender`), block by block, with progress and

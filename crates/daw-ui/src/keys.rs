@@ -262,6 +262,10 @@ pub enum Command {
     OctaveUp,
     /// Move the selected notes down an octave.
     OctaveDown,
+    /// Invert the selected chords upwards (decision 0018).
+    InvertUp,
+    /// Invert the selected chords downwards.
+    InvertDown,
     /// Play the computer keyboard an octave higher.
     KeyboardOctaveUp,
     /// Play the computer keyboard an octave lower.
@@ -286,7 +290,7 @@ pub enum Command {
 
 impl Command {
     /// Every command, in the order the shortcuts window lists them.
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 36] = [
         Self::PlayStop,
         Self::Record,
         Self::ToStart,
@@ -311,6 +315,8 @@ impl Command {
         Self::TransposeDown,
         Self::OctaveUp,
         Self::OctaveDown,
+        Self::InvertUp,
+        Self::InvertDown,
         Self::KeyboardOctaveUp,
         Self::KeyboardOctaveDown,
         Self::ZoomIn,
@@ -360,6 +366,8 @@ impl Command {
             Self::Export => "export",
             Self::Split => "split",
             Self::ImportAudio => "import_audio",
+            Self::InvertUp => "invert_up",
+            Self::InvertDown => "invert_down",
         }
     }
 
@@ -437,6 +445,14 @@ impl Shortcut {
     pub const fn shift(key: Key) -> Self {
         Self {
             shift: true,
+            ..Self::plain(key)
+        }
+    }
+
+    /// Alt and a key.
+    pub const fn alt(key: Key) -> Self {
+        Self {
+            alt: true,
             ..Self::plain(key)
         }
     }
@@ -562,6 +578,8 @@ impl Default for Keymap {
             (Command::TransposeDown, S::plain(Key::ArrowDown)),
             (Command::OctaveUp, S::shift(Key::ArrowUp)),
             (Command::OctaveDown, S::shift(Key::ArrowDown)),
+            (Command::InvertUp, S::alt(Key::ArrowUp)),
+            (Command::InvertDown, S::alt(Key::ArrowDown)),
             (Command::KeyboardOctaveUp, S::plain(Key::PageUp)),
             (Command::KeyboardOctaveDown, S::plain(Key::PageDown)),
             (Command::ZoomIn, S::ctrl(Key::Equals)),

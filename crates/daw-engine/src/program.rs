@@ -9,7 +9,8 @@ use daw_dsp::effects::{
 };
 use daw_model::{
     AutomationTarget, Clip, ClipContent, ClipId, DelayTime, Effect, EffectId, EffectKind, MeterMap,
-    PatternId, Project, Region, TempoMap, Ticks, TrackId, seconds_per_tick,
+    PatternId, Project, Region, TempoMap, Ticks, TrackId, piece_seconds, piece_ticks,
+    seconds_per_tick,
 };
 use std::sync::Arc;
 
@@ -250,52 +251,85 @@ pub(crate) fn pan_gains(gain: f32, pan: f32) -> (f32, f32) {
     (gain * (1.0 - pan).min(1.0), gain * (1.0 + pan).min(1.0))
 }
 
-/// Converts between ticks and seconds quickly, for a tempo map with changes.
+/// Converts between ticks and seconds quickly, for a tempo map with changes
+/// and glides (decision 0018): the same formulas as the model's tempo map,
+/// with the seconds at the start of each piece worked out in advance.
 #[derive(Clone, Debug)]
 pub(crate) struct TempoTable {
-    /// (start tick, start second, seconds per tick), sorted.
-    segments: Vec<(f64, f64, f64)>,
+    segments: Vec<TempoSegment>,
+}
+
+/// One piece of the tempo map: from `start` (at `seconds`) at `bpm`, to
+/// `end` at `next_bpm` (the same tempo unless it glides).
+#[derive(Clone, Copy, Debug)]
+struct TempoSegment {
+    start: f64,
+    seconds: f64,
+    bpm: f64,
+    end: f64,
+    next_bpm: f64,
 }
 
 impl TempoTable {
     #[allow(clippy::cast_precision_loss, reason = "tick counts are far below 2^52")]
     pub fn new(map: &TempoMap) -> Self {
-        let mut segments = Vec::with_capacity(map.changes().len());
+        let changes = map.changes();
+        let mut segments = Vec::with_capacity(changes.len());
         let mut seconds = 0.0;
-        let mut previous: Option<(f64, f64)> = None;
-        for change in map.changes() {
-            let tick = change.at.0 as f64;
-            if let Some((start, per_tick)) = previous {
-                seconds += (tick - start) * per_tick;
+        for (index, change) in changes.iter().enumerate() {
+            let start = change.at.0 as f64;
+            let (end, next_bpm) = match changes.get(index + 1) {
+                Some(next) if change.glide => (next.at.0 as f64, next.bpm),
+                Some(next) => (next.at.0 as f64, change.bpm),
+                None => (f64::INFINITY, change.bpm),
+            };
+            segments.push(TempoSegment {
+                start,
+                seconds,
+                bpm: change.bpm,
+                end,
+                next_bpm,
+            });
+            if end.is_finite() {
+                seconds += piece_seconds(start, change.bpm, end, next_bpm, start, end);
             }
-            let per_tick = seconds_per_tick(change.bpm);
-            segments.push((tick, seconds, per_tick));
-            previous = Some((tick, per_tick));
         }
         Self { segments }
     }
 
-    fn segment_for_tick(&self, tick: f64) -> (f64, f64, f64) {
+    fn segment_for_tick(&self, tick: f64) -> TempoSegment {
         let index = self
             .segments
-            .partition_point(|s| s.0 <= tick)
+            .partition_point(|s| s.start <= tick)
             .saturating_sub(1);
         self.segments[index]
     }
 
     pub fn seconds_at(&self, tick: f64) -> f64 {
-        let (start, seconds, per_tick) = self.segment_for_tick(tick);
-        seconds + (tick - start) * per_tick
+        let s = self.segment_for_tick(tick);
+        if tick < s.start {
+            // Before the song (a count-in): the first tempo carries on.
+            return s.seconds + (tick - s.start) * 60.0 / (s.bpm * quarter());
+        }
+        s.seconds + piece_seconds(s.start, s.bpm, s.end, s.next_bpm, s.start, tick)
     }
 
     pub fn ticks_at(&self, seconds: f64) -> f64 {
         let index = self
             .segments
-            .partition_point(|s| s.1 <= seconds)
+            .partition_point(|s| s.seconds <= seconds)
             .saturating_sub(1);
-        let (start, at, per_tick) = self.segments[index];
-        start + (seconds - at) / per_tick
+        let s = self.segments[index];
+        if seconds < s.seconds {
+            return s.start + (seconds - s.seconds) * s.bpm * quarter() / 60.0;
+        }
+        piece_ticks(s.start, s.bpm, s.end, s.next_bpm, seconds - s.seconds)
     }
+}
+
+#[allow(clippy::cast_precision_loss, reason = "a constant")]
+fn quarter() -> f64 {
+    daw_model::TICKS_PER_QUARTER as f64
 }
 
 /// Everything the audio thread needs to play the song.
@@ -630,15 +664,17 @@ pub(crate) fn compile(
                 if pattern.length <= Ticks::ZERO {
                     continue;
                 }
-                // The pattern repeats from `offset` for the length of the clip.
+                // The pattern repeats from `offset` for the length of the
+                // clip, swung as it plays (decision 0018).
+                let swing = pattern.swing;
                 let mut cycle_start = clip.start - offset;
                 while cycle_start < clip.end() {
                     for note in &pattern.notes {
                         if note.start >= pattern.length {
                             continue;
                         }
-                        let start = cycle_start + note.start;
-                        let end = (cycle_start + note.end()).min(clip.end());
+                        let start = cycle_start + swing.apply(note.start);
+                        let end = (cycle_start + swing.apply(note.end())).min(clip.end());
                         if start >= clip.start && start < clip.end() && end > start {
                             notes.push(NoteSpan {
                                 start,
@@ -761,16 +797,55 @@ mod tests {
     }
 
     #[test]
+    fn swung_patterns_play_their_off_beats_late() {
+        let mut project = Project::starter("P", "T");
+        let (track, pattern) = project.first_pattern().unwrap();
+        let sixteenth = Ticks::note_value(1, 16);
+        {
+            let p = project.pattern_mut(pattern).unwrap();
+            p.length = Ticks::WHOLE;
+            p.swing = daw_model::Swing {
+                percent: 100,
+                unit: sixteenth,
+            };
+        }
+        project.add_note(pattern, note(Ticks::ZERO, sixteenth, 60));
+        project.add_note(pattern, note(sixteenth, sixteenth, 62));
+        let program = compile(
+            &project,
+            48_000,
+            |id| (id == track).then_some(0),
+            |_| None,
+            |_| None,
+        );
+        let notes = &program.tracks[0].notes;
+        assert_eq!(notes[0].start, Ticks::ZERO, "the beat stays");
+        assert_eq!(notes[0].end, Ticks::note_value(3, 32), "and lasts longer");
+        assert_eq!(
+            notes[1].start,
+            Ticks::note_value(3, 32),
+            "the off-beat is late"
+        );
+        assert_eq!(notes[1].end, Ticks::note_value(1, 8), "and ends on time");
+        assert_eq!(notes[2].start, Ticks::WHOLE, "every repeat swings the same");
+    }
+
+    #[test]
     fn the_tempo_table_matches_the_tempo_map() {
         let mut map = TempoMap::constant(120.0);
         map.set(Ticks::quarters(4), 90.0);
         map.set(Ticks::quarters(10), 150.0);
+        map.set(Ticks::quarters(16), 60.0);
+        map.set_glide(Ticks::quarters(10), true);
         let table = TempoTable::new(&map);
-        for quarters in [0, 1, 4, 7, 10, 13] {
+        for quarters in [0, 1, 4, 7, 10, 12, 13, 15, 16, 20] {
             let tick = Ticks::quarters(quarters);
             #[allow(clippy::cast_precision_loss, reason = "test values")]
             let from_table = table.seconds_at(tick.0 as f64);
-            assert!((from_table - map.seconds_at(tick)).abs() < 1e-9);
+            assert!(
+                (from_table - map.seconds_at(tick)).abs() < 1e-9,
+                "{quarters} quarters"
+            );
             #[allow(clippy::cast_precision_loss, reason = "test values")]
             let back = table.ticks_at(from_table) - tick.0 as f64;
             assert!(back.abs() < 1e-3);

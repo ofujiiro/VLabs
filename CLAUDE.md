@@ -156,7 +156,18 @@ These come from the brief; tests and CI enforce most of them.
   new test should be a step someone takes in the program.
 - **Driving the program:** `xdotool windowfocus` can fail on a window that
   has just appeared; click the program's own buttons (Play, Stop) rather
-  than relying on keys when focus is uncertain.
+  than relying on keys when focus is uncertain, or send keys to the window
+  itself (`xdotool key --window <id> Escape`).
+- **Clicks in tests:** `harness.get_by_label(..).click()` presses and
+  releases in one frame; the fixture's `click` and `drag` take several
+  frames, as a person does. Test panels and menus with both: a press that
+  closes a panel before the release only shows up the slow way.
+- **Panels and popups:** give an `egui::Area` panel fixed column widths and
+  no separators that stretch across it. A widget that takes "all the room
+  there is" grows the panel to the window's edge, the window nudges it
+  back, and it slides frame after frame from under the pointer (decision
+  0018's signature row did this once). The location line must fit a
+  1280-point window with the longest labels shown.
 - **Reference plugins** (test fixtures only, never linked or bundled): Surge
   XT 1.3.4 (an instrument) and Surge XT Effects (an effect) from
   `github.com/surge-synthesizer/releases-xt` releases
