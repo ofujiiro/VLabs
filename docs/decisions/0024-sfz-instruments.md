@@ -27,7 +27,7 @@ write our own MIDI reader. It reads:
 
 - headers `<control>`, `<global>`, `<master>`, `<group>`, `<region>`, with
   each level inheriting from the ones above; `#define` and `#include`
-  (inside the instrument's folder); `//` and `/* */` comments; sound paths
+  (paths relative to the instrument's file); `//` and `/* */` comments; sound paths
   with spaces or backslashes; note names (`c4`, `f#3`, `eb2`) and
   `octave_offset` / `note_offset`; `default_path`;
 - *which region plays*: `key`, `lokey`, `hikey`, `lovel`, `hivel`, round

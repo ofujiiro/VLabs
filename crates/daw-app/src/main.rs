@@ -91,9 +91,7 @@ fn main() {
         .and_then(|p| std::fs::read_to_string(p.settings_file()).ok())
         .map_or_else(Settings::default, |json| Settings::from_json(&json));
 
-    let mut library = SoundLibrary::new();
-    library.register_builtin(daw_model::BUILTIN_PIANO, PIANO);
-    library.register_kit(daw_model::ACOUSTIC_KIT, ACOUSTIC_KIT);
+    let library = sound_library();
     let config = EngineConfig {
         sample_rate: SAMPLE_RATE,
         max_block: 1024,
@@ -165,6 +163,18 @@ fn main() {
         report_fatal(&error.to_string());
         std::process::exit(1);
     }
+}
+
+/// The instruments' sounds: the bundled piano and drum kit, and a reader
+/// for the person's SFZ instruments, read on a thread of their own
+/// (decision 0024).
+fn sound_library() -> SoundLibrary {
+    let mut library = SoundLibrary::new();
+    library.register_builtin(daw_model::BUILTIN_PIANO, PIANO);
+    library.register_kit(daw_model::ACOUSTIC_KIT, ACOUSTIC_KIT);
+    library.set_sfz_reader(|path| daw_formats::sfz::load(path).map_err(|e| e.to_string()));
+    library.set_background_loading(true);
+    library
 }
 
 /// Tells the person the program could not start: on the terminal, and in a

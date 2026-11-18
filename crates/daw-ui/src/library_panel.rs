@@ -413,7 +413,7 @@ impl LibraryPanel {
                 let icon = match item.kind {
                     ItemKind::Sound => Icon::Sound,
                     ItemKind::Midi => Icon::Notes,
-                    ItemKind::SoundFont => Icon::Keyboard,
+                    ItemKind::SoundFont | ItemKind::Sfz => Icon::Keyboard,
                 };
                 let detail = if self.search.trim().is_empty() {
                     String::new()

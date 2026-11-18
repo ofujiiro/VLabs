@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The sound library's side of the song (decision 0023): playing a sound
-//! once to hear it, and SoundFont files as instruments.
+//! once to hear it, and instrument files (SoundFonts; SFZ instruments,
+//! decision 0024) as tracks.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
@@ -187,6 +188,69 @@ impl Session {
                 *n = program;
             }
         });
+    }
+}
+
+impl Session {
+    // ----- SFZ instruments (decision 0024)
+
+    /// Adds a track playing an SFZ instrument with an empty four-bar
+    /// pattern at the start of the song, and puts it in focus. Its sounds
+    /// are read in the background: the track plays once they are ready.
+    pub fn add_sfz_track(&mut self, file: &Path) -> TrackId {
+        let title = file.file_stem().map_or_else(
+            || text::SFZ.to_owned(),
+            |s| s.to_string_lossy().into_owned(),
+        );
+        let name = self.unique_track_name(&title);
+        let file = file.to_string_lossy().into_owned();
+        let track = self.doc.edit(text::EDIT_ADD_SFZ, |p| {
+            let track = p.add_track(&name, Instrument::Sfz { file });
+            let length = p.meter.bar_start(PIANO_BARS);
+            let pattern = p.add_pattern_for(track, &text::pattern_name(1), length);
+            p.add_clip(track, Ticks::ZERO, length, pattern);
+            track
+        });
+        self.focus_track(track);
+        track
+    }
+
+    /// Adds a track playing an instrument file: an SFZ instrument, else a
+    /// SoundFont.
+    pub fn add_instrument_file(&mut self, file: &Path) -> TrackId {
+        if daw_formats::library::ItemKind::of(file) == Some(daw_formats::library::ItemKind::Sfz) {
+            self.add_sfz_track(file)
+        } else {
+            self.add_soundfont_track(file)
+        }
+    }
+
+    /// Whether any track's instrument is being read.
+    pub fn is_reading_instruments(&self) -> bool {
+        self.engine.is_loading_sounds()
+    }
+
+    /// Whether a track's instrument is being read (it is silent until it is
+    /// ready).
+    pub fn is_track_reading(&self, track: TrackId) -> bool {
+        self.engine.is_track_loading(track)
+    }
+
+    /// Keeps the status line saying which instruments are being read, when
+    /// it has nothing else to say; clears it once they are ready.
+    pub(super) fn note_reading(&mut self) {
+        let files = self.engine.loading_sounds();
+        if files.is_empty() {
+            if self.reading_notice {
+                self.reading_notice = false;
+                self.status = None;
+            }
+            return;
+        }
+        if self.status.is_none() || self.reading_notice {
+            self.status = Some((text::reading_instruments(&files), std::time::Instant::now()));
+            self.reading_notice = true;
+        }
     }
 }
 

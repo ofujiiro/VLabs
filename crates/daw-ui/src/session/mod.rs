@@ -275,6 +275,8 @@ pub struct Session {
     safety: Option<Box<dyn SafetyCopy>>,
     /// The sound library's preview (decision 0023).
     preview: library::Preview,
+    /// The status line says which instruments are being read.
+    reading_notice: bool,
 }
 
 /// Writes a recovery copy of the song at once and waits until it is on
@@ -355,6 +357,7 @@ impl Session {
             synth_windows: Vec::new(),
             safety: None,
             preview: library::Preview::default(),
+            reading_notice: false,
         };
         session.selection_revision = session.doc.revision();
         session.load_song_audio();
@@ -570,6 +573,7 @@ impl Session {
         for problem in self.engine.take_problems() {
             self.set_status(text::problem(&problem));
         }
+        self.note_reading();
         if self.doc.revision() != self.selection_revision {
             self.selection_revision = self.doc.revision();
             self.keep_focus_valid();
@@ -819,6 +823,7 @@ impl Session {
     /// Shows a message for a few seconds.
     pub fn set_status(&mut self, message: impl Into<String>) {
         self.status = Some((message.into(), Instant::now()));
+        self.reading_notice = false;
     }
 
     /// The message to show, if any.
@@ -1487,6 +1492,14 @@ impl Session {
             .collect();
         self.engine.retain_audio(|name| wanted.contains(name));
         self.audio.retain(|name| wanted.contains(name));
+        // And its instruments' (decision 0024).
+        let instruments: HashSet<String> = self
+            .project()
+            .tracks
+            .iter()
+            .filter_map(|t| t.instrument.sfz_file().map(str::to_owned))
+            .collect();
+        self.engine.retain_sounds(|file| instruments.contains(file));
         self.load_song_audio();
         self.awaiting_stop = true;
         self.sync_engine();

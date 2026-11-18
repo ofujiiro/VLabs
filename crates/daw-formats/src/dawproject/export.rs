@@ -311,6 +311,7 @@ impl Writer<'_> {
             Instrument::SoundFont { .. } => ("piano", "Piano"),
             Instrument::Drums { .. } => ("drums", "Drums"),
             Instrument::Synth(_) => ("synth", "Synth"),
+            Instrument::Sfz { .. } => ("sfz", "SFZ instrument"),
         };
         let json = serde_json::to_vec_pretty(instrument).unwrap_or_default();
         let state = self.add_file("json", json);

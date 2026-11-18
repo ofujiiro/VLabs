@@ -1813,6 +1813,12 @@ impl SongView {
             Instrument::Plugin(setup) => text::plugin_track(&setup.plugin.name, missing),
             Instrument::Audio => text::AUDIO_TRACK_KIND.to_owned(),
             Instrument::Synth(settings) => text::synth_description(settings),
+            Instrument::Sfz { file } => text::sfz_track(
+                &std::path::Path::new(file)
+                    .file_name()
+                    .map_or_else(|| file.clone(), |n| n.to_string_lossy().into_owned()),
+                session.is_track_reading(track),
+            ),
         };
         child.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;

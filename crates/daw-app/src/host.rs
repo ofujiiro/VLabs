@@ -141,7 +141,7 @@ impl Host for DialogHost {
 
     fn choose_soundfont(&mut self) -> Option<PathBuf> {
         let mut dialog = rfd::FileDialog::new()
-            .add_filter(text::SOUNDFONT_FILE_TYPE, &["sf2"])
+            .add_filter(text::SOUNDFONT_FILE_TYPE, &["sf2", "sfz"])
             .set_title(text::CHOOSE_SOUNDFONT_TITLE);
         if let Some(folder) = self.sounds.as_ref().or(self.folder.as_ref()) {
             dialog = dialog.set_directory(folder);

@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Where instruments get their sounds: loading SoundFonts and building
-//! instrument instances, off the audio thread.
+//! Where instruments get their sounds: loading SoundFonts and SFZ
+//! instruments and building instrument instances, off the audio thread.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::path::Path;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use daw_dsp::audio::AudioBuffer;
 use daw_dsp::drums::{DrumKit, DrumSampler, PadParams, PadTable};
+use daw_dsp::sampler::{Sampler, SamplerBank};
 use daw_dsp::synth::{EnvParams, FilterMode, OscParams, Synth, SynthParams, Wave};
 use daw_dsp::{Instrument, InstrumentSettings, SineSynth, SoundFontBank, SoundFontPlayer};
 use daw_model::{
@@ -17,6 +19,14 @@ use daw_model::{
 use daw_plugin_host::PluginInfo;
 
 use crate::Problem;
+
+/// Reads an SFZ instrument and its sounds into a sampler bank. The engine
+/// cannot read sound files itself (decision 0003), so the program hands it
+/// the file formats' reader (decision 0024).
+pub type SfzReader = fn(&Path) -> Result<SamplerBank, String>;
+
+/// An SFZ instrument being read, or read.
+type SfzLoad = Arc<OnceLock<Result<Arc<SamplerBank>, Problem>>>;
 
 /// Loads and caches sounds, and builds ready-to-play instruments. Cheap to
 /// clone (loaded sounds are shared), so offline rendering can have its own.
@@ -31,6 +41,13 @@ pub struct SoundLibrary {
     /// The sound of the song's audio files, by the name each is stored
     /// under, decoded and at the engine's sample rate.
     audio: HashMap<String, Arc<AudioBuffer>>,
+    sfz_reader: Option<SfzReader>,
+    /// The SFZ instruments read or being read, by file (shared by every
+    /// copy of the library).
+    sfz: Arc<Mutex<HashMap<String, SfzLoad>>>,
+    /// SFZ instruments are read on a thread of their own, and their tracks
+    /// stay silent until they are ready (else building one waits).
+    background: bool,
 }
 
 impl Default for SoundLibrary {
@@ -50,7 +67,100 @@ impl SoundLibrary {
             soundfont_reverb: None,
             plugins: Vec::new(),
             audio: HashMap::new(),
+            sfz_reader: None,
+            sfz: Arc::new(Mutex::new(HashMap::new())),
+            background: false,
         }
+    }
+
+    /// Lets the library read SFZ instruments.
+    pub fn set_sfz_reader(&mut self, reader: SfzReader) {
+        self.sfz_reader = Some(reader);
+    }
+
+    /// Reads SFZ instruments in the background (the live engine), or waits
+    /// for them (offline rendering, tests).
+    pub fn set_background_loading(&mut self, background: bool) {
+        self.background = background;
+    }
+
+    /// The SFZ instrument in `file`, reading it the first time (on a thread
+    /// of its own when reading in the background).
+    fn sfz_load(&self, file: &str) -> SfzLoad {
+        let mut loads = self.sfz.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(load) = loads.get(file) {
+            return Arc::clone(load);
+        }
+        let load: SfzLoad = Arc::new(OnceLock::new());
+        loads.insert(file.to_owned(), Arc::clone(&load));
+        drop(loads);
+        let reader = self.sfz_reader;
+        let cell = Arc::clone(&load);
+        let shown = file.to_owned();
+        let file = file.to_owned();
+        let read = move || {
+            let path = Path::new(&file);
+            let result = if !path.is_file() {
+                Err(Problem::MissingFile(file.clone()))
+            } else if let Some(reader) = reader {
+                reader(path)
+                    .map(Arc::new)
+                    .map_err(|reason| Problem::UnreadableSound {
+                        sound: file.clone(),
+                        reason,
+                    })
+            } else {
+                Err(Problem::UnreadableSound {
+                    sound: file.clone(),
+                    reason: "SFZ instruments cannot be read here".to_owned(),
+                })
+            };
+            let _ = cell.set(result);
+        };
+        if self.background {
+            if let Err(error) = std::thread::Builder::new()
+                .name("sfz-reader".to_owned())
+                .spawn(read)
+            {
+                let _ = load.set(Err(Problem::UnreadableSound {
+                    sound: shown,
+                    reason: error.to_string(),
+                }));
+            }
+        } else {
+            read();
+        }
+        load
+    }
+
+    /// The SFZ instrument in `file` if it has been read (or failed to be).
+    pub fn sfz(&self, file: &str) -> Option<Result<Arc<SamplerBank>, Problem>> {
+        self.sfz
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(file)
+            .and_then(|load| load.get().cloned())
+    }
+
+    /// Whether an instrument's sounds are still being read.
+    pub fn is_loading(&self, spec: &InstrumentSpec) -> bool {
+        let InstrumentSpec::Sfz { file } = spec else {
+            return false;
+        };
+        self.sfz
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(file.as_str())
+            .is_some_and(|load| load.get().is_none())
+    }
+
+    /// Forgets the SFZ instruments not in `keep` (another song was opened):
+    /// their memory goes once no track plays them.
+    pub fn retain_sfz(&mut self, keep: impl Fn(&str) -> bool) {
+        self.sfz
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|file, _| keep(file));
     }
 
     /// Gives the engine the sound of an audio file, by the name it is
@@ -187,6 +297,28 @@ impl SoundLibrary {
         spec: &InstrumentSpec,
         sample_rate: u32,
     ) -> (Box<dyn Instrument>, Option<Problem>) {
+        let built = self.build_for_track(spec, sample_rate);
+        (built.instrument, built.problem)
+    }
+
+    /// Builds an instrument for a track, saying whether it only stands in
+    /// (silent) while its sounds are read in the background.
+    pub(crate) fn build_for_track(&mut self, spec: &InstrumentSpec, sample_rate: u32) -> Built {
+        let mut waiting = false;
+        let (instrument, problem) = self.build_now(spec, sample_rate, &mut waiting);
+        Built {
+            instrument,
+            problem,
+            waiting,
+        }
+    }
+
+    fn build_now(
+        &mut self,
+        spec: &InstrumentSpec,
+        sample_rate: u32,
+        waiting: &mut bool,
+    ) -> (Box<dyn Instrument>, Option<Problem>) {
         match spec {
             InstrumentSpec::SoundFont {
                 source,
@@ -233,6 +365,23 @@ impl SoundLibrary {
                 Box::new(Synth::new(sample_rate, synth_params(settings))),
                 None,
             ),
+            InstrumentSpec::Sfz { file } => {
+                let load = self.sfz_load(file);
+                let result = if self.background {
+                    load.get().cloned()
+                } else {
+                    Some(load.wait().clone())
+                };
+                match result {
+                    // Silent until it is ready (the engine builds it again).
+                    None => {
+                        *waiting = true;
+                        (Box::new(crate::plugins::Silence), None)
+                    }
+                    Some(Ok(bank)) => (Box::new(Sampler::new(bank, sample_rate)), None),
+                    Some(Err(problem)) => (Box::new(SineSynth::new(sample_rate)), Some(problem)),
+                }
+            }
             // The engine loads plugins itself (they have a main-thread half);
             // an audio track has no instrument (its clips are mixed in).
             InstrumentSpec::Plugin(_) | InstrumentSpec::Audio => {
@@ -240,6 +389,17 @@ impl SoundLibrary {
             }
         }
     }
+}
+
+/// An instrument built for a track.
+pub(crate) struct Built {
+    /// What plays.
+    pub(crate) instrument: Box<dyn Instrument>,
+    /// What went wrong (a plain sound plays instead).
+    pub(crate) problem: Option<Problem>,
+    /// It is silent while its sounds are read: build it again once they
+    /// are ready.
+    pub(crate) waiting: bool,
 }
 
 /// The synth's sound settings from the song's (decision 0019). Plain
@@ -304,9 +464,10 @@ pub(crate) fn instrument_settings(spec: &InstrumentSpec) -> Option<InstrumentSet
             Some(InstrumentSettings::Drums(Box::new(pad_table(pads))))
         }
         InstrumentSpec::Synth(settings) => Some(InstrumentSettings::Synth(synth_params(settings))),
-        InstrumentSpec::SoundFont { .. } | InstrumentSpec::Plugin(_) | InstrumentSpec::Audio => {
-            None
-        }
+        InstrumentSpec::SoundFont { .. }
+        | InstrumentSpec::Plugin(_)
+        | InstrumentSpec::Audio
+        | InstrumentSpec::Sfz { .. } => None,
     }
 }
 

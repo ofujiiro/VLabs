@@ -696,6 +696,11 @@ pub fn problem(problem: &daw_engine::Problem) -> String {
         P::PluginSettings { plugin, reason } => {
             format!("The plugin \"{plugin}\" did not take its saved settings ({reason})")
         }
+        P::PartlyRead {
+            sound,
+            left_out,
+            missing,
+        } => partly_read(sound, left_out, missing),
     }
 }
 
@@ -704,12 +709,11 @@ pub const LIBRARY: &str = "Library";
 pub const SHOW_LIBRARY: &str = "Show the sound library";
 pub const HIDE_LIBRARY: &str = "Hide the sound library";
 pub const ADD_SOUND_FOLDER: &str = "Add a folder…";
-pub const ADD_SOUND_FOLDER_HINT: &str =
-    "Add a folder of sounds, MIDI files or SoundFonts to the library (nothing is copied)";
-pub const LIBRARY_EMPTY: &str = "Add a folder of sounds to find, hear and use them here: WAV, AIFF, FLAC, MP3 and Ogg sounds, MIDI files and SoundFonts.";
+pub const ADD_SOUND_FOLDER_HINT: &str = "Add a folder of sounds, MIDI files or instruments (SoundFonts, SFZ) to the library (nothing is copied)";
+pub const LIBRARY_EMPTY: &str = "Add a folder of sounds to find, hear and use them here: WAV, AIFF, FLAC, MP3 and Ogg sounds, MIDI files, SoundFonts and SFZ instruments.";
 pub const LIBRARY_HINT: &str = "Click a sound to hear it · drag it onto the song, or double-click to add it at the play position";
 pub const LIBRARY_LISTING: &str = "Looking through the folder…";
-pub const LIBRARY_NOTHING_HERE: &str = "No sounds, MIDI files or SoundFonts here.";
+pub const LIBRARY_NOTHING_HERE: &str = "No sounds, MIDI files or instruments here.";
 pub const LIBRARY_UP: &str = "Up";
 pub const LIBRARY_UP_HINT: &str = "Back to the folder above";
 pub const LIBRARY_REFRESH: &str = "Look again";
@@ -722,10 +726,10 @@ pub const PLAY_SOUND: &str = "Play";
 pub const STOP_SOUND: &str = "Stop";
 pub const PREVIEW_TOO_LARGE: &str = "it is too large to play here; drag it onto the song instead";
 pub const SOUNDFONT: &str = "SoundFont";
-pub const ADD_SOUNDFONT: &str = "SoundFont…";
-pub const ADD_SOUNDFONT_HINT: &str = "Add a track playing a SoundFont (.sf2) file";
-pub const SOUNDFONT_FILE_TYPE: &str = "SoundFont";
-pub const CHOOSE_SOUNDFONT_TITLE: &str = "Choose a SoundFont";
+pub const ADD_SOUNDFONT: &str = "SoundFont or SFZ…";
+pub const ADD_SOUNDFONT_HINT: &str = "Play a .sf2 or .sfz instrument file";
+pub const SOUNDFONT_FILE_TYPE: &str = "SoundFont or SFZ instrument";
+pub const CHOOSE_SOUNDFONT_TITLE: &str = "Choose a SoundFont or an SFZ instrument";
 pub const PRESET: &str = "Preset";
 pub const PRESET_HINT: &str = "The sound of the SoundFont this track plays";
 pub const OPEN_TRACK_OR_PRESET_HINT: &str =
@@ -755,6 +759,93 @@ pub fn library_more_found(shown: usize, total: usize) -> String {
 /// What a SoundFont track plays, under its name.
 pub fn soundfont_track(file: &str) -> String {
     format!("SoundFont · {file}")
+}
+
+// SFZ instruments (decision 0024).
+pub const SFZ: &str = "SFZ instrument";
+pub const EDIT_ADD_SFZ: &str = "add SFZ instrument track";
+
+/// What an SFZ track plays, under its name (`reading` while its sounds are
+/// read).
+pub fn sfz_track(file: &str, reading: bool) -> String {
+    if reading {
+        format!("SFZ · {file} · reading…")
+    } else {
+        format!("SFZ · {file}")
+    }
+}
+
+/// The status line while instruments are read.
+pub fn reading_instruments(files: &[String]) -> String {
+    match files {
+        [one] => format!(
+            "Reading the instrument {}… its track plays once it is ready",
+            file_name(std::path::Path::new(one))
+        ),
+        many => format!(
+            "Reading {} instruments… their tracks play once they are ready",
+            many.len()
+        ),
+    }
+}
+
+/// What an SFZ instrument plays without, said once when it is ready.
+pub fn partly_read(
+    sound: &str,
+    left_out: &[daw_dsp::sampler::LeftOut],
+    missing: &[String],
+) -> String {
+    use daw_dsp::sampler::LeftOut as L;
+    let mut parts: Vec<String> = left_out
+        .iter()
+        .filter_map(|part| {
+            Some(
+                match part {
+                    L::Lfos => "LFOs (vibrato, tremolo)",
+                    L::Envelopes => "pitch envelopes",
+                    L::ControllerChanges => "changes made by controllers (the modulation wheel…)",
+                    L::Effects => "its own effects",
+                    L::Filters => "some of its filters",
+                    L::Equalizers => "its equalisers",
+                    L::Reversed => "sounds played backwards",
+                    L::LoopCrossfades => "smoothed loop joins",
+                    L::Keyswitches => "some keyswitches",
+                    L::Waves => "built-in waves other than the sine",
+                    L::EmbeddedSounds => "sounds stored inside the file",
+                    L::Other(_) => return None,
+                }
+                .to_owned(),
+            )
+        })
+        .collect();
+    let unknown: Vec<&str> = left_out
+        .iter()
+        .filter_map(|part| match part {
+            L::Other(name) => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    if !unknown.is_empty() {
+        parts.push(format!(
+            "settings it does not know ({})",
+            unknown.join(", ")
+        ));
+    }
+    let name = file_name(std::path::Path::new(sound));
+    let without = if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" plays without {}", parts.join(", "))
+    };
+    let gone = match missing {
+        [] => String::new(),
+        [one] => format!("; its sound file \"{one}\" is missing or damaged"),
+        [first, ..] => format!(
+            "; {} of its sound files are missing or damaged (\"{first}\"…)",
+            missing.len()
+        ),
+    };
+    format!("{name}{without}{gone}")
 }
 
 /// A preset of a SoundFont in the preset menu: its bank and number.

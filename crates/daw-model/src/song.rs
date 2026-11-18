@@ -307,6 +307,12 @@ pub enum Instrument {
     Audio,
     /// The built-in subtractive synth (decision 0019).
     Synth(crate::synth::SynthSettings),
+    /// An SFZ instrument (decision 0024): sounds the person has, played by
+    /// the sampler as the `.sfz` file says.
+    Sfz {
+        /// Where the `.sfz` file is.
+        file: String,
+    },
 }
 
 impl Instrument {
@@ -345,6 +351,14 @@ impl Instrument {
         }
     }
 
+    /// The `.sfz` file, if this is an SFZ instrument.
+    pub fn sfz_file(&self) -> Option<&str> {
+        match self {
+            Self::Sfz { file } => Some(file),
+            _ => None,
+        }
+    }
+
     /// The plugin, if this is a plugin instrument.
     pub fn plugin(&self) -> Option<&crate::plugin::PluginSetup> {
         match self {
@@ -374,9 +388,11 @@ impl Instrument {
                 .find(|p| p.key == key)
                 .copied()
                 .unwrap_or_else(|| PadSetting::new(key)),
-            Self::SoundFont { .. } | Self::Plugin(_) | Self::Audio | Self::Synth(_) => {
-                PadSetting::new(key)
-            }
+            Self::SoundFont { .. }
+            | Self::Plugin(_)
+            | Self::Audio
+            | Self::Synth(_)
+            | Self::Sfz { .. } => PadSetting::new(key),
         }
     }
 

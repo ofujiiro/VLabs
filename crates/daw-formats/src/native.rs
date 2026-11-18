@@ -21,7 +21,7 @@ use crate::atomic::write_atomically_with;
 /// The version of the file format this program writes. Every version ever
 /// released keeps sample files in `tests/data`, and a test proves they still
 /// open.
-pub const FORMAT_VERSION: u32 = 6;
+pub const FORMAT_VERSION: u32 = 7;
 
 /// The name of the song description inside the container.
 const PROJECT_ENTRY: &str = "project.json";
@@ -332,7 +332,9 @@ fn migrate(value: Value, from: u32) -> Result<Value, FileError> {
     // glides (decision 0018); every new field has a default again.
     // Version 6 added the built-in synth instrument (decision 0019); older
     // files have none, so they need no rewriting.
-    // Each future format change adds a step here: `7 => migrate_6_to_7(value)`.
+    // Version 7 added SFZ instruments (decision 0024); older files have
+    // none, so they need no rewriting either.
+    // Each future format change adds a step here: `8 => migrate_7_to_8(value)`.
     Ok(value)
 }
 

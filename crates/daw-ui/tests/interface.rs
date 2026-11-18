@@ -125,7 +125,11 @@ fn new_song() -> Fixture {
             },
             None,
         );
-    let (engine, processor) = Engine::new(EngineConfig::default(), SoundLibrary::new());
+    // As the program does: SFZ instruments read in the background.
+    let mut library = SoundLibrary::new();
+    library.set_sfz_reader(|path| daw_formats::sfz::load(path).map_err(|e| e.to_string()));
+    library.set_background_loading(true);
+    let (engine, processor) = Engine::new(EngineConfig::default(), library);
     let host = FakeHost::default();
     let workspace = Workspace::new(
         &harness.ctx,
@@ -2509,4 +2513,117 @@ fn the_instrument_chooser_adds_a_soundfont_track() {
             ..
         }
     ));
+}
+
+/// A folder holding an SFZ instrument: its file, and its sound in a folder
+/// it names with other letter cases (as instruments made on Windows do).
+fn instrument_folder() -> PathBuf {
+    let folder = std::env::temp_dir().join(format!(
+        "interface-instruments-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    ));
+    let sound = folder.join("Strings").join("Samples").join("A4.wav");
+    std::fs::create_dir_all(sound.parent().unwrap()).unwrap();
+    std::fs::copy(tone_file("a4.wav", 1.0), &sound).unwrap();
+    std::fs::write(
+        folder.join("Strings").join("Strings.sfz"),
+        "// A test instrument.\n<region> sample=samples\\a4.wav loop_mode=loop_continuous amplfo_freq=5\n",
+    )
+    .unwrap();
+    folder
+}
+
+/// Draws frames until the status line says something containing `part`.
+fn wait_for_status(f: &mut Fixture, part: &str) {
+    let start = std::time::Instant::now();
+    while !f.session().status().is_some_and(|s| s.contains(part)) {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(20),
+            "the status line never said {part}: it says {:?}",
+            f.session().status()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        f.harness.run_steps(1);
+    }
+}
+
+#[test]
+fn an_sfz_instrument_from_the_library_plays_once_its_sounds_are_read() {
+    let mut f = new_song();
+    let folder = instrument_folder();
+    *f.host.folder.lock().unwrap() = Some(folder.clone());
+    f.harness.get_by_label(text::SHOW_LIBRARY).click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::ADD_SOUND_FOLDER).click();
+    f.harness.run_steps(2);
+    wait_for_label(&mut f, "Strings");
+    f.harness.get_by_label("Strings").click();
+    f.harness.run_steps(2);
+    let row = f.harness.get_by_label("Strings.sfz").rect().center();
+    f.right_click(row);
+    f.harness.get_by_label(text::ADD_TO_SONG).click();
+    f.harness.run_steps(3);
+    let track = f.session().project().tracks.last().unwrap().clone();
+    assert_eq!(track.name, "Strings");
+    let file = folder
+        .join("Strings")
+        .join("Strings.sfz")
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(track.instrument, daw_model::Instrument::Sfz { file });
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_ADD_SFZ)
+    );
+
+    // Read in the background; once ready, the status line says what it
+    // plays without, and its track says what it plays.
+    wait_for_status(&mut f, "plays without LFOs");
+    assert!(!f.session().is_reading_instruments());
+    f.harness
+        .get_by_label(&text::sfz_track("Strings.sfz", false));
+    assert!(
+        f.harness
+            .query_by(|node| node.label().is_some_and(|l| l.contains("plain sound")))
+            .is_none(),
+        "its sound was found (no plain sound in its place)"
+    );
+    // Played from the computer keyboard: its own sound, looped.
+    f.key(Key::Q, Key::Q, true, Modifiers::NONE);
+    let start = std::time::Instant::now();
+    while loudest(&mut f) < 0.1 {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(20),
+            "never heard"
+        );
+        f.harness.run_steps(1);
+    }
+    f.key(Key::Q, Key::Q, false, Modifiers::NONE);
+}
+
+#[test]
+fn the_instrument_chooser_adds_an_sfz_track() {
+    let mut f = new_song();
+    let folder = instrument_folder();
+    *f.host.soundfont.lock().unwrap() = Some(folder.join("Strings").join("Strings.sfz"));
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    f.harness
+        .get_by_label(&format!("+ {}", text::ADD_INSTRUMENT))
+        .click();
+    f.harness.run_steps(3);
+    f.harness
+        .get_by_label_contains(text::ADD_SOUNDFONT_HINT)
+        .click();
+    f.harness.run_steps(3);
+    let last = f.session().project().tracks.last().unwrap();
+    assert_eq!(last.name, "Strings");
+    assert!(
+        last.instrument
+            .sfz_file()
+            .is_some_and(|f| f.ends_with("Strings.sfz"))
+    );
 }

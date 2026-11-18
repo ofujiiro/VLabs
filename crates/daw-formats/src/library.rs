@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Finding sounds, MIDI files and SoundFonts in the person's folders, for
+//! Finding sounds, MIDI files and instruments (SoundFonts, SFZ) in the
+//! person's folders, for
 //! the sound library (decision 0023). A folder may hold many thousands of
 //! files: it is listed once, in the background, then browsed and searched
 //! in memory. Nothing is copied or changed.
@@ -23,6 +24,8 @@ pub enum ItemKind {
     Midi,
     /// A SoundFont: an instrument.
     SoundFont,
+    /// An SFZ instrument (decision 0024).
+    Sfz,
 }
 
 impl ItemKind {
@@ -35,6 +38,7 @@ impl ItemKind {
             }
             "mid" | "midi" | "rmi" | "smf" => Some(Self::Midi),
             "sf2" => Some(Self::SoundFont),
+            "sfz" => Some(Self::Sfz),
             _ => None,
         }
     }
@@ -238,6 +242,7 @@ mod tests {
             "Grooves/Swing.mid",
             "Piano.sf2",
             "Vocal.mp3",
+            "Strings/Strings.sfz",
         ] {
             touch(&root, file);
         }
@@ -252,6 +257,7 @@ mod tests {
                 "Swing.mid",
                 "Funk 120.flac",
                 "Piano.sf2",
+                "Strings.sfz",
                 "Vocal.mp3"
             ]
         );
@@ -259,10 +265,11 @@ mod tests {
         let kinds: Vec<ItemKind> = listing.items.iter().map(|i| i.kind).collect();
         assert_eq!(kinds[3], ItemKind::Midi);
         assert_eq!(kinds[5], ItemKind::SoundFont);
+        assert_eq!(kinds[6], ItemKind::Sfz);
 
         // Browsing: folders first, then the files right there.
         let top = listing.inside("");
-        assert_eq!(top.folders, ["Drums", "Grooves", "Loops"]);
+        assert_eq!(top.folders, ["Drums", "Grooves", "Loops", "Strings"]);
         let top_names: Vec<&str> = top.items.iter().map(|&i| listing.items[i].name()).collect();
         assert_eq!(top_names, ["Piano.sf2", "Vocal.mp3"]);
         let drums = listing.inside("Drums");

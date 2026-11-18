@@ -22,7 +22,7 @@ use daw_plugin_host::{AudioConfig, LoadedPlugin};
 
 pub use daw_plugin_host::scan::{ScanProblem, System as PluginSystem};
 pub use daw_plugin_host::{Format as PluginFileFormat, Kind as PluginKind, ParamInfo, PluginInfo};
-pub use library::SoundLibrary;
+pub use library::{SfzReader, SoundLibrary};
 pub use messages::{CHUNK_FRAMES, EngineEvent, RecordedChunk};
 pub use plugins::PluginTarget;
 pub use processor::{EngineProcessor, MAX_EFFECTS, MAX_SLOTS};
@@ -69,6 +69,15 @@ pub enum Problem {
         plugin: String,
         /// Why, as the plugin put it.
         reason: String,
+    },
+    /// An SFZ instrument plays without some of what its file holds.
+    PartlyRead {
+        /// Which instrument file.
+        sound: String,
+        /// What it holds that is not played.
+        left_out: Vec<daw_dsp::sampler::LeftOut>,
+        /// The sound files it names that could not be found or read.
+        missing: Vec<String>,
     },
 }
 
@@ -284,6 +293,13 @@ pub struct Engine {
     preview_number: u64,
     /// Whether that was a sound to play (not a stop).
     preview_waiting: bool,
+    /// Tracks whose instrument is being read (silent until it is ready).
+    waiting: HashMap<TrackId, InstrumentSpec>,
+    /// Tracks whose instrument is to be built again at the next sync (it
+    /// has just been read).
+    rebuild: HashSet<TrackId>,
+    /// The instruments whose missing parts have been reported.
+    reported: HashSet<String>,
 }
 
 impl Engine {
@@ -332,6 +348,9 @@ impl Engine {
             shared,
             preview_number: 0,
             preview_waiting: false,
+            waiting: HashMap::new(),
+            rebuild: HashSet::new(),
+            reported: HashSet::new(),
         };
         (engine, processor)
     }
@@ -422,6 +441,7 @@ impl Engine {
     /// effects, and installs a freshly compiled program for what `scope`
     /// plays. Cheap when neither `revision` nor `scope` has changed.
     pub fn sync(&mut self, project: &Project, revision: u64, scope: PlaybackScope) {
+        self.take_ready_instruments();
         if self.compiled == Some((revision, scope)) {
             return;
         }
@@ -447,8 +467,9 @@ impl Engine {
                 .slots
                 .iter()
                 .position(|s| s.as_ref().is_some_and(|(id, _)| *id == track.id));
-            let retry =
-                self.retry_missing && self.missing.contains(&PluginTarget::Instrument(track.id));
+            let retry = (self.retry_missing
+                && self.missing.contains(&PluginTarget::Instrument(track.id)))
+                || self.rebuild.contains(&track.id);
             let up_to_date = !retry
                 && current.is_some_and(|slot| {
                     self.slots[slot]
@@ -494,6 +515,9 @@ impl Engine {
 
         self.sync_effects(project);
         self.retry_missing = false;
+        self.rebuild.clear();
+        self.waiting
+            .retain(|track, _| project.track(*track).is_some());
         self.missing.retain(|target| match *target {
             PluginTarget::Instrument(track) => project
                 .track(track)
@@ -541,11 +565,17 @@ impl Engine {
                 }
             },
             spec => {
-                let (instrument, problem) = self.library.build(spec, self.config.sample_rate);
-                if let Some(problem) = problem {
+                let built = self.library.build_for_track(spec, self.config.sample_rate);
+                if let Some(problem) = built.problem {
                     self.problems.push(problem);
                 }
-                instrument
+                if built.waiting {
+                    self.waiting.insert(track.id, spec.clone());
+                } else {
+                    self.waiting.remove(&track.id);
+                    self.report_left_out(spec);
+                }
+                built.instrument
             }
         }
     }
@@ -618,6 +648,69 @@ impl Engine {
     /// Forces the next [`Engine::sync`] to rebuild, even at the same revision.
     pub fn invalidate(&mut self) {
         self.compiled = None;
+    }
+
+    /// Instruments read since the last sync are built again at this one.
+    fn take_ready_instruments(&mut self) {
+        let ready: Vec<TrackId> = self
+            .waiting
+            .iter()
+            .filter(|(_, spec)| !self.library.is_loading(spec))
+            .map(|(track, _)| *track)
+            .collect();
+        if !ready.is_empty() {
+            for track in ready {
+                self.waiting.remove(&track);
+                self.rebuild.insert(track);
+            }
+            self.compiled = None;
+        }
+    }
+
+    /// Says once what an SFZ instrument plays without, when it is ready.
+    fn report_left_out(&mut self, spec: &InstrumentSpec) {
+        let InstrumentSpec::Sfz { file } = spec else {
+            return;
+        };
+        if let Some(Ok(bank)) = self.library.sfz(file)
+            && (!bank.left_out.is_empty() || !bank.missing.is_empty())
+            && self.reported.insert(file.clone())
+        {
+            self.problems.push(Problem::PartlyRead {
+                sound: file.clone(),
+                left_out: bank.left_out.clone(),
+                missing: bank.missing.clone(),
+            });
+        }
+    }
+
+    /// Whether any track's instrument is being read.
+    pub fn is_loading_sounds(&self) -> bool {
+        !self.waiting.is_empty()
+    }
+
+    /// Whether a track's instrument is being read (it is silent until
+    /// then).
+    pub fn is_track_loading(&self, track: TrackId) -> bool {
+        self.waiting.contains_key(&track)
+    }
+
+    /// The instrument files the song's tracks are waiting for (being read).
+    pub fn loading_sounds(&self) -> Vec<String> {
+        let mut files: Vec<String> = self
+            .waiting
+            .values()
+            .filter_map(|spec| spec.sfz_file().map(str::to_owned))
+            .collect();
+        files.sort();
+        files.dedup();
+        files
+    }
+
+    /// Forgets the SFZ instruments not in `keep` (another song was opened).
+    pub fn retain_sounds(&mut self, keep: impl Fn(&str) -> bool) {
+        self.library.retain_sfz(&keep);
+        self.reported.retain(|file| keep(file));
     }
 
     // ----- Plugins
@@ -1046,6 +1139,9 @@ pub struct OfflineRender {
 impl OfflineRender {
     /// Prepares to play the whole song from the start.
     pub fn new(project: &Project, library: SoundLibrary, config: EngineConfig) -> Self {
+        // An export waits for every instrument to be read.
+        let mut library = library;
+        library.set_background_loading(false);
         let (mut engine, processor) = Engine::new(config, library);
         engine.set_metronome(false, false, 0.0);
         engine.sync(project, 0, PlaybackScope::Song);

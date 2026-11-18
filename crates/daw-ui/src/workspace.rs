@@ -559,8 +559,11 @@ impl Workspace {
             || (self.settings.show_mixer && self.mixer.is_moving())
         {
             ctx.request_repaint();
-        } else if self.session.is_previewing() || self.library.is_listing() {
-            // The library's playing mark and listings.
+        } else if self.session.is_previewing()
+            || self.library.is_listing()
+            || self.session.is_reading_instruments()
+        {
+            // The library's playing mark and listings; instruments read.
             ctx.request_repaint_after(Duration::from_millis(100));
         } else if self.session.any_plugin_window_open() || !self.session.plugin_search().done {
             // Plugin windows are looked after between frames.
@@ -1434,7 +1437,7 @@ impl Workspace {
                 let Some(file) = self.host.choose_soundfont() else {
                     return false;
                 };
-                self.session.add_soundfont_track(&file);
+                self.session.add_instrument_file(&file);
             }
         }
         true
