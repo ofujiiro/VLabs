@@ -3,6 +3,7 @@
 #![doc = include_str!("../README.md")]
 
 mod clap;
+pub mod install;
 pub mod scan;
 mod vst3;
 mod window;
