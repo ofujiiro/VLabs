@@ -43,7 +43,8 @@ crash. Add plugins by dropping a downloaded `.vst3`, `.clap` or `.zip` on
 the window, manage them in the Plugins window (Windows plugins on Linux are
 set up through Wine and yabridge), browse and hear folders of samples in
 the sound library and drag them into the song, and play SoundFont (`.sf2`)
-instruments. A Windows installer and a Linux AppImage are built for each
+and SFZ (`.sfz`) instruments, however large (SFZ instruments are read in
+the background). A Windows installer and a Linux AppImage are built for each
 milestone, with a user guide (F1 in the program, or
 [docs/user-guide.md](docs/user-guide.md)). See [ROADMAP.md](ROADMAP.md) for
 what to try and what comes next.

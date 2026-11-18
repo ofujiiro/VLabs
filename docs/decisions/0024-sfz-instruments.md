@@ -32,10 +32,12 @@ write our own MIDI reader. It reads:
   `octave_offset` / `note_offset`; `default_path`;
 - *which region plays*: `key`, `lokey`, `hikey`, `lovel`, `hivel`, round
   robins (`seq_length`, `seq_position`), random choice (`lorand`,
-  `hirand`), keyswitches (`sw_lokey`, `sw_hikey`, `sw_last`, `sw_default`),
-  triggers (`attack`, `release` with `rt_decay`, `first`, `legato`),
-  controller conditions against the controllers' starting values (a piano's
-  "pedal up" samples play, its "pedal down" ones do not), channel 1;
+  `hirand`), keyswitches (`sw_lokey`, `sw_hikey`, `sw_last`, `sw_default`,
+  and `sw_down`, `sw_up`, `sw_previous`, which follow the keys held and
+  played), triggers (`attack`, `release` with `rt_decay`, `first`,
+  `legato`), controller conditions against the controllers' starting
+  values (a piano's "pedal up" samples play, its "pedal down" ones do
+  not), channel 1;
 - *how it plays*: `pitch_keycenter`, `pitch_keytrack`, `transpose`, `tune`,
   `pitch_veltrack`, `pitch_random`; `volume`, `amplitude`, `pan`, `width`,
   `amp_veltrack`, `amp_velcurve_N`, `amp_keytrack`, `amp_keycenter`,
@@ -46,11 +48,23 @@ write our own MIDI reader. It reads:
   stored in a WAV file); choke groups (`group`, `off_by`, `off_mode`);
   `polyphony` and `note_polyphony`; one filter per region (`fil_type`,
   `cutoff`, `resonance`, `fil_keytrack`, `fil_keycenter`, `fil_veltrack`)
-  with its envelope (`fileg_*`); the built-in `*sine` and `*silence`.
+  with its envelope (`fileg_*`); the built-in `*sine` and `*silence`;
+- *settings moved by controllers* (`…_onccN`, `…_ccN`), at the
+  controllers' starting values (`set_ccN`, else MIDI's usual 100 for
+  volume, 64 for pan, 127 for expression, 0 for the rest): envelope times
+  and levels, cutoff, resonance, volume, pan, width, tuning, offset and
+  delay. Some instruments expose their envelope this way (a sustain of 0
+  raised to full by a controller starting at 127): without this their
+  organs and pads fall silent after the attack.
 
-What an instrument uses beyond this (LFOs, pitch envelopes, controller
-modulation, effects) is left out, and **the status line names it once**
-when the instrument is ready, as for DAWproject files from other programs.
+The program sends instruments no controllers yet, so these values do not
+move while playing.
+
+What an instrument uses beyond this (LFOs, pitch envelopes, other
+controller modulation, effects) is left out, and **the status line names
+it once** when the instrument is ready, as for DAWproject files from other
+programs; an LFO or envelope is named only if it moves something at the
+start (a vibrato whose depth a controller at 0 sets is not).
 Sound files that cannot be found or read are left out and counted in the
 same message; the rest of the instrument plays. A path written with other
 letter cases (instruments made on Windows) is still found on Linux.

@@ -42,6 +42,7 @@ record, notes, the play position); the processing half belongs to
 | Audio files | Reads, decodes, converts and summarises the song's audio files, one at a time | Ordinary thread |
 | Recorder | Writes takes of sound to WAV files as they come, keeps their loudness summary | Ordinary thread |
 | Plugin scanner | A separate run of the program that inspects plugin files | A crash there cannot reach the program |
+| SFZ reader | Reads an SFZ instrument and decodes its sounds (on up to eight helper threads), one thread per instrument | Ordinary thread; the engine builds the track again once it is done |
 
 ## How an edit becomes sound
 
@@ -255,6 +256,43 @@ The window is `daw-ui::synth_ui`.
   engine's sound library loads them (once per file) with the same player
   as the bundled piano; a file that is gone gives `Problem::MissingFile`
   and a plain sound in its place.
+
+## SFZ instruments *(decision 0024)*
+
+- **Three layers.** `daw-formats::sfz` reads the text (headers and their
+  levels, `#define`, `#include`, note names, sound paths found whatever
+  their letter case) and decodes the sounds, on several threads, into a
+  `daw_dsp::sampler::SamplerBank`: regions and decoded sounds, with what
+  the file uses that is not played (`LeftOut`) and the sounds it could not
+  find. `daw-formats` depends on `daw-dsp` (a lower layer) for that bank.
+  `daw_dsp::sampler::Sampler` plays a bank like the other built-in
+  instruments: voices with four-point interpolation, envelopes, loops
+  (also the loop a WAV file holds), filters, round robins, keyswitches,
+  release sounds, choke groups and voice limits, with nothing allocated on
+  the audio thread.
+- **Controllers at their starting values.** The program sends instruments
+  no controllers, so what controllers would decide is decided once, at
+  their starting values (`set_ccN`, or MIDI's usual 100 for volume, 64 for
+  pan, 127 for expression, 0 for the rest): which regions play
+  (`loccN`/`hiccN`), crossfades by controller, and the settings they move
+  (envelope times and levels, cutoff, resonance, volume, pan, tuning,
+  offsets). LFOs and pitch envelopes are reported as left out only when
+  they move something.
+- **Read in the background.** The engine cannot read sound files (decision
+  0003), so the program hands its `SoundLibrary` the reader as a plain
+  function (`set_sfz_reader`). With `set_background_loading(true)` (the
+  program, the interface tests) the library starts one thread per
+  instrument file and builds a silent stand-in meanwhile; the engine keeps
+  the tracks waiting and builds them again at the first `sync` after the
+  reading finished, then reports once what the instrument plays without
+  (`Problem::PartlyRead`). Offline rendering waits for every instrument.
+  Instruments read are shared by file between the live engine and
+  exports, and forgotten when another song opens.
+- **In the interface:** `Instrument::Sfz { file }` (file format version
+  7) is added from the library, by dropping or importing a `.sfz` file, or
+  from the instrument chooser; the status line says which instruments are
+  being read while it has nothing else to say, and the track's line says
+  "reading…" until its instrument is ready.
 
 ## Automation *(phase 3)*
 

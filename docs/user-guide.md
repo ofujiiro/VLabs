@@ -121,13 +121,23 @@ VLabs, then every plugin found on your computer:
 - **Piano**: a sampled grand piano.
 - **Drums**: the drum sampler with two kits.
 - **Synth**: VLabs's own synthesizer (below).
-- **SoundFont…**: a track playing a SoundFont (`.sf2`) file of yours: many
-  free instruments come as SoundFonts. Its sounds ("presets") are chosen
-  in the track's menu, at the top left of its pattern. The song remembers
-  where the file is; on a computer without it, the track plays a plain
-  sound and VLabs says which file is missing.
+- **SoundFont or SFZ…**: a track playing an instrument file of yours. Many
+  free and paid sampled instruments (pianos, drum kits, orchestras) come
+  as a **SoundFont** (`.sf2`) or as an **SFZ instrument** (an `.sfz` file
+  next to a folder of sounds).
+  - A SoundFont's sounds ("presets") are chosen in the track's menu, at the
+    top left of its pattern.
+  - An SFZ instrument is read in the background, however large: its track
+    is silent for a moment while the status line says "Reading the
+    instrument…", then plays. If the instrument uses something VLabs does
+    not play yet (such as vibrato made by an LFO), the status line says so
+    once, and the rest plays.
+  - The song remembers where the file is; on a computer without it, the
+    track plays a plain sound and VLabs says which file is missing.
 
 ![A SoundFont's presets in the track menu](guide-images/soundfont.png)
+
+![An SFZ instrument from the library, as a track](guide-images/sfz.png)
 
 ## The synth
 
@@ -229,14 +239,15 @@ version on the maker's site.
 
 The folder button at the top right (or <kbd>F6</kbd>) shows the library in
 place of the keyboard. **Add a folder…** (or drop a folder on the window)
-adds a folder of sounds: WAV, AIFF, FLAC, MP3 and Ogg files, MIDI files and
-SoundFonts, however many there are. Nothing is copied or moved.
+adds a folder of sounds: WAV, AIFF, FLAC, MP3 and Ogg files, MIDI files,
+SoundFonts and SFZ instruments, however many there are. Nothing is copied
+or moved.
 
 - Click a folder to open it; **Up** goes back.
 - **Click a sound to hear it**; click it again to stop.
 - **Drag** a sound onto the song to put it there, on the beat where you let
   go; **double-click** puts it at the play position. MIDI files become
-  tracks of notes, SoundFonts become instrument tracks.
+  tracks of notes, SoundFonts and SFZ instruments become instrument tracks.
 - The **Search** field looks through every folder at once, for every word
   you type ("kick hard").
 - Right-click a folder on the left to look through it again (after adding
@@ -262,8 +273,9 @@ including a recording that was in progress.
 - **Import…** (<kbd>Ctrl+I</kbd>) adds sound files (WAV, AIFF, FLAC, MP3,
   Ogg) and MIDI files to the song at the play position (a MIDI file's
   tracks become tracks of notes). Dropping files on the window does the
-  same; dropping a song file opens it, a SoundFont becomes an instrument
-  track, plugins go to the Plugins window and folders to the library.
+  same; dropping a song file opens it, a SoundFont or an SFZ instrument
+  becomes an instrument track, plugins go to the Plugins window and
+  folders to the library.
 - **Export…** (<kbd>Ctrl+E</kbd>) makes, from the song:
   - **a sound file**: WAV or FLAC (FLAC is about half the size, with nothing
     lost), in studio quality (24-bit, 48 kHz) or CD quality (16-bit,

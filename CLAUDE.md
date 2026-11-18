@@ -204,6 +204,14 @@ These come from the brief; tests and CI enforce most of them.
   program's own window buttons. Start the program only once PipeWire and
   WirePlumber are up; a sound device that never starts is reopened after
   three seconds.
+- **SFZ test instruments** (fixtures only, never bundled): free
+  instruments from the `sfzinstruments` collection on GitHub, for instance
+  `ganjo` and `karoryfer.cowsynth` (CC0; download the repository's zip).
+  `VLABS_TEST_SFZ=<folder>` makes `crates/daw-formats/tests/sfz_instruments.rs`
+  read every `.sfz` inside and play notes across each one's range.
+- **Typing in the real program:** `xdotool type` does not reach text
+  fields on the virtual screen (no window manager); scroll lists with the
+  mouse wheel (`xdotool click 5`) instead of searching.
 - Network access in the development container is restricted: crates.io,
   GitHub (git, raw files and release downloads) and the Ubuntu archive work;
   many other sites do not.
