@@ -240,6 +240,16 @@ fn song(audio: &Path) -> Project {
             *fade_out = 0.05;
         }
     });
+    // An SFZ instrument of the person's own (decision 0024).
+    let strings = project.add_track(
+        "Strings",
+        Instrument::Sfz {
+            file: "/instruments/Strings/Strings.sfz".to_owned(),
+        },
+    );
+    let chords = project.add_pattern_for(strings, "Chords", Ticks::WHOLE);
+    project.add_note(chords, note(Ticks::ZERO, Ticks::QUARTER * 2, 60));
+    project.add_clip(strings, Ticks::ZERO, Ticks::WHOLE, chords);
     // The master: an EQ and the limiter.
     project.add_effect(
         ChainPlace::Master,
