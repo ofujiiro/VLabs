@@ -53,10 +53,10 @@ other programs). *Rejected.*
 - **Inversions:** "Invert up" (Alt+Up) moves the lowest note of each chord
   of the selection (the notes that start together) up an octave; "Invert
   down" (Alt+Down) moves the highest one down.
-- **Transposition by interval:** the "Notes" menu moves the selection up or
-  down by any interval up to an octave, named as musicians name them ("up a
-  perfect fifth"), or, with a key, by steps of the scale ("up a third in
-  the key").
+- **Transposition by interval:** the "Transpose" menu moves the selection
+  up or down by any interval up to an octave, named as musicians name them
+  ("up a perfect fifth"), or, with a key, by steps of the scale ("up a
+  third in the key"); it also holds the inversions.
 
 Concepts rejected for the chord tools: a **chord palette panel** (a grid of
 chord buttons beside the piano roll), because it takes room from the focus
@@ -95,8 +95,10 @@ that is the whole song, as before.
 
 **Changing a time signature keeps the song in its bars.** Clips (their
 starts and ends), automation points, tempo changes and the loop keep their
-bar and beat; patterns that fill whole bars keep their number of bars (and
-grow to keep their notes); sound clips keep their length in seconds.
+bar and beat; a pattern that fills whole bars where it is first placed
+keeps its number of bars if its notes still fit (otherwise it keeps its
+length, and its clips, which keep their bars, play part of it); sound
+clips keep their length in seconds.
 Inserting a 7/8 bar at bar 9 therefore pushes everything after it along,
 as a musician expects, instead of leaving every later clip half a beat off
 its bar. (Other programs keep positions in quarter notes instead; with a
@@ -111,6 +113,9 @@ write small steps.
 
 ## Tuplets and odd meters
 
+- To fit a laptop's width, the location line's buttons are short: the Draw
+  button names the chord in a word or a symbol ("Triads in key",
+  "maj7"), its menu spells it out.
 - The Snap menu offers triplets, quintuplets and septuplets of the usual
   values next to the straight ones; the note-length menu adds dotted values
   and the same tuplets; the step grid offers quintuplet and septuplet

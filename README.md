@@ -20,7 +20,7 @@ managed and tuned inside VLabs (see [ROADMAP.md](ROADMAP.md)).
 ## Status
 
 **Pre-alpha.** Roadmap phases 1 ("first sound"), 2 ("making a beat"), 3
-("plugins") and 4 ("audio") work: make a beat on the step grid with a
+("plugins"), 4 ("audio") and 5 ("theory and rhythm") work: make a beat on the step grid with a
 recorded acoustic kit or an electronic kit, write melodies in the piano
 roll with the bundled piano or a CLAP or VST3 instrument, record your voice
 or guitar from the computer's microphone, bring in WAV, FLAC, MP3 and Ogg
@@ -30,8 +30,14 @@ chain per track (EQ, compressor, reverb, delay, limiter, and plugin
 effects), make any of those settings change over the song with automation
 lanes, and export the song as a WAV file. Play from the computer keyboard
 or a MIDI keyboard, record notes with a metronome and count-in, undo
-anything, save and open songs (their sound inside the song file). Your work
-is saved automatically and offered back after a crash. See
+anything, save and open songs (their sound inside the song file). Give the
+song a key and the piano roll shows its notes, keeps new notes in it and
+places whole chords with one click (built in the key, or of any kind, in
+any inversion); transpose by intervals; change the tempo (suddenly or
+gradually) and the time signature anywhere in the song, in any meter;
+write triplets, quintuplets and septuplets; swing a pattern; let patterns
+of different lengths play against each other. Your work is saved
+automatically and offered back after a crash. See
 [ROADMAP.md](ROADMAP.md) for what is done, what to try and what comes next.
 
 ## Building from source

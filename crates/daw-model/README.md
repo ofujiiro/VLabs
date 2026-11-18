@@ -32,5 +32,6 @@ the song.
 ## Roadmap
 
 Phase 1 (project, notes, undo), phase 2 (patterns, arrangement, mixer),
-phase 4 (audio clips), phase 5 (tempo and time-signature changes, tuplets,
-swing, scales and chords).
+phase 4 (audio clips), phase 5 (tempo changes and glides, time-signature
+changes that keep the song in its bars, the song's key, swing, and the
+`theory` module: scales, chords, inversions, steps of the key).
