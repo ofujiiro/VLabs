@@ -65,6 +65,8 @@ places patterns along time.
 - In a pattern, the menu of the location line makes new patterns, copies
   (duplicates) and renames them.
 
+![A clip's right-click menu offers the track's other patterns](guide-images/patterns.png)
+
 ## The step grid (drums)
 
 Click or drag along a row to add hits; click a hit to remove it. The strip
@@ -139,6 +141,8 @@ it while you play the computer keyboard:
   or the volume (tremolo).
 - **Playing**: one note at a time with glide, for basses and leads; how much
   velocity matters; the volume.
+
+![The synth's window](guide-images/synth.png)
 
 Any of the synth's knobs can change over the song with an automation lane
 (below): a filter that opens over eight bars is the classic one.
@@ -215,6 +219,8 @@ including a recording that was in progress.
     Bitwig Studio, Studio One, Cubase and others open with the tracks,
     notes, sound, mixer, plugins and automation;
   - **the notes as a MIDI file**, for any music program.
+
+![The Export dialog](guide-images/export.png)
 
 ## Keyboard shortcuts
 

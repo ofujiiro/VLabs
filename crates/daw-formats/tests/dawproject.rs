@@ -659,7 +659,10 @@ fn schema(name: &str) -> PathBuf {
 #[test]
 fn exported_projects_match_the_dawproject_schema() {
     // Needs xmllint (libxml2); the test passes quietly without it.
-    let Ok(probe) = std::process::Command::new("xmllint").arg("--version").output() else {
+    let Ok(probe) = std::process::Command::new("xmllint")
+        .arg("--version")
+        .output()
+    else {
         return;
     };
     if !probe.status.success() {
@@ -671,7 +674,10 @@ fn exported_projects_match_the_dawproject_schema() {
     let file = folder.join("song.dawproject");
     dawproject::export(&song(&sounds), &sounds, &file).unwrap();
     let mut zip = zip::ZipArchive::new(std::fs::File::open(&file).unwrap()).unwrap();
-    for (entry, xsd) in [("project.xml", "Project.xsd"), ("metadata.xml", "MetaData.xsd")] {
+    for (entry, xsd) in [
+        ("project.xml", "Project.xsd"),
+        ("metadata.xml", "MetaData.xsd"),
+    ] {
         let mut text = String::new();
         std::io::Read::read_to_string(&mut zip.by_name(entry).unwrap(), &mut text).unwrap();
         let written = folder.join(entry);

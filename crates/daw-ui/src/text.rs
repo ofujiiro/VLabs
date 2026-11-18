@@ -692,8 +692,7 @@ pub fn problem(problem: &daw_engine::Problem) -> String {
 
 // The synth (decision 0019).
 pub const ADD_SYNTH: &str = "Synth";
-pub const ADD_SYNTH_HINT: &str =
-    "Add a track with the included synth: shape your own sounds, from basses to pads";
+pub const ADD_SYNTH_HINT: &str = "Add a synth track: shape your own sounds";
 /// A new synth track's name.
 pub const SYNTH_TRACK: &str = "Synth";
 pub const OPEN_SYNTH: &str = "Open the synth";
@@ -750,9 +749,14 @@ pub const SYNTH_GLIDE_HINT: &str = "Notes slide into each other (one note at a t
 pub const VELOCITY_AMOUNT: &str = "Velocity";
 pub const VELOCITY_AMOUNT_HINT: &str = "How much harder playing is louder and brighter";
 
-/// The synth window's title: "Synth · Bass line".
+/// The synth window's title: "Synth · Bass line" (just "Synth" for a
+/// track of that name).
 pub fn synth_title(track: &str) -> String {
-    format!("{SYNTH_TRACK} · {track}")
+    if track == SYNTH_TRACK {
+        SYNTH_TRACK.to_owned()
+    } else {
+        format!("{SYNTH_TRACK} · {track}")
+    }
 }
 
 /// What a synth track plays, under its name: "Synth · Warm pad".

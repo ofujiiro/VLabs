@@ -1099,6 +1099,7 @@ impl Workspace {
                             ui.horizontal(|ui| {
                                 ui.radio_value(&mut target, ExportTarget::Wav, text::EXPORT_WAV)
                                     .on_hover_text(text::EXPORT_WAV_HINT);
+                                ui.add_space(16.0);
                                 ui.radio_value(&mut target, ExportTarget::Flac, text::EXPORT_FLAC)
                                     .on_hover_text(text::EXPORT_FLAC_HINT);
                             });
