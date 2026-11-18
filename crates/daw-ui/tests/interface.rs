@@ -1375,3 +1375,63 @@ fn a_quick_click_on_a_sound_name_plays_it_too() {
     }
     assert_eq!(starts(&heard), 1, "the kick plays once");
 }
+
+/// A file dropped on the window, as the desktop hands it over.
+#[derive(Debug)]
+struct DroppedSound(PathBuf);
+
+impl egui::DroppedFile for DroppedSound {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
+}
+
+#[test]
+fn a_sound_file_dropped_on_an_audio_track_lands_on_its_beat() {
+    let mut f = new_song();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    f.harness
+        .get_by_label(&format!("+ {}", text::ADD_AUDIO))
+        .click();
+    f.harness.run_steps(3);
+    let track = f.session().project().tracks.last().unwrap().id;
+    // Over the audio track, a little after bar 2.
+    let spot = Pos2::new(f.song_x(Ticks::WHOLE) + 2.0, f.row_top(2) + 30.0);
+    f.harness.hover_at(spot);
+    f.harness.step();
+    f.harness
+        .input_mut()
+        .dropped_files
+        .push(Arc::new(DroppedSound(tone_file("Drop.wav", 1.0))));
+    f.harness.step();
+    f.wait_for_audio();
+    let clips = f.session().project().track(track).unwrap().clips.clone();
+    assert_eq!(clips.len(), 1, "on the track it was dropped on");
+    assert_eq!(
+        clips[0].start,
+        Ticks::WHOLE,
+        "on the beat under the pointer"
+    );
+}
+
+#[test]
+fn a_sound_file_dropped_on_a_pattern_brings_the_song_with_it() {
+    let mut f = new_song();
+    assert_eq!(f.session().view(), View::Pattern);
+    f.harness
+        .input_mut()
+        .dropped_files
+        .push(Arc::new(DroppedSound(tone_file("Stem.wav", 1.0))));
+    f.harness.step();
+    f.wait_for_audio();
+    assert_eq!(f.session().view(), View::Song);
+    let last = f.session().project().tracks.last().unwrap();
+    assert!(last.instrument.is_audio());
+    assert_eq!(last.name, "Stem");
+    assert_eq!(last.clips.len(), 1, "imported once");
+}
