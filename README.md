@@ -12,6 +12,11 @@ It works on a plain computer: built-in speakers or headphones, a mouse or
 trackpad and a typing keyboard. A MIDI keyboard or an audio interface is used
 automatically when you plug one in, but nothing extra is ever required.
 
+Later, after the first full version: singing voices, in the spirit of
+OpenUtau. Notes with lyrics sung by open voicebanks you install (classic
+UTAU voicebanks such as Kasane Teto's, and DiffSinger and ENUNU voices),
+managed and tuned inside VLabs (see [ROADMAP.md](ROADMAP.md)).
+
 ## Status
 
 **Pre-alpha.** Roadmap phases 1 ("first sound"), 2 ("making a beat") and

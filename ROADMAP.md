@@ -241,6 +241,37 @@ Subtractive synth, DAWproject and MIDI import and export, FLAC export,
 autosave polish, installers (Windows installer, Linux AppImage), generated
 third-party notices, user guide.
 
+## After v1 — Singing voices (the owner's request, November 2026)
+
+Sing from the piano roll: give notes lyrics and have a voicebank sing
+them, with the voice managed and tuned inside VLabs, in the spirit of
+OpenUtau (MIT-licensed, the open successor of UTAU). Not started; planned
+for after v1.
+
+- **Voicebanks the person installs**, in the open formats that matter
+  most: classic UTAU voicebanks (WAV recordings with `oto.ini` timing, in
+  CV, VCV or CVVC style, with `character.txt`), such as the many Kasane
+  Teto voicebanks, and OpenUtau's machine-learning formats, DiffSinger
+  (the one OpenUtau recommends) and ENUNU. Other open formats are judged
+  when the work starts, by how open and how widely used they are.
+- **Managed and tuned inside VLabs:** a list of installed voicebanks
+  (add, read its terms, remove); lyrics on notes; phoneme timing; pitch
+  curves and vibrato drawn over the notes; voice colour and the usual
+  UTAU flags; rendering in the background, the result kept and played
+  like an audio clip.
+- **To decide in its own decision record:** a renderer of our own in Rust
+  following OpenUtau's design, or OpenUtau's engine running in its own
+  process; the vocoder (WORLD) and, for DiffSinger, an ONNX runtime, each
+  checked against the licence policy (decision 0005); importing and
+  exporting USTX (OpenUtau) and UST (UTAU) projects.
+- **Voicebanks are not bundled** unless their terms allow it like CC0
+  (decision 0008): each has its own terms of use, set by its creators
+  (Kasane Teto voicebanks differ: some allow commercial use, some do not),
+  and VLabs shows them when a voicebank is added.
+- **Already leaves room:** notes keep space for per-note pitch offsets;
+  lyrics and pitch curves will be new optional fields of a note (a new
+  file format version, with its migration test).
+
 ## Later (not in v1, not designed out)
 
 VST2 (clean-room headers and a licensing check first), a 32-bit plugin
