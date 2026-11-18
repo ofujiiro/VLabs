@@ -63,6 +63,8 @@ libloading = "0.9.1"
 midir = "0.11.1"
 # MP3 decoding, for importing .mp3 files: a safe, pure-Rust port of minimp3.
 nanomp3 = "0.2.0"
+# Reading DAWproject's XML (decision 0020).
+quick-xml = { version = "0.42.0", default-features = false }
 # Open and save dialogs: the desktop's own (Windows file dialog; on Linux the
 # XDG portal through D-Bus, or zenity).
 rfd = "0.18.0"

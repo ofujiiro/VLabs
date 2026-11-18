@@ -29,13 +29,14 @@ memory. "Planned" means checked and chosen, but not yet in `Cargo.toml`.
 | `nanomp3` (with `nanomp3-core`, `wide`, `bytemuck`) | 0.2.0 | MIT OR Apache-2.0 (`wide`: Zlib OR Apache-2.0 OR MIT; `bytemuck`: Zlib OR Apache-2.0 OR MIT) | 2026-11-17 | MP3 decoding for importing files: a bit-exact, safe (`forbid(unsafe_code)`) Rust port of minimp3, released September 2026. Lets us count a file's frames before decoding, so a hostile file cannot fill the memory. |
 | `lewton` (with `ogg` 0.8, `tinyvec`, `byteorder`) | 0.10.2 | MIT OR Apache-2.0 (`ogg`: BSD-3-Clause; `tinyvec`: Zlib OR Apache-2.0 OR MIT; `byteorder`: Unlicense OR MIT) | 2026-11-17 | Ogg Vorbis decoding for importing files (RustAudio). No release since 2021, but the format is frozen and the crate is the pure-Rust standard; decoding runs in a background thread with a size limit and a guard that turns a panic into an error. |
 | `flacenc` | 0.5.1 | Apache-2.0 | 2026-11-16 | FLAC encoding (without its default features), for now only in `tools/make-drums`; FLAC export in phase 6. Released December 2025. |
+| `quick-xml` | 0.42.0 | MIT | 2026-11-18 | Reading DAWproject's `project.xml` (decision 0020), without default features; released August 2026. Writing is our own small code. |
 | `egui_kittest` (with `kittest`) | 0.37.0 (0.5.0) | MIT OR Apache-2.0 | 2026-11-16 | Tests only: drives the real interface with simulated input and inspects it through its accessibility tree, with no window. Also fails tests on any glyph missing from our fonts and on unlabelled controls. |
 
 ## Planned (checked, adopted when the phase needs them)
 
 | Crate | Version | Licence | For |
 | --- | --- | --- | --- |
-| `quick-xml` | 0.42.0 | MIT | DAWproject import and export (phase 6) |
+| `pulldown-cmark` | 0.13.6 | MIT | Turning the user guide into HTML in `cargo xtask dist` (decision 0022; a developer tool only) |
 
 ## Considered and set aside
 

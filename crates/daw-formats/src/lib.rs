@@ -4,6 +4,8 @@
 
 mod atomic;
 pub mod audio;
+pub mod dawproject;
+pub mod midi;
 mod native;
 pub mod wav;
 
