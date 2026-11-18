@@ -1850,3 +1850,78 @@ fn a_synth_setting_changes_over_the_song_with_a_lane() {
         "it starts at the present cutoff"
     );
 }
+
+/// Right-clicks a point of the window.
+fn right_click(f: &mut Fixture, at: Pos2) {
+    f.harness.hover_at(at);
+    f.harness.step();
+    f.press(at, PointerButton::Secondary, true, Modifiers::NONE);
+    f.harness.step();
+    f.press(at, PointerButton::Secondary, false, Modifiers::NONE);
+    f.harness.run_steps(3);
+}
+
+#[test]
+fn a_track_places_and_swaps_any_of_its_patterns_from_a_right_click() {
+    // A copy of the beat, edited under its own name, as the owner did.
+    let mut f = new_song();
+    let drums = f.session().project().tracks[0].id;
+    let first = f.session().pattern_id();
+    let copy = f.workspace_mut().session_mut().duplicate_pattern().unwrap();
+    let copy_name = f.session().project().pattern(copy).unwrap().name.clone();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    let song = f.harness.get_by_label(text::SONG_VIEW).rect();
+    let row_y = song.top() + 28.0 + 28.0 + 32.0;
+
+    // An empty spot of the drum track (after its four bars): its menu
+    // names the track's patterns; choosing the copy places it there.
+    let empty = Pos2::new(song.left() + 236.0 + 860.0, row_y);
+    right_click(&mut f, empty);
+    f.harness.get_by_label(text::PLACE_PATTERN_HERE);
+    f.harness.get_by_label(&copy_name).click();
+    f.harness.run_steps(3);
+    let clips = f.session().project().track(drums).unwrap().clips.clone();
+    assert_eq!(clips.len(), 2);
+    let placed = clips.iter().find(|c| c.pattern() == Some(copy)).unwrap();
+    assert!(
+        placed.start > Ticks::WHOLE * 3,
+        "where it was right-clicked"
+    );
+    assert!(f.harness.query_by_label(text::PLACE_PATTERN_HERE).is_none());
+
+    // The first clip's menu swaps it for the copy; undo swaps it back.
+    let clip = Pos2::new(song.left() + 236.0 + 60.0, row_y);
+    right_click(&mut f, clip);
+    f.harness.get_by_label(text::PLAY_ANOTHER_PATTERN);
+    f.harness.get_by_label(&copy_name).click();
+    f.harness.run_steps(3);
+    let starts_with = |f: &Fixture| {
+        f.session()
+            .project()
+            .track(drums)
+            .unwrap()
+            .clips
+            .iter()
+            .find(|c| c.start == Ticks::ZERO)
+            .and_then(daw_model::Clip::pattern)
+    };
+    assert_eq!(starts_with(&f), Some(copy), "the first clip plays the copy");
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_SWAP_PATTERN)
+    );
+    f.key(Key::Z, Key::Z, true, Modifiers::COMMAND);
+    f.key(Key::Z, Key::Z, false, Modifiers::COMMAND);
+    assert_eq!(starts_with(&f), Some(first));
+
+    // "New pattern" in an empty spot's menu makes one and places it.
+    f.key(Key::Z, Key::Z, true, Modifiers::COMMAND);
+    f.key(Key::Z, Key::Z, false, Modifiers::COMMAND);
+    assert_eq!(f.session().project().track(drums).unwrap().clips.len(), 1);
+    right_click(&mut f, empty);
+    f.harness.get_by_label(text::NEW_PATTERN_HERE).click();
+    f.harness.run_steps(3);
+    assert_eq!(f.session().project().track_patterns(drums).count(), 3);
+    assert_eq!(f.session().project().track(drums).unwrap().clips.len(), 2);
+}

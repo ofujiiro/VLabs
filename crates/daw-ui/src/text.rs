@@ -562,7 +562,11 @@ pub const DELETE_TRACK: &str = "Delete track";
 pub const OPEN_PATTERN: &str = "Open";
 pub const DUPLICATE_CLIP: &str = "Duplicate";
 pub const REMOVE_CLIP: &str = "Remove from the song";
-pub const SONG_HINT: &str = "Click on a track to place its pattern · drag to move · drag the end to repeat · double-click to open";
+pub const SONG_HINT: &str = "Click on a track to place its pattern · right-click to choose which · drag to move · drag the end to repeat · double-click to open";
+pub const PLACE_PATTERN_HERE: &str = "Place a pattern here";
+pub const NEW_PATTERN_HERE: &str = "New pattern";
+pub const PLAY_ANOTHER_PATTERN: &str = "Play another pattern";
+pub const EDIT_SWAP_PATTERN: &str = "play another pattern";
 
 // The mixer.
 pub const SHOW_MIXER: &str = "Show the mixer";
@@ -675,9 +679,9 @@ pub const ADD_SYNTH_HINT: &str =
 pub const SYNTH_TRACK: &str = "Synth";
 pub const OPEN_SYNTH: &str = "Open the synth";
 pub const CLOSE_SYNTH: &str = "Close the synth";
-pub const EDIT_ADD_SYNTH: &str = "Add a synth track";
-pub const EDIT_CHANGE_SYNTH: &str = "Change the synth";
-pub const EDIT_SYNTH_PRESET: &str = "Choose a synth preset";
+pub const EDIT_ADD_SYNTH: &str = "add synth track";
+pub const EDIT_CHANGE_SYNTH: &str = "change synth";
+pub const EDIT_SYNTH_PRESET: &str = "choose synth preset";
 pub const SYNTH_PRESET: &str = "Preset";
 pub const SYNTH_PRESET_HINT: &str = "A starting point: every control is set for a kind of sound";
 pub const SYNTH_CUSTOM: &str = "Custom";
