@@ -121,3 +121,44 @@ fn the_reference_plugins_are_found_and_remembered() {
         std::fs::read_to_string(&cache).unwrap_or_default()
     );
 }
+
+#[test]
+fn a_reference_plugin_added_from_its_download_folder_is_found_in_the_programs_own_folder() {
+    let Some(fixtures) = std::env::var_os("VLABS_TEST_PLUGINS").map(PathBuf::from) else {
+        eprintln!("VLABS_TEST_PLUGINS is not set; skipped");
+        return;
+    };
+    // Dexed as its download unpacks: a folder holding the plugin in both
+    // formats (decision 0023's "Add a plugin folder…").
+    let own = scratch("own").join("plugins");
+    let added = daw_plugin_host::install::add(&[fixtures.join("dexed")], &own);
+    assert_eq!(added.plugins.len(), 2, "{added:?}");
+    assert!(added.skipped.is_empty(), "{added:?}");
+    let mut scanner = Scanner::start(
+        program(),
+        None,
+        daw_plugin_host::install::own_search_folders(&own),
+    );
+    scanner.wait();
+    let findings = scanner.findings();
+    let formats: Vec<Format> = findings
+        .plugins
+        .iter()
+        .filter(|p| p.name == "Dexed")
+        .map(|p| p.format)
+        .collect();
+    assert!(formats.contains(&Format::Clap), "{:?}", findings.plugins);
+    assert!(formats.contains(&Format::Vst3), "{:?}", findings.plugins);
+    // Removed again from the program's folder: the search no longer finds it.
+    for plugin in &added.plugins {
+        daw_plugin_host::install::remove(plugin, &own).unwrap();
+    }
+    let mut scanner = Scanner::start(
+        program(),
+        None,
+        daw_plugin_host::install::own_search_folders(&own),
+    );
+    scanner.wait();
+    assert!(scanner.findings().plugins.is_empty());
+    let _ = std::fs::remove_dir_all(own.parent().unwrap());
+}
