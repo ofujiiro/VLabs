@@ -121,6 +121,13 @@ VLabs, then every plugin found on your computer:
 - **Piano**: a sampled grand piano.
 - **Drums**: the drum sampler with two kits.
 - **Synth**: VLabs's own synthesizer (below).
+- **SoundFont…**: a track playing a SoundFont (`.sf2`) file of yours: many
+  free instruments come as SoundFonts. Its sounds ("presets") are chosen
+  in the track's menu, at the top left of its pattern. The song remembers
+  where the file is; on a computer without it, the track plays a plain
+  sound and VLabs says which file is missing.
+
+![A SoundFont's presets in the track menu](guide-images/soundfont.png)
 
 ## The synth
 
@@ -181,17 +188,61 @@ them; the line is what the setting does as the song plays.
 
 ## Plugins
 
-VLabs uses CLAP and VST3 instruments and effects. It looks for them in the
-usual folders when it starts:
+VLabs uses CLAP and VST3 instruments and effects. **Plugins…** in the menu
+(or in **+ Instrument…**) opens the Plugins window: every plugin found,
+with who made it, and the files that could not be used, with why.
+
+- **To add a plugin you downloaded**, drop it on the window: a `.vst3` or
+  `.clap` file, the folder it came in, or the `.zip` file itself. Or use
+  **Add plugin files…** and **Add a plugin folder…** (a `.vst3` plugin is
+  really a folder). VLabs copies it into its own plugin folder, which it
+  always searches, and tells you what it added. You never need to know
+  where plugins go.
+- **Installers** (`.exe`, `.msi`): on Windows, VLabs opens the installer;
+  finish it, then click **Look again**. On Linux, it runs it through Wine
+  when Wine is installed.
+- **Remove** takes out a plugin added this way. Plugins installed by their
+  own installers are left alone: uninstall them as usual.
+- **Folders searched** lists where VLabs looks, and **Search another
+  folder…** adds one of yours (plugins there stay where they are).
+
+![The Plugins window](guide-images/plugins.png)
+
+VLabs also looks in the usual folders by itself:
 
 | System | Folders |
 | --- | --- |
 | Windows | `Common Files\CLAP` and `Common Files\VST3` in Program Files, and the same under `%LOCALAPPDATA%\Programs\Common` |
 | Linux | `~/.clap`, `~/.vst3`, `/usr/lib/clap`, `/usr/lib/vst3`, `/usr/local/lib/clap`, `/usr/local/lib/vst3` |
 
-A plugin must be built for your system. On Linux, Windows plugins can work
-through [yabridge](https://github.com/robbert-vdh/yabridge) and Wine: once
-yabridge has set them up in those folders, VLabs sees them like any other.
+**Windows plugins on Linux** work through Wine and
+[yabridge](https://github.com/robbert-vdh/yabridge). Install both once (the
+Plugins window shows the steps, then click **Check again**); after that,
+a Windows plugin you add is set up for VLabs automatically and appears with
+the others.
+
+**VST2 plugins** (`.dll` files) are not supported yet: VLabs tells you so
+when you add one. Most plugins also come as VST3 or CLAP; look for that
+version on the maker's site.
+
+## The sound library
+
+The folder button at the top right (or <kbd>F6</kbd>) shows the library in
+place of the keyboard. **Add a folder…** (or drop a folder on the window)
+adds a folder of sounds: WAV, AIFF, FLAC, MP3 and Ogg files, MIDI files and
+SoundFonts, however many there are. Nothing is copied or moved.
+
+- Click a folder to open it; **Up** goes back.
+- **Click a sound to hear it**; click it again to stop.
+- **Drag** a sound onto the song to put it there, on the beat where you let
+  go; **double-click** puts it at the play position. MIDI files become
+  tracks of notes, SoundFonts become instrument tracks.
+- The **Search** field looks through every folder at once, for every word
+  you type ("kick hard").
+- Right-click a folder on the left to look through it again (after adding
+  files) or to remove it from the library (the files stay on your disk).
+
+![The sound library](guide-images/library.png)
 
 ## Saving, opening and recovering
 
@@ -208,9 +259,11 @@ including a recording that was in progress.
 
 ## Importing and exporting
 
-- **Import…** (<kbd>Ctrl+I</kbd>) adds sound files and MIDI files to the
-  song at the play position (a MIDI file's tracks become tracks of notes).
-  Dropping files on the window does the same; dropping a song file opens it.
+- **Import…** (<kbd>Ctrl+I</kbd>) adds sound files (WAV, AIFF, FLAC, MP3,
+  Ogg) and MIDI files to the song at the play position (a MIDI file's
+  tracks become tracks of notes). Dropping files on the window does the
+  same; dropping a song file opens it, a SoundFont becomes an instrument
+  track, plugins go to the Plugins window and folders to the library.
 - **Export…** (<kbd>Ctrl+E</kbd>) makes, from the song:
   - **a sound file**: WAV or FLAC (FLAC is about half the size, with nothing
     lost), in studio quality (24-bit, 48 kHz) or CD quality (16-bit,
@@ -233,6 +286,7 @@ including a recording that was in progress.
 | <kbd>Ctrl+I</kbd> / <kbd>Ctrl+E</kbd> | Import / export |
 | <kbd>F5</kbd> | Switch between the song and the open pattern |
 | <kbd>F9</kbd> | Show or hide the mixer |
+| <kbd>F6</kbd> | Show or hide the sound library |
 | <kbd>Page Up</kbd> / <kbd>Page Down</kbd> | The computer keyboard's octave |
 | <kbd>Ctrl+B</kbd> | Split the selected clip at the play position |
 | <kbd>F1</kbd> | This guide |

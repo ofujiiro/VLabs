@@ -218,6 +218,44 @@ The window is `daw-ui::synth_ui`.
   reports in the first two seconds after loading are ignored, and on a song
   with nothing unsaved a report counts only if the settings now differ.
 
+## Plugins added in the program, and the sound library *(decision 0023)*
+
+- **The program's own plugin folder** (`plugins/` in its data folder, with
+  `clap/` and `vst3/` inside) is always searched, with the usual folders
+  and the person's extra folders (settings). `daw-plugin-host::install`
+  puts plugins there from files, bundles, folders and `.zip` archives
+  (entry names checked so nothing lands outside, sizes limited), tells
+  VST2 plugins, installers and plugins for other systems apart by their
+  endings and first bytes, and removes only what is inside that folder.
+- **Windows plugins on Linux** go to `plugins/windows/`, which the search
+  does not look in; when Wine and yabridge are installed, `yabridgectl add`
+  (once) and `sync` set them up in `~/.vst3/yabridge` and
+  `~/.clap/yabridge`, which the search finds. Installers run through Wine
+  (Linux) or are opened by the shell (Windows).
+- **Off the interface thread:** `daw-app`'s plugin worker does the
+  copying, unpacking, installing and yabridge calls, one job at a time,
+  then the search runs again (queued if one is under way). The Plugins
+  window only asks (`Request::AddPlugins`, `RemovePlugin`,
+  `SetUpWindowsPlugins`) and shows what each job reports.
+- **The sound library:** `daw-formats::library` lists a folder once, in the
+  background (hidden files skipped, up to half a million files), sorted
+  case-blind; browsing a folder and searching (every word, anywhere in the
+  path) then work on that listing in memory. The drawer (`library_panel`)
+  keeps one listing per library folder and lists again on request.
+- **Previews** play through the engine: the file is decoded and resampled
+  on a thread of its own, then handed to the audio thread, which mixes it
+  over everything after the master effects (like the metronome) at about
+  -3 dB, and hands the sound back through the garbage queue when it ends
+  or is replaced. A number tells previews apart, so the interface knows
+  whether the one it asked for is still playing.
+- **Dragging from the library** uses egui's drag-and-drop payload
+  (`LibraryDrag`); the song view takes it when the pointer is let go over
+  the tracks, exactly as it takes files dropped from the desktop.
+- **SoundFont files** use the model's existing `SoundSource::File`: the
+  engine's sound library loads them (once per file) with the same player
+  as the bundled piano; a file that is gone gives `Problem::MissingFile`
+  and a plain sound in its place.
+
 ## Automation *(phase 3)*
 
 A track's lanes (`AutomationLane`) each change one setting: its volume, its

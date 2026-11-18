@@ -9,10 +9,12 @@ use std::time::{Duration, Instant};
 
 use daw_devices::{AudioInput, AudioOutput, MidiInputs, MidiMessage, OutputMode};
 use daw_engine::MidiSender;
+use daw_plugin_host::install;
 use daw_plugin_host::scan::{self, Scanner};
-use daw_ui::{PluginSearch, Request, Settings, Workspace, text};
+use daw_ui::{PluginPlaces, PluginSearch, Request, Settings, Workspace, text};
 
 use crate::paths::Paths;
+use crate::plugin_jobs::{Job, PluginJobs, bridge_state};
 use crate::recovery::Autosaver;
 
 /// How often devices are checked.
@@ -44,6 +46,12 @@ pub struct App {
     settings_changed_at: Option<Instant>,
     /// Plugins being looked for, in the background.
     plugin_scan: Option<Scanner>,
+    /// Another search for plugins is wanted once this one ends.
+    search_again: bool,
+    /// Adding, removing and installing plugins (decision 0023).
+    plugin_jobs: Option<PluginJobs>,
+    /// Where plugins come from, as the Plugins window shows it.
+    plugin_places: PluginPlaces,
 }
 
 /// What [`App::new`] needs.
@@ -126,6 +134,25 @@ impl App {
             }
         });
 
+        // Plugins added in the program live in its own folder (decision
+        // 0023), which the search always looks in.
+        let own = paths.as_ref().map(|paths| install::own_folder(&paths.data));
+        let plugin_jobs = own.clone().map(|own| {
+            let repaint = ctx.clone();
+            PluginJobs::start(own, move || repaint.request_repaint())
+        });
+        let bridge = install::find_bridge();
+        let plugin_places = PluginPlaces {
+            usual: scan::default_folders(),
+            added: own.as_deref().map_or_else(Vec::new, |own| {
+                install::own_plugins(own).into_iter().collect()
+            }),
+            own,
+            bridge: bridge_state(&bridge),
+            busy: false,
+        };
+        workspace.set_plugin_places(plugin_places.clone());
+
         let mut app = Self {
             workspace,
             audio,
@@ -140,6 +167,9 @@ impl App {
             saved_settings: settings,
             settings_changed_at: None,
             plugin_scan: None,
+            search_again: false,
+            plugin_jobs,
+            plugin_places,
         };
         app.find_plugins();
         app
@@ -160,7 +190,52 @@ impl App {
             let _ = std::fs::create_dir_all(&paths.data);
             paths.plugin_cache()
         });
-        self.plugin_scan = Some(Scanner::start(program, cache, scan::default_folders()));
+        let mut folders = scan::default_folders();
+        if let Some(own) = &self.plugin_places.own {
+            folders.extend(install::own_search_folders(own));
+        }
+        folders.extend(self.workspace.settings().plugin_folders);
+        self.plugin_scan = Some(Scanner::start(program, cache, folders));
+    }
+
+    /// Looks for plugins again now, or once the search under way ends.
+    fn search_again(&mut self) {
+        if self.plugin_scan.is_none() {
+            self.find_plugins();
+        } else {
+            self.search_again = true;
+        }
+    }
+
+    /// Passes the Plugins window's requests to the worker, and what it
+    /// finished back to the window.
+    fn follow_plugin_jobs(&mut self, requests: &[Request]) {
+        let Some(jobs) = &mut self.plugin_jobs else {
+            return;
+        };
+        for request in requests {
+            match request {
+                Request::AddPlugins(files) => jobs.send(Job::Add(files.clone())),
+                Request::RemovePlugin(plugin) => jobs.send(Job::Remove(plugin.clone())),
+                Request::SetUpWindowsPlugins => jobs.send(Job::SetUpWindowsPlugins),
+                _ => {}
+            }
+        }
+        let finished = jobs.finished();
+        let busy = jobs.busy();
+        let changed = !finished.is_empty() || busy != self.plugin_places.busy;
+        for job in &finished {
+            self.workspace.plugin_job_done(&job.done);
+            self.plugin_places.added.clone_from(&job.added);
+            self.plugin_places.bridge = bridge_state(&job.bridge);
+        }
+        self.plugin_places.busy = busy;
+        if changed {
+            self.workspace.set_plugin_places(self.plugin_places.clone());
+        }
+        if !finished.is_empty() {
+            self.search_again();
+        }
     }
 
     /// Passes what the plugin search found to the song.
@@ -182,6 +257,9 @@ impl App {
             .set_plugins(findings.plugins, search);
         if done {
             self.plugin_scan = None;
+            if std::mem::take(&mut self.search_again) {
+                self.find_plugins();
+            }
         }
     }
 
@@ -290,9 +368,10 @@ impl eframe::App for App {
         self.follow_plugin_search();
         self.workspace.ui(ui);
         let requests = self.workspace.take_requests();
-        if requests.contains(&Request::FindPlugins) && self.plugin_scan.is_none() {
-            self.find_plugins();
+        if requests.contains(&Request::FindPlugins) {
+            self.search_again();
         }
+        self.follow_plugin_jobs(&requests);
         if let Some(autosaver) = &mut self.autosaver {
             let session = self.workspace.session_mut();
             autosaver.note_take(session.take_in_progress());

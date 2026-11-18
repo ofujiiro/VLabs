@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 
 use daw_dsp::effects::Effect as EffectInstance;
 use daw_model::{
-    EffectId, EffectKind, Instrument as InstrumentSpec, PluginSetup, PluginState, Project, Ticks,
-    TrackId,
+    EffectId, EffectKind, Instrument as InstrumentSpec, PluginSetup, PluginState, Project,
+    SoundSource, Ticks, TrackId,
 };
 use daw_plugin_host::{AudioConfig, LoadedPlugin};
 
@@ -39,6 +39,9 @@ pub enum Problem {
     /// A sound bundled with the program is missing (a plain sound plays
     /// instead).
     MissingSound(String),
+    /// A file the song uses (a SoundFont) is not on this computer: where
+    /// it was (a plain sound plays instead).
+    MissingFile(String),
     /// A sound could not be read (a plain sound plays instead): which, and
     /// why.
     UnreadableSound {
@@ -277,6 +280,10 @@ pub struct Engine {
     input_port: Option<InputPort>,
     /// The recorder's end of the recorded queue, until it is taken.
     recorded: Option<RecordedAudio>,
+    /// The number of the last preview asked for (decision 0023).
+    preview_number: u64,
+    /// Whether that was a sound to play (not a stop).
+    preview_waiting: bool,
 }
 
 impl Engine {
@@ -323,6 +330,8 @@ impl Engine {
                 consumer: recorded_rx,
             }),
             shared,
+            preview_number: 0,
+            preview_waiting: false,
         };
         (engine, processor)
     }
@@ -341,6 +350,15 @@ impl Engine {
     /// The sounds the engine plays from (clone it to render offline).
     pub fn library(&self) -> &SoundLibrary {
         &self.library
+    }
+
+    /// The presets of a SoundFont, loading it the first time (decision
+    /// 0023: a SoundFont file chosen by the person).
+    pub fn soundfont_presets(
+        &mut self,
+        source: &SoundSource,
+    ) -> Result<Vec<daw_dsp::PresetInfo>, Problem> {
+        self.library.soundfont(source).map(|bank| bank.presets())
     }
 
     // ----- Audio files and recording sound
@@ -921,6 +939,26 @@ impl Engine {
     /// Silences everything immediately.
     pub fn panic(&mut self) {
         self.send(Command::Panic);
+    }
+
+    /// Plays a sound once over everything else (the sound library's
+    /// preview, decision 0023); it should be at the engine's sample rate.
+    /// `None` stops the one playing.
+    pub fn preview(&mut self, sound: Option<Arc<daw_dsp::audio::AudioBuffer>>) {
+        self.preview_number += 1;
+        let number = self.preview_number;
+        self.preview_waiting = sound.is_some();
+        self.send(Command::Preview(sound.map(|sound| (sound, number))));
+    }
+
+    /// Whether the last preview asked for is playing (or about to).
+    pub fn is_previewing(&self) -> bool {
+        let taken = self.shared.preview_taken.load(Ordering::Acquire);
+        if taken < self.preview_number {
+            // Not taken yet: about to play, unless it was a stop.
+            return self.preview_waiting;
+        }
+        self.shared.previewing.load(Ordering::Relaxed)
     }
 
     /// Collects what the audio thread sent since the last call, and frees

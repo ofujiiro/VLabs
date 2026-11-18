@@ -166,6 +166,9 @@ impl SoundLibrary {
                 }
                 None => Err(Problem::MissingSound(name.clone())),
             },
+            SoundSource::File(path) if !std::path::Path::new(path).is_file() => {
+                Err(Problem::MissingFile(path.clone()))
+            }
             SoundSource::File(path) => std::fs::read(path)
                 .map_err(|e| unreadable(path, e.to_string()))
                 .and_then(|bytes| {
@@ -193,7 +196,11 @@ impl SoundLibrary {
                 let result = self.soundfont(source).and_then(|font| {
                     SoundFontPlayer::new(&font, sample_rate, *bank, *program).map_err(|e| {
                         Problem::UnreadableSound {
-                            sound: format!("{source:?}"),
+                            sound: match source {
+                                SoundSource::Builtin(name) | SoundSource::File(name) => {
+                                    name.clone()
+                                }
+                            },
                             reason: e.to_string(),
                         }
                     })
@@ -316,4 +323,26 @@ fn pad_table(pads: &[PadSetting]) -> PadTable {
         };
     }
     table
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_soundfont_file_that_is_gone_plays_a_plain_sound_and_says_where_it_was() {
+        let mut library = SoundLibrary::new();
+        let gone = std::env::temp_dir()
+            .join(format!("gone-{}", std::process::id()))
+            .join("Gone.sf2")
+            .to_string_lossy()
+            .into_owned();
+        let spec = InstrumentSpec::SoundFont {
+            source: SoundSource::File(gone.clone()),
+            bank: 0,
+            program: 0,
+        };
+        let (_plain, problem) = library.build(&spec, 48_000);
+        assert_eq!(problem, Some(Problem::MissingFile(gone)));
+    }
 }

@@ -17,8 +17,10 @@ use crate::effect_ui::EffectWindows;
 use crate::export::{ExportFormat, ExportTarget};
 use crate::keyboard_panel::{self, KeyboardPanel};
 use crate::keys::{BindError, Command, KeyLabels, Keymap, LayoutFamily, Shortcut, note_offset};
+use crate::library_panel::{self, LibraryAction, LibraryPanel};
 use crate::mixer::{MIXER_HEIGHT, MixerPanel, format_name};
 use crate::piano_roll::PianoRoll;
+use crate::plugin_manager::{PluginJobDone, PluginPlaces, PluginsWindow};
 use crate::session::{Session, View};
 use crate::settings::{LabelChoice, Settings, ThemeChoice};
 use crate::song_view::SongView;
@@ -44,6 +46,24 @@ pub trait Host {
     }
     /// Shows the user guide (in the browser).
     fn open_user_guide(&mut self) {}
+    /// Asks the person which plugin files, downloads or installers to add
+    /// (none if they cancel).
+    fn choose_plugin_files(&mut self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+    /// Asks the person which SoundFont (`.sf2`) file to play.
+    fn choose_soundfont(&mut self) -> Option<PathBuf> {
+        None
+    }
+    /// Asks the person for a folder (a dialog titled `title`).
+    fn choose_folder(&mut self, title: &str) -> Option<PathBuf> {
+        let _ = title;
+        None
+    }
+    /// Shows a folder in the system's file manager.
+    fn open_folder(&mut self, folder: &std::path::Path) {
+        let _ = folder;
+    }
 }
 
 /// Something a part of the window asks the window to do (open a dialog or
@@ -66,6 +86,7 @@ enum Included {
     Piano,
     Drums,
     Synth,
+    SoundFont,
 }
 
 /// What a rename dialog renames.
@@ -86,6 +107,14 @@ pub enum Request {
     RecoveryAccepted,
     /// Look for plugins again (some may have been installed since).
     FindPlugins,
+    /// Add plugins from these files, folders, downloads or installers
+    /// (decision 0023).
+    AddPlugins(Vec<PathBuf>),
+    /// Remove a plugin the program added.
+    RemovePlugin(PathBuf),
+    /// Look for Wine and yabridge again, and set up the Windows plugins
+    /// added here.
+    SetUpWindowsPlugins,
 }
 
 /// What the person is told about work found after a crash (decision
@@ -133,6 +162,11 @@ enum Dialog {
     Instruments {
         search: String,
     },
+    Plugins {
+        window: PluginsWindow,
+        /// Opened from the instrument chooser, which comes back after.
+        from_chooser: bool,
+    },
 }
 
 /// The whole window.
@@ -145,6 +179,7 @@ pub struct Workspace {
     steps: StepGrid,
     song: SongView,
     mixer: MixerPanel,
+    library: LibraryPanel,
     effects: EffectWindows,
     keyboard: KeyboardPanel,
     host: Box<dyn Host>,
@@ -154,6 +189,10 @@ pub struct Workspace {
     requests: Vec<Request>,
     notice: Option<String>,
     applied_theme: Option<ThemeChoice>,
+    /// Where plugins come from, as the program says (decision 0023).
+    plugin_places: PluginPlaces,
+    /// What the last change to the plugins did, for the Plugins window.
+    plugin_messages: Vec<String>,
 }
 
 impl Workspace {
@@ -183,6 +222,7 @@ impl Workspace {
             steps: StepGrid::default(),
             song: SongView::default(),
             mixer: MixerPanel::default(),
+            library: LibraryPanel::default(),
             effects: EffectWindows::default(),
             keyboard: KeyboardPanel::default(),
             host,
@@ -192,6 +232,8 @@ impl Workspace {
             requests: Vec::new(),
             notice: None,
             applied_theme: None,
+            plugin_places: PluginPlaces::default(),
+            plugin_messages: Vec::new(),
         }
     }
 
@@ -221,6 +263,31 @@ impl Workspace {
     /// Requests from the window since the last call.
     pub fn take_requests(&mut self) -> Vec<Request> {
         std::mem::take(&mut self.requests)
+    }
+
+    /// Where plugins come from, for the Plugins window.
+    pub fn set_plugin_places(&mut self, places: PluginPlaces) {
+        self.plugin_places = places;
+    }
+
+    /// Tells the person what adding or removing plugins did.
+    pub fn plugin_job_done(&mut self, done: &PluginJobDone) {
+        self.plugin_messages = text::plugin_job_lines(done);
+        if let Some(first) = self.plugin_messages.first() {
+            self.session.set_status(first);
+        }
+    }
+
+    /// Opens the Plugins window.
+    pub fn open_plugins_window(&mut self) {
+        let from_chooser = matches!(self.dialog, Some(Dialog::Instruments { .. }));
+        if !matches!(self.dialog, Some(Dialog::Plugins { .. })) {
+            self.plugin_messages.clear();
+            self.dialog = Some(Dialog::Plugins {
+                window: PluginsWindow::default(),
+                from_chooser,
+            });
+        }
     }
 
     /// Shows (or clears) a lasting notice, such as "no sound device".
@@ -300,7 +367,10 @@ impl Workspace {
             .fill(p.background)
             .inner_margin(egui::Margin::symmetric(16, 0));
         let mut intents = Vec::new();
-        let keyboard_shown = self.settings.show_keyboard && !self.settings.show_mixer;
+        let mut library_actions = Vec::new();
+        let library_shown = self.settings.show_library && !self.settings.show_mixer;
+        let keyboard_shown =
+            self.settings.show_keyboard && !self.settings.show_mixer && !library_shown;
         Panel::top("location")
             .exact_size(44.0)
             .frame(line)
@@ -308,40 +378,18 @@ impl Workspace {
                 transport::location_bar(
                     ui,
                     &mut self.session,
-                    (keyboard_shown, self.settings.show_mixer),
+                    (keyboard_shown, self.settings.show_mixer, library_shown),
                     &mut actions,
                     &mut intents,
                 );
             });
-        let bottom = egui::Frame::new()
-            .fill(p.surface)
-            .inner_margin(egui::Margin::symmetric(12, 0));
-        let height = if self.settings.show_mixer {
-            36.0 + MIXER_HEIGHT
-        } else if keyboard_shown {
-            36.0 + keyboard_panel::KEYS_HEIGHT + 8.0
-        } else {
-            36.0
-        };
-        Panel::bottom("keyboard")
-            .exact_size(height)
-            .frame(bottom)
-            .show(ui, |ui| {
-                ui.allocate_ui(egui::vec2(ui.available_width(), 36.0), |ui| {
-                    keyboard_panel::header(
-                        ui,
-                        &mut self.session,
-                        &self.keymap,
-                        self.notice.as_deref(),
-                        &mut actions,
-                    );
-                });
-                if self.settings.show_mixer {
-                    self.mixer.ui(ui, &mut self.session, &mut intents);
-                } else if keyboard_shown {
-                    self.keyboard.keys(ui, &mut self.session, &self.labels);
-                }
-            });
+        self.bottom_panel(
+            ui,
+            (keyboard_shown, library_shown),
+            &mut actions,
+            &mut intents,
+            &mut library_actions,
+        );
         if self.session.take_finished() {
             self.roll.reveal_notes();
         }
@@ -362,11 +410,66 @@ impl Workspace {
         for intent in intents {
             self.handle_intent(intent);
         }
+        for LibraryAction::Add(path) in library_actions {
+            self.import(vec![path]);
+        }
         for command in actions {
             self.run(&ctx, command);
         }
         self.update_title(&ctx);
         self.schedule_repaint(&ctx);
+    }
+
+    /// The panel at the bottom: its header, then the mixer, the library or
+    /// the keyboard (or nothing).
+    fn bottom_panel(
+        &mut self,
+        ui: &mut Ui,
+        (keyboard_shown, library_shown): (bool, bool),
+        actions: &mut Vec<Command>,
+        intents: &mut Vec<Intent>,
+        library_actions: &mut Vec<LibraryAction>,
+    ) {
+        let p = Palette::of(ui.ctx());
+        let bottom = egui::Frame::new()
+            .fill(p.surface)
+            .inner_margin(egui::Margin::symmetric(12, 0));
+        let height = if self.settings.show_mixer {
+            36.0 + MIXER_HEIGHT
+        } else if library_shown {
+            36.0 + library_panel::LIBRARY_HEIGHT
+        } else if keyboard_shown {
+            36.0 + keyboard_panel::KEYS_HEIGHT + 8.0
+        } else {
+            36.0
+        };
+        Panel::bottom("keyboard")
+            .exact_size(height)
+            .frame(bottom)
+            .show(ui, |ui| {
+                ui.allocate_ui(egui::vec2(ui.available_width(), 36.0), |ui| {
+                    keyboard_panel::header(
+                        ui,
+                        &mut self.session,
+                        &self.keymap,
+                        self.notice.as_deref(),
+                        actions,
+                    );
+                });
+                if self.settings.show_mixer {
+                    self.mixer.ui(ui, &mut self.session, intents);
+                } else if library_shown {
+                    self.library.ui(
+                        ui,
+                        &mut self.session,
+                        &mut self.settings,
+                        self.host.as_mut(),
+                        library_actions,
+                    );
+                } else if keyboard_shown {
+                    self.keyboard.keys(ui, &mut self.session, &self.labels);
+                }
+            });
     }
 
     /// Files dropped on the window: a song file opens (after asking about
@@ -381,6 +484,49 @@ impl Workspace {
                 .map(|f| f.path().to_path_buf())
                 .collect()
         });
+        if dropped.is_empty() {
+            return;
+        }
+        // Plugins, downloads and installers go to the Plugins window.
+        let plugins: Vec<PathBuf> = dropped
+            .iter()
+            .filter(|p| crate::plugin_manager::is_for_plugins(p))
+            .cloned()
+            .collect();
+        if !plugins.is_empty() {
+            ctx.input_mut(|i| {
+                i.raw
+                    .dropped_files
+                    .retain(|f| !plugins.iter().any(|p| p.as_path() == f.path()));
+            });
+            if matches!(self.dialog, None | Some(Dialog::Instruments { .. })) {
+                self.open_plugins_window();
+            }
+            self.plugin_messages.clear();
+            self.requests.push(Request::AddPlugins(plugins.clone()));
+        }
+        let dropped: Vec<PathBuf> = dropped
+            .into_iter()
+            .filter(|p| !plugins.contains(p))
+            .collect();
+        // Other folders join the sound library (decision 0023).
+        let folders: Vec<PathBuf> = dropped.iter().filter(|p| p.is_dir()).cloned().collect();
+        if !folders.is_empty() {
+            ctx.input_mut(|i| {
+                i.raw
+                    .dropped_files
+                    .retain(|f| !folders.iter().any(|p| p.as_path() == f.path()));
+            });
+            for folder in &folders {
+                library_panel::add_folder(&mut self.settings, folder.clone());
+            }
+            self.settings.show_library = true;
+            self.settings.show_mixer = false;
+        }
+        let dropped: Vec<PathBuf> = dropped
+            .into_iter()
+            .filter(|p| !folders.contains(p))
+            .collect();
         if dropped.is_empty() {
             return;
         }
@@ -413,6 +559,9 @@ impl Workspace {
             || (self.settings.show_mixer && self.mixer.is_moving())
         {
             ctx.request_repaint();
+        } else if self.session.is_previewing() || self.library.is_listing() {
+            // The library's playing mark and listings.
+            ctx.request_repaint_after(Duration::from_millis(100));
         } else if self.session.any_plugin_window_open() || !self.session.plugin_search().done {
             // Plugin windows are looked after between frames.
             ctx.request_repaint_after(Duration::from_millis(15));
@@ -644,15 +793,9 @@ impl Workspace {
             Command::KeyboardOctaveDown => s.shift_keyboard_octave(-1),
             Command::ZoomIn => self.roll.zoom(1.25),
             Command::ZoomOut => self.roll.zoom(0.8),
-            Command::ToggleKeyboard => {
-                if self.settings.show_mixer {
-                    self.settings.show_mixer = false;
-                    self.settings.show_keyboard = true;
-                } else {
-                    self.settings.show_keyboard = !self.settings.show_keyboard;
-                }
+            Command::ToggleKeyboard | Command::ToggleMixer | Command::ToggleLibrary => {
+                self.toggle_panel(command);
             }
-            Command::ToggleMixer => self.settings.show_mixer = !self.settings.show_mixer,
             Command::SwitchView => {
                 self.cancel_drag();
                 match self.session.view() {
@@ -683,6 +826,39 @@ impl Workspace {
             // Splitting acts on clips, in the song view.
             Command::Split => {}
             Command::UserGuide => self.host.open_user_guide(),
+        }
+    }
+
+    /// Shows or hides the keyboard, the mixer or the library: the bottom
+    /// panel shows one of them at a time.
+    fn toggle_panel(&mut self, command: Command) {
+        let s = &mut self.settings;
+        match command {
+            Command::ToggleKeyboard => {
+                if s.show_mixer || s.show_library {
+                    s.show_mixer = false;
+                    s.show_library = false;
+                    s.show_keyboard = true;
+                } else {
+                    s.show_keyboard = !s.show_keyboard;
+                }
+            }
+            Command::ToggleMixer => {
+                s.show_mixer = !s.show_mixer;
+                if s.show_mixer {
+                    s.show_library = false;
+                }
+            }
+            Command::ToggleLibrary => {
+                let show = !s.show_library || s.show_mixer;
+                s.show_library = show;
+                if show {
+                    s.show_mixer = false;
+                } else {
+                    self.session.stop_preview();
+                }
+            }
+            _ => {}
         }
     }
 
@@ -852,6 +1028,14 @@ impl Workspace {
                         }
                     }
                 });
+            }
+            if ui
+                .button(text::MANAGE_PLUGINS)
+                .on_hover_text(text::MANAGE_PLUGINS_HINT)
+                .clicked()
+            {
+                self.open_plugins_window();
+                ui.close();
             }
             ui.separator();
             ui.menu_button(text::THEME, |ui| self.theme_menu(ui));
@@ -1170,7 +1354,42 @@ impl Workspace {
             Dialog::Instruments { search } => {
                 let (search, close) = self.instrument_chooser(ctx, search);
                 keep = !close;
+                if matches!(self.dialog, Some(Dialog::Plugins { .. })) {
+                    // "Plugins…" in the chooser opened the Plugins window.
+                    return;
+                }
                 Dialog::Instruments { search }
+            }
+            Dialog::Plugins {
+                mut window,
+                from_chooser,
+            } => {
+                let mut close = false;
+                let response = modal("plugins", ctx).show(ctx, |ui| {
+                    let mut parts = crate::plugin_manager::Parts {
+                        session: &self.session,
+                        settings: &mut self.settings,
+                        host: self.host.as_mut(),
+                        requests: &mut self.requests,
+                        places: &self.plugin_places,
+                        messages: &self.plugin_messages,
+                    };
+                    close = window.contents(ui, &mut parts);
+                });
+                if response.should_close() {
+                    close = true;
+                }
+                if close {
+                    keep = from_chooser;
+                    Dialog::Instruments {
+                        search: String::new(),
+                    }
+                } else {
+                    Dialog::Plugins {
+                        window,
+                        from_chooser,
+                    }
+                }
             }
             Dialog::Exporting => {
                 let progress = self.session.export_progress();
@@ -1198,11 +1417,35 @@ impl Workspace {
         }
     }
 
+    /// Adds a track with an included instrument (a SoundFont asks for its
+    /// file first). Returns whether a track was added.
+    fn add_included(&mut self, which: Included) -> bool {
+        match which {
+            Included::Piano => {
+                self.session.add_piano_track();
+            }
+            Included::Drums => {
+                self.session.add_drum_track();
+            }
+            Included::Synth => {
+                self.session.add_synth_track();
+            }
+            Included::SoundFont => {
+                let Some(file) = self.host.choose_soundfont() else {
+                    return false;
+                };
+                self.session.add_soundfont_track(&file);
+            }
+        }
+        true
+    }
+
     /// The instrument chooser: the included instruments, then the plugins
     /// found on this computer, with a search field. Returns the search text
     /// and whether the chooser closes.
     fn instrument_chooser(&mut self, ctx: &egui::Context, mut search: String) -> (String, bool) {
         let mut close = false;
+        let mut manage = false;
         let plugins = self.session.plugins_of(PluginKind::Instrument);
         let found = self.session.plugin_search().clone();
         let response = modal("instruments", ctx).show(ctx, |ui| {
@@ -1232,6 +1475,11 @@ impl Workspace {
                         (text::ADD_PIANO, text::ADD_PIANO_HINT, Included::Piano),
                         (text::ADD_DRUMS, text::ADD_DRUMS_HINT, Included::Drums),
                         (text::ADD_SYNTH, text::ADD_SYNTH_HINT, Included::Synth),
+                        (
+                            text::ADD_SOUNDFONT,
+                            text::ADD_SOUNDFONT_HINT,
+                            Included::SoundFont,
+                        ),
                     ];
                     let included: Vec<_> = included
                         .into_iter()
@@ -1240,12 +1488,7 @@ impl Workspace {
                     if !included.is_empty() {
                         ui.label(RichText::new(text::INCLUDED).weak());
                         for (name, hint, which) in included {
-                            if choice_row(ui, name, hint) {
-                                match which {
-                                    Included::Piano => self.session.add_piano_track(),
-                                    Included::Drums => self.session.add_drum_track(),
-                                    Included::Synth => self.session.add_synth_track(),
-                                };
+                            if choice_row(ui, name, hint) && self.add_included(which) {
                                 close = true;
                             }
                         }
@@ -1278,8 +1521,24 @@ impl Workspace {
                 {
                     self.requests.push(Request::FindPlugins);
                 }
+                if ui
+                    .button(text::MANAGE_PLUGINS)
+                    .on_hover_text(text::MANAGE_PLUGINS_HINT)
+                    .clicked()
+                {
+                    manage = true;
+                }
             });
         });
+        if manage {
+            // The chooser comes back once the Plugins window closes.
+            self.plugin_messages.clear();
+            self.dialog = Some(Dialog::Plugins {
+                window: PluginsWindow::default(),
+                from_chooser: true,
+            });
+            return (search, false);
+        }
         if response.should_close() {
             close = true;
         }
@@ -1381,7 +1640,12 @@ const PROBLEMS_SHOWN: usize = 3;
 
 /// Under the plugin list: the search still running, nothing found, nothing
 /// matching, and files that could not be opened.
-fn search_state(ui: &mut Ui, found: &crate::session::PluginSearch, none: bool, shown: usize) {
+pub(crate) fn search_state(
+    ui: &mut Ui,
+    found: &crate::session::PluginSearch,
+    none: bool,
+    shown: usize,
+) {
     if !found.done {
         ui.label(text::looking_for_plugins(found.checked, found.total));
     } else if none {

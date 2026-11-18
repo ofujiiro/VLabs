@@ -125,6 +125,13 @@ impl Session {
         track: Option<daw_model::TrackId>,
         at: Ticks,
     ) {
+        // SoundFonts become instruments (decision 0023).
+        let (soundfonts, files): (Vec<PathBuf>, Vec<PathBuf>) = files.into_iter().partition(|f| {
+            daw_formats::library::ItemKind::of(f) == Some(daw_formats::library::ItemKind::SoundFont)
+        });
+        for file in soundfonts {
+            self.add_soundfont_track(&file);
+        }
         let (midi_files, others): (Vec<PathBuf>, Vec<PathBuf>) = files
             .into_iter()
             .filter(|f| {

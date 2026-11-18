@@ -24,7 +24,7 @@ grid with a recorded acoustic kit or an electronic kit, write melodies in
 the piano roll with the bundled piano, the built-in synthesizer (two
 oscillators, a filter, envelopes, an LFO and presets) or a CLAP or VST3
 instrument, record your voice or guitar from the computer's microphone,
-bring in WAV, FLAC, MP3, Ogg and MIDI files, cut, trim and fade audio clips
+bring in WAV, AIFF, FLAC, MP3, Ogg and MIDI files, cut, trim and fade audio clips
 right on the timeline, arrange everything on one timeline (right-click a
 track to place any of its patterns), mix with volume, pan, mute, solo and
 an effect chain per track (EQ, compressor, reverb, delay, limiter, and
@@ -39,7 +39,11 @@ it and places whole chords with one click; transpose by intervals; change
 the tempo (suddenly or gradually) and the time signature anywhere; write
 triplets, quintuplets and septuplets; swing a pattern. Your work is saved
 automatically, even a recording in progress, and offered back after a
-crash. A Windows installer and a Linux AppImage are built for each
+crash. Add plugins by dropping a downloaded `.vst3`, `.clap` or `.zip` on
+the window, manage them in the Plugins window (Windows plugins on Linux are
+set up through Wine and yabridge), browse and hear folders of samples in
+the sound library and drag them into the song, and play SoundFont (`.sf2`)
+instruments. A Windows installer and a Linux AppImage are built for each
 milestone, with a user guide (F1 in the program, or
 [docs/user-guide.md](docs/user-guide.md)). See [ROADMAP.md](ROADMAP.md) for
 what to try and what comes next.
@@ -67,9 +71,14 @@ what to try and what comes next.
 
 ## Plugins
 
-VLabs hosts CLAP and VST3 instruments and effects. It looks for them in the
-standard folders when it starts, remembering what it learnt so later starts
-are quick:
+VLabs hosts CLAP and VST3 instruments and effects. **Plugins…** in the menu
+opens the Plugins window, which lists them and adds new ones: drop a plugin
+file, its folder or the `.zip` it came in on the window (or use the
+window's buttons) and VLabs copies it into a plugin folder of its own,
+which it always searches. Plugins added this way can be removed there too,
+and folders of your own can be added to the search. VLabs also looks in
+the standard folders when it starts, remembering what it learnt so later
+starts are quick:
 
 - Linux: `~/.clap`, `~/.vst3`, `/usr/lib/clap`, `/usr/lib/vst3`,
   `/usr/local/lib/clap` and `/usr/local/lib/vst3`;
@@ -78,11 +87,13 @@ are quick:
 - anywhere listed in the `CLAP_PATH` environment variable.
 
 A plugin must be built for the system it runs on: a plugin made for Windows
-does not load on Linux, and the other way round. The instrument chooser lists
-the plugin files it found but cannot use, and says why. Windows-only plugins
-can be used on Linux with
-[yabridge](https://github.com/robbert-vdh/yabridge): once yabridge has set
-them up in those folders, VLabs sees them like native plugins. Most plugin
+does not load on Linux, and the other way round. The Plugins window and the
+instrument chooser list the plugin files that cannot be used, and say why.
+Windows-only plugins can be used on Linux through Wine and
+[yabridge](https://github.com/robbert-vdh/yabridge): with both installed,
+VLabs sets up each Windows plugin added in the Plugins window itself (and
+plugins yabridge set up before appear too). VST2 plugins (`.dll`) are not
+supported. Most plugin
 windows need X11; on a Wayland desktop they run through XWayland, which is
 installed by default on common distributions.
 

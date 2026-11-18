@@ -50,6 +50,12 @@ pub enum Icon {
     Window,
     /// A line through points: automation.
     Automation,
+    /// A folder: the sound library, and its folders.
+    Folder,
+    /// A few bars of a waveform: a sound file.
+    Sound,
+    /// Short bars at different heights: notes (a MIDI file).
+    Notes,
 }
 
 /// Draws an icon into `rect` with `color`.
@@ -208,6 +214,48 @@ pub fn paint(painter: &Painter, icon: Icon, rect: Rect, color: Color32) {
                 CornerRadius::same(2),
                 color,
             );
+        }
+        Icon::Folder => {
+            let thin = Stroke::new(stroke.width * 0.8, color);
+            let body = Rect::from_min_max(
+                pos2(c.x - s * 0.32, c.y - s * 0.16),
+                pos2(c.x + s * 0.32, c.y + s * 0.24),
+            );
+            painter.rect_stroke(body, CornerRadius::same(1), thin, StrokeKind::Middle);
+            let tab = vec![
+                pos2(body.left(), body.top()),
+                pos2(body.left(), body.top() - s * 0.09),
+                pos2(c.x - s * 0.06, body.top() - s * 0.09),
+                pos2(c.x + s * 0.02, body.top()),
+            ];
+            painter.add(Shape::line(tab, thin));
+        }
+        Icon::Sound => {
+            let thin = Stroke::new(stroke.width * 0.8, color);
+            for (column, height) in [
+                (-2.0, 0.18),
+                (-1.0, 0.42),
+                (0.0, 0.62),
+                (1.0, 0.34),
+                (2.0, 0.22),
+            ] {
+                let x = c.x + column * s * 0.13;
+                let h = height * s / 2.0;
+                painter.line_segment([pos2(x, c.y - h), pos2(x, c.y + h)], thin);
+            }
+        }
+        Icon::Notes => {
+            for (row, from, to) in [(-1.0, -0.3, 0.0), (0.0, 0.05, 0.3), (1.0, -0.15, 0.15)] {
+                let y = c.y + row * s * 0.18;
+                painter.rect_filled(
+                    Rect::from_min_max(
+                        pos2(c.x + from * s, y - s * 0.06),
+                        pos2(c.x + to * s, y + s * 0.06),
+                    ),
+                    CornerRadius::same(1),
+                    color,
+                );
+            }
         }
         Icon::Automation => {
             let w = s * 0.33;

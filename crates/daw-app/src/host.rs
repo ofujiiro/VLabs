@@ -12,6 +12,8 @@ pub struct DialogHost {
     folder: Option<PathBuf>,
     /// Where sound files were last imported from.
     sounds: Option<PathBuf>,
+    /// Where plugins (or folders) were last chosen from.
+    plugins: Option<PathBuf>,
 }
 
 impl DialogHost {
@@ -107,7 +109,7 @@ impl Host for DialogHost {
         let mut dialog = rfd::FileDialog::new()
             .add_filter(
                 text::IMPORT_FILE_TYPE,
-                &["wav", "flac", "mp3", "ogg", "mid", "midi"],
+                &["wav", "aif", "aiff", "flac", "mp3", "ogg", "mid", "midi"],
             )
             .set_title(text::IMPORT_TITLE);
         if let Some(folder) = self.sounds.as_ref().or(self.folder.as_ref()) {
@@ -118,6 +120,54 @@ impl Host for DialogHost {
             self.sounds = Some(folder.to_path_buf());
         }
         files
+    }
+
+    fn choose_plugin_files(&mut self) -> Vec<PathBuf> {
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter(
+                text::PLUGIN_FILE_TYPE,
+                &["vst3", "clap", "zip", "exe", "msi", "dll"],
+            )
+            .set_title(text::CHOOSE_PLUGINS_TITLE);
+        if let Some(folder) = &self.plugins {
+            dialog = dialog.set_directory(folder);
+        }
+        let files = dialog.pick_files().unwrap_or_default();
+        if let Some(folder) = files.first().and_then(|f| f.parent()) {
+            self.plugins = Some(folder.to_path_buf());
+        }
+        files
+    }
+
+    fn choose_soundfont(&mut self) -> Option<PathBuf> {
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter(text::SOUNDFONT_FILE_TYPE, &["sf2"])
+            .set_title(text::CHOOSE_SOUNDFONT_TITLE);
+        if let Some(folder) = self.sounds.as_ref().or(self.folder.as_ref()) {
+            dialog = dialog.set_directory(folder);
+        }
+        let file = dialog.pick_file();
+        if let Some(folder) = file.as_deref().and_then(Path::parent) {
+            self.sounds = Some(folder.to_path_buf());
+        }
+        file
+    }
+
+    fn choose_folder(&mut self, title: &str) -> Option<PathBuf> {
+        let mut dialog = rfd::FileDialog::new().set_title(title);
+        if let Some(folder) = &self.plugins {
+            dialog = dialog.set_directory(folder);
+        }
+        let folder = dialog.pick_folder();
+        if let Some(parent) = folder.as_deref().and_then(Path::parent) {
+            self.plugins = Some(parent.to_path_buf());
+        }
+        folder
+    }
+
+    fn open_folder(&mut self, folder: &Path) {
+        let _ = std::fs::create_dir_all(folder);
+        open_in_browser(&folder.display().to_string());
     }
 }
 

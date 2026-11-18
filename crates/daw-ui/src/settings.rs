@@ -37,6 +37,9 @@ pub enum LabelChoice {
 /// The most recent files kept in the menu.
 pub const RECENT_FILES: usize = 8;
 
+/// The most folders kept in each folder list (plugins, sound library).
+pub const MAX_FOLDERS: usize = 64;
+
 /// Everything remembered between sessions. Missing or unreadable fields
 /// take their defaults, so old and damaged settings files still load.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -69,6 +72,12 @@ pub struct Settings {
     pub shortcuts: BTreeMap<String, Vec<String>>,
     /// Recently opened or saved songs, newest first.
     pub recent_files: Vec<PathBuf>,
+    /// Folders searched for plugins besides the usual ones (decision 0023).
+    pub plugin_folders: Vec<PathBuf>,
+    /// The sound library's folders (decision 0023).
+    pub sound_folders: Vec<PathBuf>,
+    /// Whether the library is shown (in place of the keyboard).
+    pub show_library: bool,
 }
 
 impl Default for Settings {
@@ -87,6 +96,9 @@ impl Default for Settings {
             key_labels: LabelChoice::Automatic,
             shortcuts: BTreeMap::new(),
             recent_files: Vec::new(),
+            plugin_folders: Vec::new(),
+            sound_folders: Vec::new(),
+            show_library: false,
         }
     }
 }
@@ -117,6 +129,11 @@ impl Settings {
         }
         self.keyboard_velocity = self.keyboard_velocity.clamp(0.05, 1.0);
         self.recent_files.truncate(RECENT_FILES);
+        for folders in [&mut self.plugin_folders, &mut self.sound_folders] {
+            let mut seen = std::collections::BTreeSet::new();
+            folders.retain(|f| f.is_absolute() && seen.insert(f.clone()));
+            folders.truncate(MAX_FOLDERS);
+        }
     }
 
     /// Puts a file at the top of the recent list.
@@ -159,6 +176,19 @@ mod tests {
         assert_eq!(partial.theme, ThemeChoice::Light);
         assert_eq!(partial.count_in_bars, 4, "out-of-range values are clamped");
         assert!(partial.show_keyboard, "missing values take their defaults");
+    }
+
+    #[test]
+    fn folder_lists_keep_each_folder_once() {
+        let root = if cfg!(windows) { "C:\\" } else { "/" };
+        let sounds = PathBuf::from(root).join("sounds");
+        let json = serde_json::json!({
+            "sound_folders": [sounds, sounds, "relative/folder"],
+            "plugin_folders": (0..100).map(|i| PathBuf::from(root).join(i.to_string())).collect::<Vec<_>>(),
+        });
+        let settings = Settings::from_json(&json.to_string());
+        assert_eq!(settings.sound_folders, vec![sounds]);
+        assert_eq!(settings.plugin_folders.len(), MAX_FOLDERS);
     }
 
     #[test]

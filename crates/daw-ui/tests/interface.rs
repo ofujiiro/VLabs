@@ -23,7 +23,8 @@ use daw_engine::{
 };
 use daw_model::{AutomationPoint, AutomationTarget, ChainPlace, EffectKind, Ticks};
 use daw_ui::{
-    Host, KeyLabels, LayoutFamily, PluginSearch, Session, Settings, View, Workspace, text,
+    BridgeState, Host, KeyLabels, LayoutFamily, PluginJobDone, PluginPlaces, PluginSearch, Request,
+    Session, Settings, View, Workspace, text,
 };
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, vec2};
 use egui_kittest::Harness;
@@ -36,6 +37,10 @@ struct FakeHost {
     export_to: Arc<Mutex<Option<PathBuf>>>,
     audio: Arc<Mutex<Vec<PathBuf>>>,
     asked: Arc<Mutex<u32>>,
+    plugin_files: Arc<Mutex<Vec<PathBuf>>>,
+    folder: Arc<Mutex<Option<PathBuf>>>,
+    shown_folders: Arc<Mutex<Vec<PathBuf>>>,
+    soundfont: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl Host for FakeHost {
@@ -61,6 +66,28 @@ impl Host for FakeHost {
     fn choose_audio_files(&mut self) -> Vec<PathBuf> {
         *self.asked.lock().unwrap() += 1;
         self.audio.lock().unwrap().clone()
+    }
+
+    fn choose_plugin_files(&mut self) -> Vec<PathBuf> {
+        *self.asked.lock().unwrap() += 1;
+        self.plugin_files.lock().unwrap().clone()
+    }
+
+    fn choose_soundfont(&mut self) -> Option<PathBuf> {
+        *self.asked.lock().unwrap() += 1;
+        self.soundfont.lock().unwrap().clone()
+    }
+
+    fn choose_folder(&mut self, _title: &str) -> Option<PathBuf> {
+        *self.asked.lock().unwrap() += 1;
+        self.folder.lock().unwrap().clone()
+    }
+
+    fn open_folder(&mut self, folder: &std::path::Path) {
+        self.shown_folders
+            .lock()
+            .unwrap()
+            .push(folder.to_path_buf());
     }
 }
 
@@ -2063,4 +2090,423 @@ fn midi_and_dawproject_files_open_as_new_songs_and_import_into_one() {
     assert_eq!(f.session().project().tracks.len(), 1);
     assert_eq!(f.session().project().tracks[0].name, "Lead");
     std::fs::remove_dir_all(folder).ok();
+}
+
+// ----- Plugins and sound libraries (decision 0023)
+
+/// Opens the Plugins window from the menu.
+fn open_plugins_window(f: &mut Fixture) {
+    f.harness.get_by_label(text::MENU).click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::MANAGE_PLUGINS).click();
+    f.harness.run_steps(4);
+}
+
+#[test]
+fn the_plugins_window_lists_every_plugin_and_removes_the_ones_added_here() {
+    let mut f = new_song();
+    f.workspace_mut()
+        .session_mut()
+        .set_plugins(made_up_plugins(), finished_search());
+    let mine = PathBuf::from("/nowhere/Space Echo.clap");
+    f.workspace_mut().set_plugin_places(PluginPlaces {
+        usual: vec![PathBuf::from("/usr/lib/clap")],
+        own: Some(PathBuf::from("/data/plugins")),
+        added: vec![mine.clone()],
+        bridge: None,
+        busy: false,
+    });
+    open_plugins_window(&mut f);
+    f.harness.get_by_label(text::PLUGINS_TITLE);
+    f.harness
+        .get_by_label(&text::counted(text::INSTRUMENTS_HEADING, 1));
+    f.harness
+        .get_by_label(&text::counted(text::EFFECTS_HEADING, 1));
+    f.harness.get_by_label("Cloud Synth");
+    f.harness.get_by_label("Space Echo");
+    // Only the plugin added here can be removed here.
+    assert_eq!(f.harness.query_all_by_label(text::REMOVE).count(), 1);
+    f.harness.get_by_label(text::REMOVE).click();
+    f.harness.run_steps(2);
+    assert!(
+        f.workspace_mut()
+            .take_requests()
+            .contains(&Request::RemovePlugin(mine.clone()))
+    );
+    // The program says what it did; the window shows it.
+    f.workspace_mut().plugin_job_done(&PluginJobDone {
+        removed: vec![mine],
+        ..PluginJobDone::default()
+    });
+    f.harness.run_steps(2);
+    // In the window, and on the status line under it.
+    assert!(f.harness.query_all_by_label("Removed: Space Echo.").count() >= 1);
+    // Searching narrows the list.
+    f.harness
+        .get_by_role(egui::accesskit::Role::TextInput)
+        .click();
+    f.harness.run_steps(2);
+    f.harness.event(Event::Text("cloud".to_owned()));
+    f.harness.run_steps(2);
+    assert!(f.harness.query_by_label("Space Echo").is_none());
+    f.harness.get_by_label("Cloud Synth");
+}
+
+#[test]
+fn a_plugin_dropped_on_the_window_is_added_and_the_outcome_explained() {
+    let mut f = new_song();
+    let download = PathBuf::from("/downloads/Reverb.vst3");
+    let old = PathBuf::from("/downloads/Old.dll");
+    f.harness.input_mut().dropped_files.extend([
+        Arc::new(DroppedSound(download.clone())) as Arc<dyn egui::DroppedFile + Send + Sync>,
+        Arc::new(DroppedSound(old.clone())),
+    ]);
+    f.harness.step();
+    f.harness.run_steps(3);
+    f.harness.get_by_label(text::PLUGINS_TITLE);
+    let requests = f.workspace_mut().take_requests();
+    assert!(
+        requests.contains(&Request::AddPlugins(vec![download, old.clone()])),
+        "{requests:?}"
+    );
+    assert!(
+        f.session()
+            .project()
+            .tracks
+            .iter()
+            .all(|t| !t.instrument.is_audio()),
+        "plugins are not imported as sounds"
+    );
+    f.workspace_mut().plugin_job_done(&PluginJobDone {
+        added: vec![PathBuf::from("/data/plugins/vst3/Reverb.vst3")],
+        skipped: vec![(old, daw_plugin_host::install::Skip::Vst2)],
+        ..PluginJobDone::default()
+    });
+    f.harness.run_steps(2);
+    assert!(f.harness.query_all_by_label("Added: Reverb.").count() >= 1);
+    f.harness.get_by_label_contains("Old.dll is a VST2 plugin");
+}
+
+#[test]
+fn plugins_come_from_files_and_from_folders_searched_where_they_are() {
+    let mut f = new_song();
+    let files = vec![PathBuf::from("/downloads/Synth.zip")];
+    *f.host.plugin_files.lock().unwrap() = files.clone();
+    open_plugins_window(&mut f);
+    f.harness.get_by_label(text::ADD_PLUGIN_FILES).click();
+    f.harness.run_steps(2);
+    assert!(
+        f.workspace_mut()
+            .take_requests()
+            .contains(&Request::AddPlugins(files))
+    );
+    // A folder of the person's own is searched where it is.
+    let folder = PathBuf::from("/music/plugins");
+    *f.host.folder.lock().unwrap() = Some(folder.clone());
+    f.harness.get_by_label(text::FOLDERS_SEARCHED).click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::SEARCH_ANOTHER_FOLDER).click();
+    f.harness.run_steps(2);
+    assert_eq!(
+        f.workspace().settings().plugin_folders,
+        vec![folder.clone()]
+    );
+    assert!(
+        f.workspace_mut()
+            .take_requests()
+            .contains(&Request::FindPlugins)
+    );
+    f.harness.get_by_label(&folder.display().to_string());
+    // Away from the button just used (its hint would cover the list).
+    f.harness.hover_at(Pos2::new(4.0, 4.0));
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::REMOVE).click();
+    f.harness.run_steps(2);
+    assert!(f.workspace().settings().plugin_folders.is_empty());
+    assert!(
+        f.workspace_mut()
+            .take_requests()
+            .contains(&Request::FindPlugins)
+    );
+}
+
+#[test]
+fn windows_plugins_on_linux_say_what_is_missing() {
+    let mut f = new_song();
+    f.workspace_mut().set_plugin_places(PluginPlaces {
+        bridge: Some(BridgeState {
+            wine: true,
+            yabridge: false,
+        }),
+        ..PluginPlaces::default()
+    });
+    open_plugins_window(&mut f);
+    f.harness
+        .get_by_label(&text::windows_plugins_missing(true, false));
+    f.harness.get_by_label(text::WINDOWS_PLUGINS_STEPS[1]);
+    f.harness.get_by_label(text::CHECK_AGAIN).click();
+    f.harness.run_steps(2);
+    assert!(
+        f.workspace_mut()
+            .take_requests()
+            .contains(&Request::SetUpWindowsPlugins)
+    );
+}
+
+#[test]
+fn the_instrument_chooser_leads_to_the_plugins_window_and_back() {
+    let mut f = new_song();
+    f.workspace_mut()
+        .session_mut()
+        .set_plugins(made_up_plugins(), finished_search());
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    f.harness
+        .get_by_label(&format!("+ {}", text::ADD_INSTRUMENT))
+        .click();
+    f.harness.run_steps(3);
+    f.harness.get_by_label(text::MANAGE_PLUGINS).click();
+    f.harness.run_steps(4);
+    f.harness.get_by_label(text::PLUGINS_TITLE);
+    assert!(f.harness.query_by_label(text::INSTRUMENTS_TITLE).is_none());
+    f.harness.get_by_label(text::CLOSE).click();
+    f.harness.run_steps(4);
+    f.harness.get_by_label(text::INSTRUMENTS_TITLE);
+}
+
+/// A folder of sounds for the library: two drum sounds, a loop, and a
+/// SoundFont with two presets.
+fn sound_folder() -> PathBuf {
+    let folder = std::env::temp_dir().join(format!(
+        "interface-library-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    ));
+    for (relative, seconds) in [
+        ("Drums/Kick.wav", 0.5),
+        ("Drums/Snare.wav", 0.5),
+        ("Loops/Groove.wav", 1.0),
+    ] {
+        let path = folder.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::copy(tone_file("tone.wav", seconds), &path).unwrap();
+    }
+    let mut font = daw_dsp::sf2_writer::sine_test_font(48_000);
+    font.presets.push(daw_dsp::sf2_writer::PresetDef {
+        name: "Second sine".to_owned(),
+        bank: 0,
+        program: 5,
+        instrument: 0,
+    });
+    std::fs::write(folder.join("Tones.sf2"), font.to_bytes()).unwrap();
+    folder
+}
+
+/// Draws frames until `label` is on screen (a folder being listed).
+fn wait_for_label(f: &mut Fixture, label: &str) {
+    let start = std::time::Instant::now();
+    while f.harness.query_by_label(label).is_none() {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(20),
+            "{label} never appeared"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        f.harness.run_steps(1);
+    }
+}
+
+/// Shows the library and adds `folder` to it, as a person does.
+fn open_library(f: &mut Fixture, folder: &std::path::Path) {
+    *f.host.folder.lock().unwrap() = Some(folder.to_path_buf());
+    f.harness.get_by_label(text::SHOW_LIBRARY).click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::ADD_SOUND_FOLDER).click();
+    f.harness.run_steps(2);
+    wait_for_label(f, "Loops");
+}
+
+/// The loudest sample the engine plays over a few blocks.
+fn loudest(f: &mut Fixture) -> f32 {
+    let mut buffer = vec![0.0_f32; 1024];
+    let mut loudest = 0.0_f32;
+    for _ in 0..4 {
+        f.processor.process(&mut buffer, 2);
+        loudest = buffer.iter().fold(loudest, |m, s| m.max(s.abs()));
+    }
+    loudest
+}
+
+#[test]
+fn the_library_browses_folders_and_plays_a_sound_when_clicked() {
+    let mut f = new_song();
+    let folder = sound_folder();
+    open_library(&mut f, &folder);
+    assert_eq!(f.workspace().settings().sound_folders, vec![folder.clone()]);
+    assert!(f.workspace().settings().show_library);
+    for label in ["Drums", "Loops", "Tones.sf2"] {
+        f.harness.get_by_label(label);
+    }
+    assert!(
+        f.harness.query_by_label(text::ON_SCREEN_KEYBOARD).is_none(),
+        "in its place"
+    );
+    f.harness.get_by_label("Drums").click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label("Snare.wav");
+    // A click plays it: read in the background, then heard.
+    f.harness.get_by_label("Kick.wav").click();
+    f.harness.run_steps(2);
+    let kick = folder.join("Drums").join("Kick.wav");
+    assert_eq!(f.session().previewing(), Some(kick.as_path()));
+    let start = std::time::Instant::now();
+    while loudest(&mut f) < 0.1 {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(20),
+            "never heard"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        f.harness.run_steps(1);
+    }
+    // Clicked again, it stops.
+    f.harness.get_by_label("Kick.wav").click();
+    f.harness.run_steps(2);
+    assert!(f.session().previewing().is_none());
+    assert!(loudest(&mut f) < 1e-6);
+    // Back up to the top.
+    f.harness.get_by_label(text::LIBRARY_UP).click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label("Loops");
+}
+
+#[test]
+fn searching_the_library_looks_in_every_folder() {
+    let mut f = new_song();
+    let folder = sound_folder();
+    open_library(&mut f, &folder);
+    f.harness
+        .get_by_role(egui::accesskit::Role::TextInput)
+        .click();
+    f.harness.run_steps(2);
+    f.harness.event(Event::Text("snare".to_owned()));
+    f.harness.run_steps(2);
+    f.harness.get_by_label("Snare.wav");
+    assert!(f.harness.query_by_label("Kick.wav").is_none());
+    assert!(f.harness.query_by_label("Loops").is_none());
+}
+
+#[test]
+fn a_sound_dragged_from_the_library_onto_the_song_lands_where_it_is_dropped() {
+    let mut f = new_song();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    let folder = sound_folder();
+    open_library(&mut f, &folder);
+    f.harness.get_by_label("Loops").click();
+    f.harness.run_steps(2);
+    let from = f.harness.get_by_label("Groove.wav").rect().center();
+    let tracks = f.session().project().tracks.len();
+    // Below the tracks, at bar 2.
+    let to = Pos2::new(f.song_x(Ticks::WHOLE) + 2.0, f.row_top(tracks) + 20.0);
+    f.drag(from, to, Modifiers::NONE);
+    f.wait_for_audio();
+    let last = f.session().project().tracks.last().unwrap();
+    assert_eq!(f.session().project().tracks.len(), tracks + 1);
+    assert!(last.instrument.is_audio());
+    assert_eq!(last.name, "Groove");
+    assert_eq!(last.clips.len(), 1);
+    assert_eq!(
+        last.clips[0].start,
+        Ticks::WHOLE,
+        "on the beat it was dropped on"
+    );
+}
+
+#[test]
+fn a_soundfont_from_the_library_becomes_an_instrument_with_its_presets() {
+    let mut f = new_song();
+    let folder = sound_folder();
+    open_library(&mut f, &folder);
+    let row = f.harness.get_by_label("Tones.sf2").rect().center();
+    f.right_click(row);
+    f.harness.get_by_label(text::ADD_TO_SONG).click();
+    f.harness.run_steps(3);
+    let track = f.session().project().tracks.last().unwrap().clone();
+    assert_eq!(track.name, "Tones");
+    let file = folder.join("Tones.sf2").to_string_lossy().into_owned();
+    assert_eq!(
+        track.instrument,
+        daw_model::Instrument::SoundFont {
+            source: daw_model::SoundSource::File(file),
+            bank: 0,
+            program: 0,
+        }
+    );
+    f.harness.get_by_label(&text::soundfont_track("Tones.sf2"));
+    // Its presets, in the track menu of its pattern.
+    f.workspace_mut().session_mut().open_track(track.id);
+    f.harness.run_steps(3);
+    f.harness
+        .get_by(|node| {
+            node.role() == egui::accesskit::Role::Button
+                && node.label().is_some_and(|label| label.trim() == "Tones")
+        })
+        .click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label("0:005  Second sine").click();
+    f.harness.run_steps(2);
+    assert_eq!(f.session().soundfont_preset(track.id), Some((0, 5)));
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_SOUNDFONT_PRESET)
+    );
+    assert!(
+        f.harness
+            .query_by(|node| node
+                .label()
+                .is_some_and(|l| l.contains("Tones") && l.contains("plain sound")))
+            .is_none(),
+        "the SoundFont plays (no plain sound in its place)"
+    );
+}
+
+#[test]
+fn a_folder_dropped_on_the_window_joins_the_library() {
+    let mut f = new_song();
+    let folder = sound_folder();
+    f.harness
+        .input_mut()
+        .dropped_files
+        .push(Arc::new(DroppedSound(folder.clone())));
+    f.harness.step();
+    wait_for_label(&mut f, "Loops");
+    assert_eq!(f.workspace().settings().sound_folders, vec![folder]);
+    assert!(f.workspace().settings().show_library);
+}
+
+#[test]
+fn the_instrument_chooser_adds_a_soundfont_track() {
+    let mut f = new_song();
+    let folder = sound_folder();
+    *f.host.soundfont.lock().unwrap() = Some(folder.join("Tones.sf2"));
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    f.harness
+        .get_by_label(&format!("+ {}", text::ADD_INSTRUMENT))
+        .click();
+    f.harness.run_steps(3);
+    f.harness
+        .get_by_label_contains(text::ADD_SOUNDFONT_HINT)
+        .click();
+    f.harness.run_steps(3);
+    let last = f.session().project().tracks.last().unwrap();
+    assert_eq!(last.name, "Tones");
+    assert!(matches!(
+        last.instrument,
+        daw_model::Instrument::SoundFont {
+            source: daw_model::SoundSource::File(_),
+            ..
+        }
+    ));
 }

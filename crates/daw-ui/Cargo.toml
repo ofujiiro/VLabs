@@ -16,10 +16,11 @@ daw-engine.workspace = true
 daw-formats.workspace = true
 daw-ident.workspace = true
 daw-model.workspace = true
+# Plugin files and the Plugins window (decision 0023).
+daw-plugin-host.workspace = true
 egui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
-daw-plugin-host.workspace = true
 egui_kittest.workspace = true

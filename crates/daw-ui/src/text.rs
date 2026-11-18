@@ -139,6 +139,7 @@ pub fn command_name(command: crate::keys::Command) -> &'static str {
         C::ZoomOut => "Zoom out",
         C::ToggleKeyboard => "Show or hide the keyboard",
         C::ToggleMixer => "Show or hide the mixer",
+        C::ToggleLibrary => "Show or hide the sound library",
         C::SwitchView => "Switch between the song and the pattern",
         C::Export => "Export",
         C::Split => "Split the clip at the play position",
@@ -673,6 +674,14 @@ pub fn problem(problem: &daw_engine::Problem) -> String {
         P::MissingSound(name) => {
             format!("The sound \"{name}\" is missing from the program; a plain sound plays instead")
         }
+        P::MissingFile(path) => {
+            let name = std::path::Path::new(path)
+                .file_name()
+                .map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
+            format!(
+                "The file \"{name}\" is not on this computer (it was at {path}); a plain sound plays instead"
+            )
+        }
         P::UnreadableSound { sound, reason } => {
             format!("Could not read the sound {sound}; a plain sound plays instead ({reason})")
         }
@@ -688,6 +697,69 @@ pub fn problem(problem: &daw_engine::Problem) -> String {
             format!("The plugin \"{plugin}\" did not take its saved settings ({reason})")
         }
     }
+}
+
+// The sound library and SoundFonts (decision 0023).
+pub const LIBRARY: &str = "Library";
+pub const SHOW_LIBRARY: &str = "Show the sound library";
+pub const HIDE_LIBRARY: &str = "Hide the sound library";
+pub const ADD_SOUND_FOLDER: &str = "Add a folder…";
+pub const ADD_SOUND_FOLDER_HINT: &str =
+    "Add a folder of sounds, MIDI files or SoundFonts to the library (nothing is copied)";
+pub const LIBRARY_EMPTY: &str = "Add a folder of sounds to find, hear and use them here: WAV, AIFF, FLAC, MP3 and Ogg sounds, MIDI files and SoundFonts.";
+pub const LIBRARY_HINT: &str = "Click a sound to hear it · drag it onto the song, or double-click to add it at the play position";
+pub const LIBRARY_LISTING: &str = "Looking through the folder…";
+pub const LIBRARY_NOTHING_HERE: &str = "No sounds, MIDI files or SoundFonts here.";
+pub const LIBRARY_UP: &str = "Up";
+pub const LIBRARY_UP_HINT: &str = "Back to the folder above";
+pub const LIBRARY_REFRESH: &str = "Look again";
+pub const LIBRARY_REFRESH_HINT: &str = "List the folder again (files added since appear)";
+pub const REMOVE_SOUND_FOLDER: &str = "Remove from the library";
+pub const REMOVE_SOUND_FOLDER_HINT: &str =
+    "The folder stays on the disk: the library just stops showing it";
+pub const ADD_TO_SONG: &str = "Add to the song";
+pub const PLAY_SOUND: &str = "Play";
+pub const STOP_SOUND: &str = "Stop";
+pub const PREVIEW_TOO_LARGE: &str = "it is too large to play here; drag it onto the song instead";
+pub const SOUNDFONT: &str = "SoundFont";
+pub const ADD_SOUNDFONT: &str = "SoundFont…";
+pub const ADD_SOUNDFONT_HINT: &str = "Add a track playing a SoundFont (.sf2) file";
+pub const SOUNDFONT_FILE_TYPE: &str = "SoundFont";
+pub const CHOOSE_SOUNDFONT_TITLE: &str = "Choose a SoundFont";
+pub const PRESET: &str = "Preset";
+pub const PRESET_HINT: &str = "The sound of the SoundFont this track plays";
+pub const OPEN_TRACK_OR_PRESET_HINT: &str =
+    "Open another track, or choose the preset this SoundFont plays";
+pub const EDIT_ADD_SOUNDFONT: &str = "add SoundFont track";
+pub const EDIT_SOUNDFONT_PRESET: &str = "choose SoundFont preset";
+
+/// A sound the library could not play.
+pub fn cannot_preview(name: &str, why: &str) -> String {
+    format!("Could not play {name}: {why}")
+}
+
+/// How many files a library folder holds.
+pub fn library_count(count: usize, truncated: bool) -> String {
+    match (count, truncated) {
+        (_, true) => format!("{count}+ files"),
+        (1, false) => "1 file".to_owned(),
+        (n, false) => format!("{n} files"),
+    }
+}
+
+/// How many files a search found, when not all are shown.
+pub fn library_more_found(shown: usize, total: usize) -> String {
+    format!("Showing {shown} of {total}: type more to narrow the search")
+}
+
+/// What a SoundFont track plays, under its name.
+pub fn soundfont_track(file: &str) -> String {
+    format!("SoundFont · {file}")
+}
+
+/// A preset of a SoundFont in the preset menu: its bank and number.
+pub fn preset_number(bank: u16, program: u8) -> String {
+    format!("{bank}:{program:03}")
 }
 
 // The synth (decision 0019).
@@ -993,6 +1065,165 @@ pub fn plugin_by(vendor: &str) -> String {
     } else {
         format!("A plugin by {vendor}")
     }
+}
+
+// The Plugins window (decision 0023).
+pub const MANAGE_PLUGINS: &str = "Plugins…";
+pub const MANAGE_PLUGINS_HINT: &str =
+    "Add plugins from files, folders or downloads, and see every plugin found";
+pub const PLUGINS_TITLE: &str = "Plugins";
+pub const ADD_PLUGIN_FILES: &str = "Add plugin files…";
+pub const ADD_PLUGIN_FILES_HINT: &str =
+    "Add .vst3 or .clap plugins, downloaded .zip files, or a plugin's installer";
+pub const ADD_PLUGIN_FOLDER: &str = "Add a plugin folder…";
+pub const ADD_PLUGIN_FOLDER_HINT: &str = "Add a .vst3 plugin (which is a folder) or a folder with plugins inside: they are copied into the program's own plugin folder";
+pub const DROP_PLUGINS_HINT: &str =
+    "You can also drop plugin files, folders or downloaded .zip files onto the window.";
+pub const PLUGINS_BUSY: &str = "Adding plugins…";
+pub const INSTRUMENTS_HEADING: &str = "Instruments";
+pub const EFFECTS_HEADING: &str = "Effects";
+pub const REMOVE: &str = "Remove";
+pub const WINDOWS_PLUGINS_WAITING: &str = "Windows plugins waiting for yabridge";
+pub const WINDOWS_PLUGINS_HEADING: &str = "Windows plugins: not set up";
+pub const WINDOWS_PLUGINS_READY_HEADING: &str = "Windows plugins: ready";
+pub const WINDOWS_PLUGINS_READY: &str = "Wine and yabridge are installed: Windows plugins you add here are set up for this program automatically.";
+pub const WINDOWS_PLUGINS_STEPS: &[&str] = &[
+    "1. Install Wine from your distribution (for instance: sudo apt install wine).",
+    "2. Download yabridge from github.com/robbert-vdh/yabridge/releases and unpack it into ~/.local/share/yabridge.",
+    "3. Click Check again, then add your Windows plugins here.",
+];
+pub const CHECK_AGAIN: &str = "Check again";
+pub const CHECK_AGAIN_HINT: &str =
+    "Look for Wine and yabridge again, and set up the Windows plugins added here";
+pub const FOLDERS_SEARCHED: &str = "Folders searched";
+pub const OWN_PLUGIN_FOLDER: &str = "Plugins added here are kept in the program's own folder.";
+pub const SHOW_FOLDER: &str = "Show";
+pub const STOP_SEARCHING_FOLDER: &str = "Stop searching this folder";
+pub const SEARCH_ANOTHER_FOLDER: &str = "Search another folder…";
+pub const SEARCH_ANOTHER_FOLDER_HINT: &str =
+    "Look for plugins in a folder of your own, where they are (nothing is copied)";
+pub const PLUGIN_FILE_TYPE: &str = "Plugins, downloads and installers";
+pub const CHOOSE_PLUGINS_TITLE: &str = "Add plugins";
+
+/// A heading with how many things are under it: "Effects (4)".
+pub fn counted(what: &str, count: usize) -> String {
+    format!("{what} ({count})")
+}
+
+/// The hint of a plugin's Remove button.
+pub fn remove_plugin(name: &str) -> String {
+    format!("Remove {name} from the program's plugin folder")
+}
+
+/// What is missing for Windows plugins on Linux.
+pub fn windows_plugins_missing(wine: bool, yabridge: bool) -> String {
+    match (wine, yabridge) {
+        (false, false) => "To use Windows plugins on Linux, install Wine and yabridge:".to_owned(),
+        (true, false) => "Wine is installed, yabridge is missing:".to_owned(),
+        (false, true) => "yabridge is installed, Wine is missing:".to_owned(),
+        (true, true) => WINDOWS_PLUGINS_READY.to_owned(),
+    }
+}
+
+/// A short list of names: "A, B and C", or "A, B, C and 4 more".
+fn name_list(names: &[String]) -> String {
+    const SHOWN: usize = 5;
+    match names.len() {
+        0 => String::new(),
+        1 => names[0].clone(),
+        n if n <= SHOWN => format!("{} and {}", names[..n - 1].join(", "), names[n - 1]),
+        n => format!("{} and {} more", names[..SHOWN].join(", "), n - SHOWN),
+    }
+}
+
+/// The file name of a path, for messages.
+fn file_name(path: &std::path::Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
+/// What adding, removing or setting up plugins did, line by line.
+pub fn plugin_job_lines(done: &crate::plugin_manager::PluginJobDone) -> Vec<String> {
+    use crate::plugin_manager::{InstallerRun, file_title};
+    use daw_plugin_host::install::Skip;
+    let titles = |paths: &[std::path::PathBuf]| -> Vec<String> {
+        paths.iter().map(|p| file_title(p)).collect()
+    };
+    let mut lines = Vec::new();
+    if !done.added.is_empty() {
+        lines.push(format!("Added: {}.", name_list(&titles(&done.added))));
+    }
+    if !done.windows.is_empty() {
+        let names = name_list(&titles(&done.windows));
+        lines.push(match &done.bridge {
+            Some(Ok(())) => format!("Set up with yabridge: {names}."),
+            Some(Err(why)) => {
+                format!("{names}: Windows plugins that yabridge could not set up ({why}).")
+            }
+            None => format!(
+                "{names}: Windows plugins. Install Wine and yabridge to use them (see Windows plugins below)."
+            ),
+        });
+    } else if let Some(bridge) = &done.bridge {
+        lines.push(match bridge {
+            Ok(()) => "yabridge has set up the Windows plugins added here.".to_owned(),
+            Err(why) => format!("yabridge could not set up the Windows plugins ({why})."),
+        });
+    }
+    for (path, run) in &done.installers {
+        let file = file_name(path);
+        lines.push(match run {
+            InstallerRun::Opened => {
+                format!("{file}: the installer has opened. When it has finished, click Look again.")
+            }
+            InstallerRun::Finished => format!("{file}: the installer has finished."),
+            InstallerRun::Failed(why) => format!("{file}: the installer could not run ({why})."),
+            InstallerRun::NeedsWine => format!(
+                "{file} is a Windows installer: install Wine to run it (see Windows plugins below)."
+            ),
+        });
+    }
+    for (path, skip) in &done.skipped {
+        let file = file_name(path);
+        lines.push(match skip {
+            Skip::NotAPlugin => format!("{file}: no plugin found inside."),
+            Skip::Vst2 => format!(
+                "{file} is a VST2 plugin: those are not supported yet. Look for its VST3 or CLAP version."
+            ),
+            Skip::Installer => format!("{file} is an installer: run it, then click Look again."),
+            Skip::OtherSystem(system) => {
+                let name = |s: daw_engine::PluginSystem| match s {
+                    daw_engine::PluginSystem::Windows => "Windows",
+                    daw_engine::PluginSystem::Linux => "Linux",
+                    daw_engine::PluginSystem::Mac => "Mac",
+                };
+                format!(
+                    "{file} is made for {}: get its {} version.",
+                    name(*system),
+                    name(daw_engine::PluginSystem::current())
+                )
+            }
+            Skip::Failed(why) => format!("{file} could not be added ({why})."),
+        });
+    }
+    if !done.removed.is_empty() {
+        lines.push(format!("Removed: {}.", name_list(&titles(&done.removed))));
+    }
+    if let Some((path, why)) = &done.remove_failed {
+        lines.push(format!(
+            "{} could not be removed ({why}).",
+            file_title(path)
+        ));
+    }
+    if done.bridge_missing {
+        lines.push(
+            "Not ready yet: install what is missing (see Windows plugins below), then click Check again."
+                .to_owned(),
+        );
+    }
+    lines
 }
 
 /// What a plugin track plays, under its name.
