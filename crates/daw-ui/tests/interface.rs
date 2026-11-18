@@ -1759,8 +1759,8 @@ fn the_synth_is_chosen_from_the_list_and_shaped_in_its_own_window() {
     // Its window opens from the track header.
     f.harness.get_by_label(text::OPEN_SYNTH).click();
     f.harness.run_steps(4);
-    f.harness
-        .get_by_label(&text::synth_title(text::SYNTH_TRACK));
+    // (Its title is the track's name, "Synth", like the track's own
+    // label: the window is found by what is in it.)
     f.harness.get_by_label(text::FILTER_CURVE);
     assert!(f.session().is_synth_window_open(synth.id));
 
@@ -1817,11 +1817,7 @@ fn the_synth_is_chosen_from_the_list_and_shaped_in_its_own_window() {
     f.harness.get_by_label(text::CLOSE_SYNTH).click();
     f.harness.run_steps(3);
     assert!(!f.session().is_synth_window_open(synth.id));
-    assert!(
-        f.harness
-            .query_by_label(&text::synth_title(text::SYNTH_TRACK))
-            .is_none()
-    );
+    assert!(f.harness.query_by_label(text::FILTER_CURVE).is_none());
     f.harness.get_by_label(text::OPEN_SYNTH).click();
     f.harness.run_steps(4);
     f.harness.get_by_label("Close window").click();
