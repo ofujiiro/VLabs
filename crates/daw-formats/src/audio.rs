@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Reading audio files (decision 0017): WAV, FLAC, MP3 and Ogg Vorbis, for
-//! importing them and for playing a song's audio files.
+//! Reading audio files (decision 0017): WAV, AIFF, FLAC, MP3 and Ogg
+//! Vorbis, for importing them and for playing a song's audio files (AIFF,
+//! common in sample collections, since decision 0023).
 //!
 //! Files come from outside and are untrusted: damaged or hostile input gives
 //! an error, never a crash, and never more sound than an hour's worth
@@ -23,6 +24,8 @@ pub const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub enum AudioFormat {
     /// WAV: uncompressed samples.
     Wav,
+    /// AIFF (and AIFF-C without compression): uncompressed samples.
+    Aiff,
     /// FLAC: compressed without loss.
     Flac,
     /// MP3.
@@ -36,6 +39,7 @@ impl AudioFormat {
     pub fn extension(self) -> &'static str {
         match self {
             Self::Wav => "wav",
+            Self::Aiff => "aiff",
             Self::Flac => "flac",
             Self::Mp3 => "mp3",
             Self::Ogg => "ogg",
@@ -46,6 +50,10 @@ impl AudioFormat {
     pub fn sniff(bytes: &[u8]) -> Option<Self> {
         if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WAVE" {
             return Some(Self::Wav);
+        }
+        if bytes.len() >= 12 && &bytes[..4] == b"FORM" && matches!(&bytes[8..12], b"AIFF" | b"AIFC")
+        {
+            return Some(Self::Aiff);
         }
         let untagged = skip_id3(bytes);
         if untagged.starts_with(b"fLaC") {
@@ -97,7 +105,7 @@ impl fmt::Display for AudioError {
             Self::Io(error) => write!(f, "{error}"),
             Self::Unknown => write!(
                 f,
-                "it is not a WAV, FLAC, MP3 or Ogg Vorbis file, or it is damaged"
+                "it is not a WAV, AIFF, FLAC, MP3 or Ogg Vorbis file, or it is damaged"
             ),
             Self::Unsupported(what) => write!(f, "{what} is not supported"),
             Self::Damaged(why) => write!(f, "it is damaged ({why})"),
@@ -135,6 +143,7 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, AudioError> {
     // find a corner of one: it fails, the program carries on.
     let decoded = std::panic::catch_unwind(|| match format {
         AudioFormat::Wav => decode_wav(bytes),
+        AudioFormat::Aiff => decode_aiff(bytes),
         AudioFormat::Flac => decode_flac(skip_id3(bytes)),
         AudioFormat::Mp3 => decode_mp3(bytes),
         AudioFormat::Ogg => decode_ogg(bytes),
@@ -301,6 +310,148 @@ fn wav_sample(tag: u16, bytes: &[u8]) -> f32 {
     }
 }
 
+fn be16(bytes: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from_be_bytes(bytes.get(at..at + 2)?.try_into().ok()?))
+}
+
+fn be32(bytes: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
+}
+
+/// An 80-bit extended float (AIFF's sample rate) as a whole number of
+/// frames per second; `None` when it is not a sensible rate.
+fn extended_rate(bytes: &[u8]) -> Option<u32> {
+    let exponent = i32::from(be16(bytes, 0)? & 0x7FFF);
+    let mantissa = u64::from_be_bytes(bytes.get(2..10)?.try_into().ok()?);
+    // value = mantissa × 2^(exponent − 16383 − 63)
+    let shift = 16_383 + 63 - exponent;
+    if !(0..64).contains(&shift) {
+        return None;
+    }
+    let rate = mantissa >> shift;
+    u32::try_from(rate)
+        .ok()
+        .filter(|r| (1..=1_536_000).contains(r))
+}
+
+/// How AIFF samples are stored.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AiffSamples {
+    /// Big-endian integers (AIFF, and AIFF-C's `NONE`).
+    BigEndian,
+    /// Little-endian integers (AIFF-C's `sowt`).
+    LittleEndian,
+    /// Big-endian floats (AIFF-C's `fl32` and `fl64`).
+    Float,
+}
+
+fn decode_aiff(bytes: &[u8]) -> Result<Channels, AudioError> {
+    let damaged = |why: &str| AudioError::Damaged(why.to_owned());
+    let compressed = &bytes[8..12] == b"AIFC";
+    let mut format: Option<(usize, u16, u32, AiffSamples)> = None;
+    let mut data: Option<&[u8]> = None;
+    let mut at = 12;
+    while at + 8 <= bytes.len() {
+        let id = &bytes[at..at + 4];
+        let size = be32(bytes, at + 4).unwrap_or(0) as usize;
+        let body_start = at + 8;
+        let body_end = body_start.saturating_add(size).min(bytes.len());
+        let body = &bytes[body_start..body_end];
+        match id {
+            b"COMM" => {
+                let short = || damaged("short format");
+                let channels = usize::from(be16(body, 0).ok_or_else(short)?);
+                let bits = be16(body, 6).ok_or_else(short)?;
+                let rate = extended_rate(body.get(8..18).ok_or_else(short)?)
+                    .ok_or_else(|| damaged("its sample rate"))?;
+                let kind = if compressed {
+                    match body.get(18..22).ok_or_else(short)? {
+                        b"NONE" | b"twos" => AiffSamples::BigEndian,
+                        b"sowt" => AiffSamples::LittleEndian,
+                        b"fl32" | b"FL32" | b"fl64" | b"FL64" => AiffSamples::Float,
+                        other => {
+                            return Err(AudioError::Unsupported(format!(
+                                "AIFF-C compressed as \"{}\"",
+                                String::from_utf8_lossy(other)
+                            )));
+                        }
+                    }
+                } else {
+                    AiffSamples::BigEndian
+                };
+                format = Some((channels, bits, rate, kind));
+            }
+            b"SSND" => {
+                let offset = be32(body, 0).ok_or_else(|| damaged("short sound chunk"))? as usize;
+                data = Some(body.get(8 + offset.min(body.len())..).unwrap_or(&[]));
+            }
+            _ => {}
+        }
+        at = body_start.saturating_add(size).saturating_add(size & 1);
+    }
+    let (channel_count, bits, rate, kind) = format.ok_or_else(|| damaged("no format chunk"))?;
+    let data = data.ok_or_else(|| damaged("no sound data"))?;
+    if channel_count == 0 || channel_count > 64 {
+        return Err(damaged("its channel count"));
+    }
+    let width = match (kind, bits) {
+        (AiffSamples::Float, 32) => 4,
+        (AiffSamples::Float, 64) => 8,
+        (AiffSamples::Float, _) => return Err(damaged("its sample size")),
+        // Integer samples are stored in whole bytes, padded at the bottom.
+        (_, 1..=32) => usize::from(bits.div_ceil(8)),
+        _ => {
+            return Err(AudioError::Unsupported(format!(
+                "AIFF with {bits}-bit samples"
+            )));
+        }
+    };
+    let block = width * channel_count;
+    let frames = data.len() / block;
+    if frames as u64 > frame_limit(rate) {
+        return Err(AudioError::TooLong);
+    }
+    let kept = channel_count.min(2);
+    let mut channels = vec![Vec::with_capacity(frames); kept];
+    for frame in data.chunks_exact(block) {
+        for (channel, sample) in channels.iter_mut().zip(frame.chunks_exact(width)) {
+            channel.push(aiff_sample(kind, sample));
+        }
+    }
+    Ok((rate, channels))
+}
+
+/// One AIFF sample as a float from -1 to 1.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    reason = "audio samples"
+)]
+fn aiff_sample(kind: AiffSamples, bytes: &[u8]) -> f32 {
+    match kind {
+        AiffSamples::Float => match bytes.len() {
+            4 => f32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+            8 => f64::from_be_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            ]) as f32,
+            _ => 0.0,
+        },
+        AiffSamples::BigEndian | AiffSamples::LittleEndian => {
+            // Put the sample's bytes at the top of a 32-bit integer.
+            let mut word = [0_u8; 4];
+            for (index, &byte) in bytes.iter().enumerate().take(4) {
+                let from_top = if kind == AiffSamples::BigEndian {
+                    index
+                } else {
+                    bytes.len() - 1 - index
+                };
+                word[from_top] = byte;
+            }
+            i32::from_be_bytes(word) as f32 / 2_147_483_648.0
+        }
+    }
+}
+
 fn decode_flac(bytes: &[u8]) -> Result<Channels, AudioError> {
     let damaged = |e: claxon::Error| AudioError::Damaged(e.to_string());
     let mut reader = claxon::FlacReader::new(Cursor::new(bytes)).map_err(damaged)?;
@@ -453,6 +604,93 @@ mod tests {
         let front = decode(&wav(1, 6, 48_000, 16, &surround)).unwrap();
         assert_eq!(front.channels.len(), 2);
         assert!((front.channels[1][0] - 2000.0 / 32_768.0).abs() < 1e-6);
+    }
+
+    /// An AIFF (or AIFF-C, with `compression`) file's bytes.
+    fn aiff(
+        channels: u16,
+        rate: u32,
+        bits: u16,
+        compression: Option<&[u8; 4]>,
+        data: &[u8],
+    ) -> Vec<u8> {
+        let mut comm = Vec::new();
+        comm.extend_from_slice(&channels.to_be_bytes());
+        let frames = data.len() as u32 / (u32::from(channels) * u32::from(bits.div_ceil(8)));
+        comm.extend_from_slice(&frames.to_be_bytes());
+        comm.extend_from_slice(&bits.to_be_bytes());
+        let top = rate.ilog2();
+        comm.extend_from_slice(&(16_383 + top as u16).to_be_bytes());
+        comm.extend_from_slice(&(u64::from(rate) << (63 - top)).to_be_bytes());
+        if let Some(kind) = compression {
+            comm.extend_from_slice(kind);
+            comm.extend_from_slice(&[0, 0]); // An empty name.
+        }
+        let mut body = Vec::new();
+        body.extend_from_slice(if compression.is_some() {
+            b"AIFC"
+        } else {
+            b"AIFF"
+        });
+        body.extend_from_slice(b"COMM");
+        body.extend_from_slice(&(comm.len() as u32).to_be_bytes());
+        body.extend_from_slice(&comm);
+        body.extend_from_slice(b"SSND");
+        body.extend_from_slice(&(data.len() as u32 + 8).to_be_bytes());
+        body.extend_from_slice(&[0; 8]);
+        body.extend_from_slice(data);
+        let mut bytes = b"FORM".to_vec();
+        bytes.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(&body);
+        bytes
+    }
+
+    #[test]
+    fn aiff_files_of_the_common_kinds_are_read() {
+        let pcm16: Vec<u8> = [16_384_i16, -16_384, 32_767, -32_768]
+            .iter()
+            .flat_map(|s| s.to_be_bytes())
+            .collect();
+        let decoded = decode(&aiff(2, 44_100, 16, None, &pcm16)).unwrap();
+        assert_eq!(decoded.format, AudioFormat::Aiff);
+        assert_eq!(decoded.sample_rate, 44_100);
+        assert_eq!(
+            decoded.channels,
+            vec![vec![0.5, 32_767.0 / 32_768.0], vec![-0.5, -1.0]]
+        );
+
+        let pcm24: Vec<u8> = [4_194_304_i32, -4_194_304]
+            .iter()
+            .flat_map(|s| s.to_be_bytes()[1..].to_vec())
+            .collect();
+        let mono = decode(&aiff(1, 48_000, 24, None, &pcm24)).unwrap();
+        assert_eq!(mono.sample_rate, 48_000);
+        assert_eq!(mono.channels, vec![vec![0.5, -0.5]]);
+
+        // AIFF-C: little-endian integers, and floats.
+        let swapped: Vec<u8> = [16_384_i16, -16_384]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
+        let sowt = decode(&aiff(1, 96_000, 16, Some(b"sowt"), &swapped)).unwrap();
+        assert_eq!(sowt.sample_rate, 96_000);
+        assert_eq!(sowt.channels, vec![vec![0.5, -0.5]]);
+        let float: Vec<u8> = [0.25_f32, -0.75]
+            .iter()
+            .flat_map(|s| s.to_be_bytes())
+            .collect();
+        let fl32 = decode(&aiff(1, 22_050, 32, Some(b"fl32"), &float)).unwrap();
+        assert_eq!(fl32.sample_rate, 22_050);
+        assert_eq!(fl32.channels, vec![vec![0.25, -0.75]]);
+
+        // Compressed AIFF-C is explained, damaged AIFF is refused.
+        let ima = decode(&aiff(1, 44_100, 16, Some(b"ima4"), &[0; 34]));
+        assert!(matches!(ima, Err(AudioError::Unsupported(_))), "{ima:?}");
+        let mut no_rate = aiff(1, 44_100, 16, None, &pcm16);
+        no_rate[28..38].fill(0);
+        assert!(decode(&no_rate).is_err());
+        let truncated = &aiff(2, 44_100, 16, None, &pcm16)[..30];
+        assert!(decode(truncated).is_err());
     }
 
     #[test]
