@@ -49,7 +49,11 @@ impl Host for FakeHost {
         self.save_to.lock().unwrap().clone()
     }
 
-    fn choose_export_file(&mut self, _suggested_name: &str) -> Option<PathBuf> {
+    fn choose_export_file(
+        &mut self,
+        _suggested_name: &str,
+        _target: daw_ui::ExportTarget,
+    ) -> Option<PathBuf> {
         *self.asked.lock().unwrap() += 1;
         self.export_to.lock().unwrap().clone()
     }
@@ -1728,4 +1732,335 @@ fn panels_and_menus_take_clicks_that_last_several_frames() {
         f.session().project().track(drums).unwrap().clips.is_empty(),
         "the clip menu's entry worked"
     );
+}
+
+#[test]
+fn the_synth_is_chosen_from_the_list_and_shaped_in_its_own_window() {
+    let mut f = new_song();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    f.harness
+        .get_by_label(&format!("+ {}", text::ADD_INSTRUMENT))
+        .click();
+    f.harness.run_steps(3);
+    f.harness
+        .get_by_label_contains(text::ADD_SYNTH_HINT)
+        .click();
+    f.harness.run_steps(3);
+    let synth = f.session().project().tracks.last().unwrap().clone();
+    assert_eq!(synth.name, text::SYNTH_TRACK);
+    assert_eq!(
+        synth.instrument.synth(),
+        Some(&daw_model::SynthPreset::SoftKeys.settings()),
+        "a new synth starts with Soft keys"
+    );
+    f.harness.get_by_label_contains("Synth · Soft keys");
+
+    // Its window opens from the track header.
+    f.harness.get_by_label(text::OPEN_SYNTH).click();
+    f.harness.run_steps(4);
+    // (Its title is the track's name, "Synth", like the track's own
+    // label: the window is found by what is in it.)
+    f.harness.get_by_label(text::FILTER_CURVE);
+    assert!(f.session().is_synth_window_open(synth.id));
+
+    // A preset sets everything at once: one undo step.
+    f.harness.get_by_label(text::SYNTH_PRESET).click();
+    f.harness.run_steps(3);
+    f.harness.get_by_label("Bass").click();
+    f.harness.run_steps(3);
+    assert_eq!(
+        f.session().synth_settings(synth.id),
+        Some(daw_model::SynthPreset::Bass.settings())
+    );
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_SYNTH_PRESET)
+    );
+
+    // Dragging the cutoff slider changes it as one undo step.
+    let before = f.session().synth_settings(synth.id).unwrap();
+    let slider = f
+        .harness
+        .get_by_role_and_label(egui::accesskit::Role::Slider, text::CUTOFF)
+        .rect();
+    let depth = f.session().document().undo_depth();
+    f.drag(
+        slider.left_center() + vec2(10.0, 0.0),
+        slider.left_center() + vec2(70.0, 0.0),
+        Modifiers::NONE,
+    );
+    let after = f.session().synth_settings(synth.id).unwrap();
+    assert!(after.cutoff_hz > before.cutoff_hz, "the filter opened");
+    assert_eq!(f.session().document().undo_depth(), depth + 1, "one step");
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_CHANGE_SYNTH)
+    );
+    f.key(Key::Z, Key::Z, true, Modifiers::COMMAND);
+    f.key(Key::Z, Key::Z, false, Modifiers::COMMAND);
+    assert_eq!(f.session().synth_settings(synth.id), Some(before));
+
+    // The computer keyboard plays the synth while its window is open.
+    f.harness.run_steps(2);
+    f.key(Key::Z, Key::Z, true, Modifiers::NONE);
+    f.tick();
+    let heard = listen(&mut f, 16);
+    f.key(Key::Z, Key::Z, false, Modifiers::NONE);
+    assert!(
+        heard.iter().fold(0.0_f32, |m, s| m.max(s.abs())) > 0.01,
+        "a note is heard"
+    );
+
+    // The same button closes the window (it opened clear of it), and so
+    // does the window's own close button.
+    f.harness.get_by_label(text::CLOSE_SYNTH).click();
+    f.harness.run_steps(3);
+    assert!(!f.session().is_synth_window_open(synth.id));
+    assert!(f.harness.query_by_label(text::FILTER_CURVE).is_none());
+    f.harness.get_by_label(text::OPEN_SYNTH).click();
+    f.harness.run_steps(4);
+    f.harness.get_by_label("Close window").click();
+    f.harness.run_steps(3);
+    assert!(!f.session().is_synth_window_open(synth.id));
+}
+
+#[test]
+fn a_synth_setting_changes_over_the_song_with_a_lane() {
+    let mut f = new_song();
+    let synth = f.workspace_mut().session_mut().add_synth_track();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(3);
+    // The synth's Automation button (third track) offers its settings.
+    f.harness
+        .get_all_by_label(text::AUTOMATION)
+        .nth(2)
+        .unwrap()
+        .click();
+    f.harness.run_steps(3);
+    let cutoff = text::lane_name(text::SYNTH_TRACK, text::CUTOFF);
+    f.harness.get_by_label(&cutoff).click();
+    f.harness.run_steps(3);
+    let target = AutomationTarget::Instrument { param: 0 };
+    let lane = f.session().project().lane(synth, target).unwrap().clone();
+    let settings = f.session().synth_settings(synth).unwrap();
+    assert_eq!(lane.points.len(), 1);
+    assert!(
+        (lane.points[0].value - settings.param(0).unwrap()).abs() < 1e-6,
+        "it starts at the present cutoff"
+    );
+}
+
+/// Right-clicks a point of the window.
+fn right_click(f: &mut Fixture, at: Pos2) {
+    f.harness.hover_at(at);
+    f.harness.step();
+    f.press(at, PointerButton::Secondary, true, Modifiers::NONE);
+    f.harness.step();
+    f.press(at, PointerButton::Secondary, false, Modifiers::NONE);
+    f.harness.run_steps(3);
+}
+
+#[test]
+fn a_track_places_and_swaps_any_of_its_patterns_from_a_right_click() {
+    // A copy of the beat, edited under its own name, as the owner did.
+    let mut f = new_song();
+    let drums = f.session().project().tracks[0].id;
+    let first = f.session().pattern_id();
+    let copy = f.workspace_mut().session_mut().duplicate_pattern().unwrap();
+    let copy_name = f.session().project().pattern(copy).unwrap().name.clone();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    let song = f.harness.get_by_label(text::SONG_VIEW).rect();
+    let row_y = song.top() + 28.0 + 28.0 + 32.0;
+
+    // An empty spot of the drum track (after its four bars): its menu
+    // names the track's patterns; choosing the copy places it there.
+    let empty = Pos2::new(song.left() + 236.0 + 860.0, row_y);
+    right_click(&mut f, empty);
+    f.harness.get_by_label(text::PLACE_PATTERN_HERE);
+    f.harness.get_by_label(&copy_name).click();
+    f.harness.run_steps(3);
+    let clips = f.session().project().track(drums).unwrap().clips.clone();
+    assert_eq!(clips.len(), 2);
+    let placed = clips.iter().find(|c| c.pattern() == Some(copy)).unwrap();
+    assert!(
+        placed.start > Ticks::WHOLE * 3,
+        "where it was right-clicked"
+    );
+    assert!(f.harness.query_by_label(text::PLACE_PATTERN_HERE).is_none());
+
+    // The first clip's menu swaps it for the copy; undo swaps it back.
+    let clip = Pos2::new(song.left() + 236.0 + 60.0, row_y);
+    right_click(&mut f, clip);
+    f.harness.get_by_label(text::PLAY_ANOTHER_PATTERN);
+    f.harness.get_by_label(&copy_name).click();
+    f.harness.run_steps(3);
+    let starts_with = |f: &Fixture| {
+        f.session()
+            .project()
+            .track(drums)
+            .unwrap()
+            .clips
+            .iter()
+            .find(|c| c.start == Ticks::ZERO)
+            .and_then(daw_model::Clip::pattern)
+    };
+    assert_eq!(starts_with(&f), Some(copy), "the first clip plays the copy");
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_SWAP_PATTERN)
+    );
+    f.key(Key::Z, Key::Z, true, Modifiers::COMMAND);
+    f.key(Key::Z, Key::Z, false, Modifiers::COMMAND);
+    assert_eq!(starts_with(&f), Some(first));
+
+    // "New pattern" in an empty spot's menu makes one and places it.
+    f.key(Key::Z, Key::Z, true, Modifiers::COMMAND);
+    f.key(Key::Z, Key::Z, false, Modifiers::COMMAND);
+    assert_eq!(f.session().project().track(drums).unwrap().clips.len(), 1);
+    right_click(&mut f, empty);
+    f.harness.get_by_label(text::NEW_PATTERN_HERE).click();
+    f.harness.run_steps(3);
+    assert_eq!(f.session().project().track_patterns(drums).count(), 3);
+    assert_eq!(f.session().project().track(drums).unwrap().clips.len(), 2);
+}
+
+/// Opens the Export dialog with Ctrl+E.
+fn open_export(f: &mut Fixture) {
+    f.key(Key::E, Key::E, true, Modifiers::COMMAND);
+    f.key(Key::E, Key::E, false, Modifiers::COMMAND);
+    f.harness.run_steps(3);
+    f.harness.get_by_label(text::EXPORT_TITLE);
+}
+
+#[test]
+fn the_export_dialog_writes_flac_dawproject_and_midi() {
+    let mut f = new_song();
+    // A note in the beat, so every file has something in it.
+    let kick = square(&f, PadSound::Kick, 1);
+    f.click(kick, Modifiers::NONE);
+    let folder = std::env::temp_dir().join(format!("export-kinds-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+
+    // FLAC, studio quality.
+    let flac = folder.join("song.flac");
+    *f.host.export_to.lock().unwrap() = Some(flac.clone());
+    open_export(&mut f);
+    f.harness.get_by_label(text::EXPORT_FLAC).click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::EXPORT_BUTTON).click();
+    f.harness.run_steps(2);
+    f.workspace_mut().session_mut().finish_export();
+    f.harness.run_steps(3);
+    let sound = daw_formats::audio::decode(&std::fs::read(&flac).unwrap()).unwrap();
+    assert_eq!(sound.format, daw_formats::audio::AudioFormat::Flac);
+    assert_eq!(sound.sample_rate, 48_000);
+    assert!(sound.frames() > 48_000, "the beat and its tail");
+    let peak = sound.channels[0]
+        .iter()
+        .fold(0.0_f32, |m, s| m.max(s.abs()));
+    assert!(peak > 0.05, "the kick is in it");
+
+    // DAWproject: the song for another program.
+    let project = folder.join("song");
+    *f.host.export_to.lock().unwrap() = Some(project.clone());
+    open_export(&mut f);
+    f.harness.get_by_label(text::EXPORT_DAWPROJECT).click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::EXPORT_BUTTON).click();
+    f.harness.run_steps(3);
+    let written = folder.join("song.dawproject");
+    assert!(written.is_file(), "the ending is added");
+    let names = daw_formats::dawproject::ImportNames {
+        track: &|n| format!("Track {n}"),
+        pattern: &|n| format!("Pattern {n}"),
+    };
+    let back = daw_formats::dawproject::import(&written, &folder.join("opened"), &names).unwrap();
+    assert_eq!(back.project.tracks.len(), 2);
+
+    // MIDI: the notes.
+    let midi = folder.join("song.mid");
+    *f.host.export_to.lock().unwrap() = Some(midi.clone());
+    open_export(&mut f);
+    f.harness.get_by_label(text::EXPORT_MIDI).click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::EXPORT_BUTTON).click();
+    f.harness.run_steps(3);
+    let file = daw_formats::midi::read(&std::fs::read(&midi).unwrap()).unwrap();
+    assert_eq!(
+        file.tracks.len(),
+        3,
+        "the conductor, the drums and the piano"
+    );
+    std::fs::remove_dir_all(folder).ok();
+}
+
+#[test]
+fn midi_and_dawproject_files_open_as_new_songs_and_import_into_one() {
+    let folder = std::env::temp_dir().join(format!("open-other-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    // A MIDI file of a song: a melody.
+    let mut source = daw_model::Project::starter("Tune", "Lead");
+    let (_, pattern) = source.first_pattern().unwrap();
+    for (i, key) in [60_u8, 62, 64].iter().enumerate() {
+        source.add_note(
+            pattern,
+            daw_model::Note {
+                id: daw_model::NoteId(0),
+                start: Ticks::QUARTER * i64::try_from(i).unwrap(),
+                length: Ticks::QUARTER,
+                key: *key,
+                velocity: 0.8,
+                pitch_offset: 0.0,
+            },
+        );
+    }
+    let midi = folder.join("tune.mid");
+    std::fs::write(
+        &midi,
+        daw_formats::midi::write(&daw_formats::midi::song_to_midi(&source)),
+    )
+    .unwrap();
+
+    // Opened: a new, unsaved song named after the file.
+    let mut f = new_song();
+    f.workspace_mut().open(midi.clone());
+    f.harness.run_steps(3);
+    let s = f.session();
+    assert_eq!(s.project().title, "tune");
+    assert_eq!(s.project().tracks.len(), 1);
+    assert_eq!(s.project().tracks[0].name, "Lead");
+    assert!(s.is_dirty() && s.path().is_none(), "Save asks where");
+    f.harness
+        .get_by_label_contains("Opened tune.mid as a new song");
+
+    // Imported into another song with Ctrl+I: a track of its own, one
+    // undo step.
+    let mut f = new_song();
+    *f.host.audio.lock().unwrap() = vec![midi.clone()];
+    f.key(Key::I, Key::I, true, Modifiers::COMMAND);
+    f.key(Key::I, Key::I, false, Modifiers::COMMAND);
+    f.harness.run_steps(3);
+    assert_eq!(f.session().project().tracks.len(), 3);
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_IMPORT_MIDI)
+    );
+    let lead = f.session().project().tracks.last().unwrap().clone();
+    assert_eq!(lead.name, "Lead");
+    f.key(Key::Z, Key::Z, true, Modifiers::COMMAND);
+    f.key(Key::Z, Key::Z, false, Modifiers::COMMAND);
+    assert_eq!(f.session().project().tracks.len(), 2);
+
+    // A DAWproject file opens too.
+    let project = folder.join("tune.dawproject");
+    let sounds = folder.join("sounds");
+    std::fs::create_dir_all(&sounds).unwrap();
+    daw_formats::dawproject::export(&source, &sounds, &project).unwrap();
+    f.workspace_mut().open(project);
+    f.harness.run_steps(3);
+    assert_eq!(f.session().project().tracks.len(), 1);
+    assert_eq!(f.session().project().tracks[0].name, "Lead");
+    std::fs::remove_dir_all(folder).ok();
 }

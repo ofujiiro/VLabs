@@ -265,7 +265,10 @@ impl Session {
             .track(track)
             .and_then(|t| match &t.instrument {
                 Instrument::Drums { kit, .. } => Some(kit.as_str()),
-                Instrument::SoundFont { .. } | Instrument::Plugin(_) | Instrument::Audio => None,
+                Instrument::SoundFont { .. }
+                | Instrument::Plugin(_)
+                | Instrument::Audio
+                | Instrument::Synth(_) => None,
             });
         if current.is_none_or(|k| k == kit) {
             return;
@@ -283,7 +286,10 @@ impl Session {
     pub fn kit(&self, track: TrackId) -> Option<&str> {
         match &self.project().track(track)?.instrument {
             Instrument::Drums { kit, .. } => Some(kit),
-            Instrument::SoundFont { .. } | Instrument::Plugin(_) | Instrument::Audio => None,
+            Instrument::SoundFont { .. }
+            | Instrument::Plugin(_)
+            | Instrument::Audio
+            | Instrument::Synth(_) => None,
         }
     }
 
@@ -453,13 +459,31 @@ impl Session {
     /// as the pattern (shortened to stop at the next clip). Returns the new
     /// clip, now selected.
     pub fn place_pattern(&mut self, track: TrackId, start: Ticks) -> Option<ClipId> {
+        let pattern = self.current_pattern(track)?;
+        self.place_this_pattern(track, start, pattern)
+    }
+
+    /// Places a chosen pattern of a track at `start` (from the track's
+    /// right-click menu), if that spot is free; it becomes the pattern
+    /// clicks place from then on. Returns the new clip.
+    pub fn place_this_pattern(
+        &mut self,
+        track: TrackId,
+        start: Ticks,
+        pattern: PatternId,
+    ) -> Option<ClipId> {
         let start = start.max(Ticks::ZERO);
         let project = self.project();
+        if project
+            .pattern(pattern)
+            .is_none_or(|p| p.track.is_some_and(|t| t != track))
+        {
+            return None;
+        }
         let clips = &project.track(track)?.clips;
         if clips.iter().any(|c| c.start <= start && start < c.end()) {
             return None;
         }
-        let pattern = self.current_pattern(track)?;
         let next = clips.iter().map(|c| c.start).filter(|&s| s > start).min();
         let mut length = self.project().pattern(pattern)?.length;
         if let Some(next) = next {
@@ -471,6 +495,49 @@ impl Session {
         self.current.insert(track, pattern);
         self.selected_clip = Some(clip);
         Some(clip)
+    }
+
+    /// Makes a pattern clip play another pattern of its track, from that
+    /// pattern's start, keeping its place and length (one undo step).
+    pub fn swap_clip_pattern(&mut self, clip: ClipId, pattern: PatternId) {
+        let Some((track, current)) = self.project().clip(clip).map(|(t, c)| (t, *c)) else {
+            return;
+        };
+        let belongs = self
+            .project()
+            .pattern(pattern)
+            .is_some_and(|p| p.track.is_none_or(|t| t == track));
+        if !belongs || current.pattern().is_none_or(|p| p == pattern) {
+            return;
+        }
+        self.doc.edit(text::EDIT_SWAP_PATTERN, |p| {
+            p.update_clip(clip, |c| {
+                c.content = ClipContent::Pattern {
+                    pattern,
+                    offset: Ticks::ZERO,
+                };
+            });
+        });
+        self.current.insert(track, pattern);
+        self.selected_clip = Some(clip);
+    }
+
+    /// A track's patterns, by name, in the order they were made.
+    pub fn patterns_of(&self, track: TrackId) -> Vec<(PatternId, String)> {
+        self.project()
+            .track_patterns(track)
+            .map(|p| (p.id, p.name.clone()))
+            .collect()
+    }
+
+    /// Makes a new empty pattern on a track and places it at `start` (from
+    /// the track's right-click menu). Returns the new clip.
+    pub fn place_new_pattern(&mut self, track: TrackId, start: Ticks) -> Option<ClipId> {
+        self.begin_gesture(text::EDIT_NEW_PATTERN);
+        let pattern = self.make_pattern(track);
+        let clip = self.place_this_pattern(track, start, pattern);
+        self.end_gesture();
+        clip
     }
 
     /// Moves a clip to start at `start`.

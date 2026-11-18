@@ -122,6 +122,21 @@ note's start and end before placing the pattern in the song, and the
 session applies the inverse (`Swing::remove`) to notes recorded into a
 swung pattern.
 
+## The built-in synth *(phase 6)*
+
+Decision 0019. `daw-dsp::synth` is the sound: sixteen voices (or one with
+glide) in a fixed array, each two band-limited oscillators and noise into
+a zero-delay state-variable filter (two in a row for 24 dB) and an
+amplifier, with a volume envelope, a filter envelope and one LFO. Pitches,
+cutoffs and the LFO are worked out every 16 samples; envelopes and the
+signal every sample. `daw-model::SynthSettings` is what the song keeps
+(natural units, presets, numbered automatable settings like the built-in
+effects'); the engine turns it into the DSP's `SynthParams`
+(`library::synth_params`), sends changed settings to the playing synth
+instead of rebuilding it, and for automation applies each lane to a copy
+of the base settings on the audio thread (plain data, nothing allocated).
+The window is `daw-ui::synth_ui`.
+
 ## Files *(phase 1 onwards)*
 
 - **Native project (`.teto`):** a single file that is a ZIP container
@@ -133,7 +148,12 @@ swung pattern.
   one, so a crash never leaves a half-written project.
 - **Autosave and crash recovery:** while there are unsaved changes, a
   recovery copy is written in the background every few seconds; after a
-  crash it is offered back (decision 0013).
+  crash it is offered back (decision 0013). Decision 0021 adds a note of
+  the take being recorded (its unfinished WAV is mended and placed after a
+  crash), a copy written at once and waited for before a plugin loads or
+  opens its window (`SafetyCopy`), and details in the offer. The autosave
+  thread stops on an explicit message (the session's safety writer keeps a
+  sender alive).
 - **Audio files** (format version 4, decision 0017) are entries
   `audio/<name>` of the container, stored as they came (recordings as
   24-bit WAV, imports in their own format). While a song is open they live
@@ -143,9 +163,22 @@ swung pattern.
 - **Format version 5** (decision 0018) adds the song's key changes, each
   pattern's swing and tempo glides; all have defaults, so older files are
   read unchanged.
-- **Interchange:** DAWproject and Standard MIDI Files, import and export
-  (phase 6). Audio import: WAV, FLAC, MP3, OGG (phase 4); export: WAV,
-  FLAC.
+- **Format version 6** (decision 0019) adds the synth instrument.
+- **Interchange** (decision 0020, `daw-formats::midi`, `dawproject`,
+  `flac`): Standard MIDI Files and DAWproject, in and out; what a clip
+  plays is worked out once, in `Pattern::played_in`, for the engine and
+  both exporters. MIDI goes out at 960 ticks per quarter with glides as
+  sixteenth-note tempo steps that keep the timing; DAWproject writes the
+  program's own devices with their exact settings as JSON (and the EQ,
+  compressor and limiter also as DAWproject's standard devices), plugin
+  settings as `.clap-preset` and `.vstpreset`, pattern clips as the notes
+  they play, and reads loops, nested clips and warps, folding repeated
+  notes back into patterns and naming what it leaves out (`LeftOut`).
+  Audio import: WAV, FLAC, MP3, OGG (phase 4); export: WAV and FLAC (FLAC
+  encoded frame by frame as the song renders).
+- **Opening and importing** (`session/files.rs`): Open takes any song
+  file (another program's opens as a new unsaved song); Import and drops
+  take sound and MIDI files.
 
 ## Plugins *(phase 3)*
 
@@ -268,6 +301,17 @@ Built with egui (eframe, wgpu renderer). All interface code is in `daw-ui`:
 - `keys`: note keys by physical position, the rebindable shortcut table.
 - `text`: every user-facing string. `theme`: colours, fonts, spacing; dark
   and light themes follow the system by default.
+
+## Distribution *(phase 6)*
+
+Decision 0022. `cargo xtask dist` builds the release program and puts
+beside it the licence notices (`xtask/src/notices.rs`: `cargo tree` per
+system for which crates are built in, `cargo metadata` for where their
+files are), the user guide as one HTML page (`xtask/src/guide.rs`) and the
+icon files the program writes itself (`--write-icons`). `cargo xtask
+installer` and `appimage` fill the templates in `packaging/` from
+`daw-ident` and run NSIS and appimagetool; "Program builds" runs them on
+Windows and on Ubuntu 24.04.
 
 ## Testing
 

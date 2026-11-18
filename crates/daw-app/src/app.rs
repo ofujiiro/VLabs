@@ -83,8 +83,16 @@ impl App {
                 .session_mut()
                 .set_audio_folder(autosaver.audio_folder());
         }
-        if let Some((project, path)) = autosaver.as_mut().and_then(Autosaver::take_orphan) {
-            workspace.offer_recovery(project, path);
+        if let Some(writer) = autosaver.as_ref().and_then(Autosaver::safety_writer) {
+            workspace.session_mut().set_safety_copy(Box::new(writer));
+        }
+        if let Some((project, path, found)) = autosaver.as_mut().and_then(Autosaver::take_orphan) {
+            let details = daw_ui::RecoveryDetails {
+                age_seconds: found.age_seconds,
+                newer_file: found.newer_file,
+                take: found.take,
+            };
+            workspace.offer_recovery(project, path, details);
         }
 
         // MIDI keyboards play straight into the engine; the window is told
@@ -287,6 +295,7 @@ impl eframe::App for App {
         }
         if let Some(autosaver) = &mut self.autosaver {
             let session = self.workspace.session_mut();
+            autosaver.note_take(session.take_in_progress());
             let version = session.document().version();
             let dirty = session.is_dirty();
             autosaver.tick(version, dirty, || {

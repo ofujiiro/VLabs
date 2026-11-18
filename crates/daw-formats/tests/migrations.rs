@@ -19,14 +19,23 @@ use daw_formats::{FORMAT_VERSION, load_project, save_project};
 use daw_model::{
     ACOUSTIC_KIT, AudioFile, AudioId, AutomationLane, AutomationPoint, AutomationTarget,
     ChainPlace, ClipContent, DEFAULT_VELOCITY, EffectKind, EqSettings, Instrument, Note, NoteId,
-    PluginFormat, PluginRef, PluginSetup, PluginState, Project, Scale, ScaleKind, Swing, Ticks,
-    TimeSignature,
+    PluginFormat, PluginRef, PluginSetup, PluginState, Project, Scale, ScaleKind, Swing,
+    SynthPreset, SynthSettings, SynthWave, Ticks, TimeSignature,
 };
 
 fn data_folder() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("data")
+}
+
+/// The synth of the version 6 sample: the Lead preset, changed.
+fn sample_synth() -> SynthSettings {
+    let mut settings = SynthPreset::Lead.settings();
+    settings.cutoff_hz = 1234.0;
+    settings.osc2.wave = SynthWave::Triangle;
+    settings.osc2.semitones = 7;
+    settings
 }
 
 /// The plugin of the version 3 sample, with settings made of these bytes.
@@ -72,7 +81,8 @@ fn write_hum(folder: &std::path::Path) {
 /// track, the pad setting and the effects; version 3 a plugin track with
 /// saved settings, a plugin effect and automation lanes; version 4 an audio
 /// track with a clip of a file kept in the container; version 5 a key with
-/// a change, a swung beat, a tempo glide and a time-signature change).
+/// a change, a swung beat, a tempo glide and a time-signature change;
+/// version 6 a track of the built-in synth with a lane for its cutoff).
 fn reference_project() -> Project {
     let mut project = Project::starter("Pattern 1", "Piano");
     let (_, pattern) = project.first_pattern().unwrap();
@@ -148,6 +158,15 @@ fn reference_project() -> Project {
             unit: Ticks::note_value(1, 8),
         };
     }
+    let lead = project.add_track("Lead", Instrument::Synth(sample_synth()));
+    if let Some(track) = project.track_mut(lead) {
+        let mut lane = AutomationLane::new(AutomationTarget::Instrument { param: 0 });
+        lane.insert(AutomationPoint {
+            at: Ticks::ZERO,
+            value: 0.2,
+        });
+        track.automation.push(lane);
+    }
     let triplet = Ticks::note_value(1, 12);
     for (i, key) in [60_u8, 64, 67, 72].iter().enumerate() {
         project.add_note(
@@ -201,6 +220,18 @@ fn every_released_format_version_still_opens() {
         check_mixing_and_plugins(&project, version, &path);
         if version >= 4 {
             check_audio(&project, &opened, &path);
+        }
+        if version >= 6 {
+            let lead = project
+                .tracks
+                .iter()
+                .find(|t| t.instrument.synth().is_some())
+                .unwrap_or_else(|| panic!("{} lost its synth track", path.display()));
+            assert_eq!(lead.instrument.synth(), Some(&sample_synth()));
+            assert_eq!(
+                lead.automation[0].target,
+                AutomationTarget::Instrument { param: 0 }
+            );
         }
         if version >= 5 {
             check_theory_and_rhythm(&project, &path);

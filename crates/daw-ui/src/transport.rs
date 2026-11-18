@@ -611,9 +611,15 @@ fn pattern_tools(ui: &mut Ui, session: &mut Session) {
     }
 }
 
-/// For a plugin track, the button that opens the plugin's own window.
+/// For a plugin track, the button that opens the plugin's own window; for
+/// a synth track, the synth's.
 fn plugin_button(ui: &mut Ui, session: &mut Session) {
-    let Some(target) = session.track_plugin(session.track_id()) else {
+    let track = session.track_id();
+    if session.synth_settings(track).is_some() {
+        crate::synth_ui::window_button(ui, session, track, 26.0);
+        return;
+    }
+    let Some(target) = session.track_plugin(track) else {
         return;
     };
     if session.is_plugin_missing(target) || !session.has_plugin_window(target) {

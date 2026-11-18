@@ -163,7 +163,11 @@ fn strip_ui(ui: &mut Ui, session: &mut Session, strip: &StripInfo, intents: &mut
                         let window = plugin.filter(|&target| {
                             !session.is_plugin_missing(target) && session.has_plugin_window(target)
                         });
+                        let synth = track.filter(|&t| session.synth_settings(t).is_some());
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if let Some(t) = synth {
+                                crate::synth_ui::window_button(ui, session, t, 20.0);
+                            }
                             if let Some(target) = window {
                                 let open = session.is_plugin_window_open(target);
                                 let label = if open {

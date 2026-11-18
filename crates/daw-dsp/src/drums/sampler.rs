@@ -243,8 +243,8 @@ impl Instrument for DrumSampler {
     }
 
     fn apply_settings(&mut self, settings: &InstrumentSettings) {
-        match settings {
-            InstrumentSettings::Drums(table) => self.set_pads(table),
+        if let InstrumentSettings::Drums(table) = settings {
+            self.set_pads(table);
         }
     }
 }

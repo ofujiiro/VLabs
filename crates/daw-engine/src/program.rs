@@ -71,6 +71,11 @@ pub(crate) enum LaneTarget {
     Instrument {
         param: u32,
     },
+    /// A setting of the track's built-in synth, by its number
+    /// (`SynthSettings::params`).
+    Synth {
+        param: usize,
+    },
 }
 
 /// An automation lane, ready to evaluate on the audio thread.
@@ -182,6 +187,9 @@ pub(crate) struct TrackProgram {
     pub automation: Vec<CompiledLane>,
     /// Built-in effects with automated settings.
     pub automated_effects: Vec<AutomatedEffect>,
+    /// The track's synth settings without automation, when its synth has
+    /// automated settings.
+    pub synth_base: Option<daw_model::SynthSettings>,
     /// The track's audio clips, sorted by start.
     pub audio: Vec<AudioSpan>,
     /// For each audio clip, the furthest end of it and those before it (to
@@ -482,9 +490,18 @@ fn lanes(
         let target = match lane.target {
             AutomationTarget::Volume => LaneTarget::Volume,
             AutomationTarget::Pan => LaneTarget::Pan,
-            // Only a plugin instrument has parameters.
+            // A plugin instrument has parameters, the synth numbered
+            // settings.
             AutomationTarget::Instrument { param } if track.instrument.plugin().is_some() => {
                 LaneTarget::Instrument { param }
+            }
+            AutomationTarget::Instrument { param }
+                if track.instrument.synth().is_some()
+                    && (param as usize) < daw_model::SynthSettings::params().len() =>
+            {
+                LaneTarget::Synth {
+                    param: param as usize,
+                }
             }
             AutomationTarget::Instrument { .. } => continue,
             AutomationTarget::Effect { effect, param } => {
@@ -653,43 +670,28 @@ pub(crate) fn compile(
                 0.0
             };
             let pan = track.strip.pan.clamp(-1.0, 1.0);
-            let mut notes = Vec::new();
-            for clip in &track.clips {
-                let ClipContent::Pattern { pattern, offset } = clip.content else {
-                    continue;
-                };
-                let Some(pattern) = project.pattern(pattern) else {
-                    continue;
-                };
-                if pattern.length <= Ticks::ZERO {
-                    continue;
-                }
-                // The pattern repeats from `offset` for the length of the
-                // clip, swung as it plays (decision 0018).
-                let swing = pattern.swing;
-                let mut cycle_start = clip.start - offset;
-                while cycle_start < clip.end() {
-                    for note in &pattern.notes {
-                        if note.start >= pattern.length {
-                            continue;
-                        }
-                        let start = cycle_start + swing.apply(note.start);
-                        let end = (cycle_start + swing.apply(note.end())).min(clip.end());
-                        if start >= clip.start && start < clip.end() && end > start {
-                            notes.push(NoteSpan {
-                                start,
-                                end,
-                                key: note.key,
-                                velocity: note.velocity,
-                            });
-                        }
-                    }
-                    cycle_start += pattern.length;
-                }
-            }
+            // Each pattern clip repeats its pattern for its length, swung as
+            // it plays (decision 0018).
+            let mut notes: Vec<NoteSpan> = track
+                .clips
+                .iter()
+                .filter_map(|clip| Some((clip, project.pattern(clip.pattern()?)?)))
+                .flat_map(|(clip, pattern)| pattern.played_in(clip))
+                .map(|n| NoteSpan {
+                    start: n.start,
+                    end: n.end,
+                    key: n.key,
+                    velocity: n.velocity,
+                })
+                .collect();
             notes.sort_by_key(|n| (n.start, n.key));
             let (gain_left, gain_right) = pan_gains(gain, pan);
             let (automation, automated_effects) = lanes(track, bpm, &effect_index);
+            let synth_base = track.instrument.synth().copied().filter(|_| {
+                automation
+                    .iter()
+                    .any(|l| matches!(l.target, LaneTarget::Synth { .. }))
+            });
             let (audio, audio_reach) = audio_spans(project, track, sample_rate, &sound_of);
             Some(TrackProgram {
                 slot,
@@ -704,6 +706,7 @@ pub(crate) fn compile(
                 effects: chain(&track.effects, bpm, &effect_index),
                 automation,
                 automated_effects,
+                synth_base,
                 audio,
                 audio_reach,
             })

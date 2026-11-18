@@ -82,6 +82,7 @@ impl Session {
     /// empty four-bar pattern at the start of the song, and puts it in
     /// focus.
     pub fn add_plugin_track(&mut self, info: &PluginInfo) -> TrackId {
+        self.safety_copy();
         let name = self.unique_track_name(&info.name);
         let instrument = Instrument::Plugin(PluginSetup::new(plugin_ref(info)));
         let track = self.doc.edit(text::EDIT_ADD_TRACK, |p| {
@@ -98,6 +99,7 @@ impl Session {
     /// Adds a plugin effect at the end of a chain, loading it at once (so
     /// its window can open straight away).
     pub fn add_plugin_effect(&mut self, place: ChainPlace, info: &PluginInfo) -> Option<EffectId> {
+        self.safety_copy();
         let kind = EffectKind::Plugin(PluginSetup::new(plugin_ref(info)));
         let id = self.add_effect(place, kind);
         self.sync_engine();
@@ -173,6 +175,7 @@ impl Session {
 
     /// Opens a plugin's window, or brings it to the front.
     pub fn show_plugin_window(&mut self, target: PluginTarget) {
+        self.safety_copy();
         let place = match target {
             PluginTarget::Instrument(track) => self.project().track(track).map(|t| t.name.clone()),
             PluginTarget::Effect(id) => match self.project().effect_place(id) {
@@ -269,6 +272,17 @@ impl Session {
                 if param.automatable {
                     targets.push(AutomationTarget::Instrument { param: param.id });
                 }
+            }
+        }
+        if t.instrument.synth().is_some() {
+            for index in 0..daw_model::SynthSettings::params().len() {
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "a couple of dozen settings"
+                )]
+                targets.push(AutomationTarget::Instrument {
+                    param: index as u32,
+                });
             }
         }
         let last = self.last_moved.and_then(|(target, param)| match target {
@@ -413,6 +427,9 @@ impl Session {
                 };
                 text::lane_name(&text::effect_name(&kind), &setting)
             }
+            AutomationTarget::Instrument { param } if self.synth_settings(track).is_some() => {
+                text::lane_name(text::SYNTH_TRACK, text::synth_param_name(param as usize))
+            }
             AutomationTarget::Instrument { param } => {
                 let target = PluginTarget::Instrument(track);
                 let setting = self.param_name(target, param);
@@ -449,6 +466,14 @@ impl Session {
                     }
                 }
             }
+            AutomationTarget::Instrument { param } if self.synth_settings(track).is_some() => {
+                let index = param as usize;
+                daw_model::SynthSettings::params()
+                    .get(index)
+                    .map_or_else(String::new, |spec| {
+                        text::synth_param_value(index, spec.value(value))
+                    })
+            }
             AutomationTarget::Instrument { param } => self
                 .engine
                 .plugin_param_text(PluginTarget::Instrument(track), param, f64::from(value))
@@ -475,10 +500,13 @@ impl Session {
                     None => 0.5,
                 }
             }
-            AutomationTarget::Instrument { param } => self
-                .engine
-                .plugin_param_value(PluginTarget::Instrument(track), param)
-                .map_or(0.5, |v| v as f32),
+            AutomationTarget::Instrument { param } => match t.instrument.synth() {
+                Some(settings) => settings.param(param as usize).unwrap_or(0.5),
+                None => self
+                    .engine
+                    .plugin_param_value(PluginTarget::Instrument(track), param)
+                    .map_or(0.5, |v| v as f32),
+            },
         }
     }
 

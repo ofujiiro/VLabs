@@ -140,9 +140,10 @@ pub fn command_name(command: crate::keys::Command) -> &'static str {
         C::ToggleKeyboard => "Show or hide the keyboard",
         C::ToggleMixer => "Show or hide the mixer",
         C::SwitchView => "Switch between the song and the pattern",
-        C::Export => "Export as WAV",
+        C::Export => "Export",
         C::Split => "Split the clip at the play position",
-        C::ImportAudio => "Import audio",
+        C::ImportAudio => "Import",
+        C::UserGuide => "User guide",
     }
 }
 pub const ABOUT: &str = "About";
@@ -377,6 +378,24 @@ pub fn recover_question() -> String {
 }
 
 pub const RECOVER: &str = "Recover it";
+pub const RECOVERED_TAKE: &str =
+    "It includes the sound that was being recorded when the program stopped.";
+pub const RECOVERY_OLDER: &str =
+    "The song's file was saved after this copy was made: recovering may bring back older work.";
+
+/// Which song was found after a crash, and how old the copy is.
+pub fn recovered_song(name: &str, age_seconds: u64) -> String {
+    let minutes = age_seconds / 60;
+    let when = match minutes {
+        0 => "less than a minute ago".to_owned(),
+        1 => "about a minute ago".to_owned(),
+        2..=59 => format!("about {minutes} minutes ago"),
+        60..=119 => "about an hour ago".to_owned(),
+        _ if minutes < 48 * 60 => format!("about {} hours ago", minutes / 60),
+        _ => format!("about {} days ago", minutes / (24 * 60)),
+    };
+    format!("{name}, saved automatically {when}")
+}
 pub const OPEN_TITLE: &str = "Open a song";
 pub const SAVE_TITLE: &str = "Save the song";
 
@@ -562,7 +581,11 @@ pub const DELETE_TRACK: &str = "Delete track";
 pub const OPEN_PATTERN: &str = "Open";
 pub const DUPLICATE_CLIP: &str = "Duplicate";
 pub const REMOVE_CLIP: &str = "Remove from the song";
-pub const SONG_HINT: &str = "Click on a track to place its pattern · drag to move · drag the end to repeat · double-click to open";
+pub const SONG_HINT: &str = "Click on a track to place its pattern · right-click to choose which · drag to move · drag the end to repeat · double-click to open";
+pub const PLACE_PATTERN_HERE: &str = "Place a pattern here";
+pub const NEW_PATTERN_HERE: &str = "New pattern";
+pub const PLAY_ANOTHER_PATTERN: &str = "Play another pattern";
+pub const EDIT_SWAP_PATTERN: &str = "play another pattern";
 
 // The mixer.
 pub const SHOW_MIXER: &str = "Show the mixer";
@@ -664,6 +687,225 @@ pub fn problem(problem: &daw_engine::Problem) -> String {
         P::PluginSettings { plugin, reason } => {
             format!("The plugin \"{plugin}\" did not take its saved settings ({reason})")
         }
+    }
+}
+
+// The synth (decision 0019).
+pub const ADD_SYNTH: &str = "Synth";
+pub const ADD_SYNTH_HINT: &str = "Add a synth track: shape your own sounds";
+/// A new synth track's name.
+pub const SYNTH_TRACK: &str = "Synth";
+pub const OPEN_SYNTH: &str = "Open the synth";
+pub const CLOSE_SYNTH: &str = "Close the synth";
+pub const EDIT_ADD_SYNTH: &str = "add synth track";
+pub const EDIT_CHANGE_SYNTH: &str = "change synth";
+pub const EDIT_SYNTH_PRESET: &str = "choose synth preset";
+pub const SYNTH_PRESET: &str = "Preset";
+pub const SYNTH_PRESET_HINT: &str = "A starting point: every control is set for a kind of sound";
+pub const SYNTH_CUSTOM: &str = "Custom";
+pub const OSCILLATORS: &str = "Oscillators";
+pub const OSCILLATOR_1: &str = "Oscillator 1";
+pub const OSCILLATOR_2: &str = "Oscillator 2";
+pub const WAVE: &str = "Wave";
+pub const OCTAVE: &str = "Octave";
+pub const SEMITONES: &str = "Semitones";
+pub const FINE_TUNE: &str = "Fine";
+pub const FINE_TUNE_HINT: &str = "Detune a little: two oscillators slightly apart sound wider";
+pub const NOISE: &str = "Noise";
+pub const PULSE_WIDTH: &str = "Pulse width";
+pub const PULSE_WIDTH_HINT: &str = "Changes the colour of the square waves";
+pub const FILTER: &str = "Filter";
+pub const FILTER_KIND: &str = "Kind";
+pub const CUTOFF: &str = "Cutoff";
+pub const CUTOFF_HINT: &str = "Lower makes the sound darker";
+pub const RESONANCE: &str = "Resonance";
+pub const RESONANCE_HINT: &str = "Makes the filter ring at the cutoff";
+pub const ENVELOPE_AMOUNT: &str = "Envelope";
+pub const ENVELOPE_AMOUNT_HINT: &str =
+    "How far the filter envelope opens the filter as a note plays (below zero, it closes it)";
+pub const KEY_TRACKING: &str = "Follow keys";
+pub const KEY_TRACKING_HINT: &str = "Higher notes open the filter further";
+pub const FILTER_CURVE: &str = "The filter's response";
+pub const ENVELOPES: &str = "Envelopes";
+pub const VOLUME_ENVELOPE: &str = "Volume";
+pub const FILTER_ENVELOPE: &str = "Filter";
+pub const DECAY: &str = "Decay";
+pub const SUSTAIN: &str = "Sustain";
+pub const ENVELOPE_SHAPE: &str = "The envelope's shape";
+pub const MOVEMENT: &str = "Movement";
+pub const LFO_SHAPE: &str = "Shape";
+pub const LFO_RATE: &str = "Speed";
+pub const VIBRATO: &str = "Vibrato";
+pub const VIBRATO_HINT: &str = "Wavers the pitch";
+pub const WOBBLE: &str = "Wobble";
+pub const WOBBLE_HINT: &str = "Moves the filter up and down";
+pub const TREMOLO: &str = "Tremolo";
+pub const TREMOLO_HINT: &str = "Wavers the volume";
+pub const PLAYING: &str = "Playing";
+pub const MONO: &str = "One note at a time";
+pub const MONO_HINT: &str = "Like a solo instrument: a new note takes over, and can glide";
+pub const SYNTH_GLIDE: &str = "Glide";
+pub const SYNTH_GLIDE_HINT: &str = "Notes slide into each other (one note at a time only)";
+pub const VELOCITY_AMOUNT: &str = "Velocity";
+pub const VELOCITY_AMOUNT_HINT: &str = "How much harder playing is louder and brighter";
+
+/// The synth window's title: "Synth · Bass line" (just "Synth" for a
+/// track of that name).
+pub fn synth_title(track: &str) -> String {
+    if track == SYNTH_TRACK {
+        SYNTH_TRACK.to_owned()
+    } else {
+        format!("{SYNTH_TRACK} · {track}")
+    }
+}
+
+/// What a synth track plays, under its name: "Synth · Warm pad".
+pub fn synth_description(settings: &daw_model::SynthSettings) -> String {
+    match daw_model::SynthPreset::matching(settings) {
+        Some(preset) => format!("{SYNTH_TRACK} · {}", synth_preset_name(preset)),
+        None => format!("{SYNTH_TRACK} · {SYNTH_CUSTOM}"),
+    }
+}
+
+/// A synth preset's name.
+pub fn synth_preset_name(preset: daw_model::SynthPreset) -> &'static str {
+    use daw_model::SynthPreset as P;
+    match preset {
+        P::SoftKeys => "Soft keys",
+        P::WarmPad => "Warm pad",
+        P::Bass => "Bass",
+        P::SubBass => "Sub bass",
+        P::Lead => "Lead",
+        P::Pluck => "Pluck",
+        P::Brass => "Brass",
+        P::Plain => "Plain",
+    }
+}
+
+/// An oscillator wave's name.
+pub fn synth_wave_name(wave: daw_model::SynthWave) -> &'static str {
+    use daw_model::SynthWave as W;
+    match wave {
+        W::Sine => "Sine",
+        W::Triangle => "Triangle",
+        W::Saw => "Saw",
+        W::Square => "Square",
+    }
+}
+
+/// A filter kind's name.
+pub fn synth_filter_name(filter: daw_model::SynthFilter) -> &'static str {
+    use daw_model::SynthFilter as F;
+    match filter {
+        F::LowPass24 => "Low-pass, steep",
+        F::LowPass12 => "Low-pass, gentle",
+        F::HighPass => "High-pass",
+        F::BandPass => "Band-pass",
+    }
+}
+
+/// An LFO shape's name.
+pub fn lfo_shape_name(shape: daw_model::LfoShape) -> &'static str {
+    use daw_model::LfoShape as S;
+    match shape {
+        S::Sine => "Smooth",
+        S::Triangle => "Triangle",
+        S::Square => "Square",
+        S::Saw => "Saw",
+        S::Random => "Random",
+    }
+}
+
+/// The name of a synth setting that can change over the song (in the
+/// order of [`daw_model::SynthSettings::params`]).
+pub fn synth_param_name(index: usize) -> &'static str {
+    const NAMES: [&str; 25] = [
+        CUTOFF,
+        RESONANCE,
+        "Filter envelope",
+        KEY_TRACKING,
+        "Oscillator 1 level",
+        "Oscillator 1 fine",
+        "Oscillator 2 level",
+        "Oscillator 2 fine",
+        NOISE,
+        PULSE_WIDTH,
+        ATTACK,
+        DECAY,
+        SUSTAIN,
+        RELEASE,
+        "Filter attack",
+        "Filter decay",
+        "Filter sustain",
+        "Filter release",
+        "LFO speed",
+        VIBRATO,
+        WOBBLE,
+        TREMOLO,
+        SYNTH_GLIDE,
+        VELOCITY_AMOUNT,
+        VOLUME,
+    ];
+    NAMES.get(index).copied().unwrap_or("")
+}
+
+/// A synth setting as people read it ("1.2 kHz", "350 ms", "+2.0 oct").
+pub fn synth_param_value(index: usize, value: f32) -> String {
+    match index {
+        0 => hz(value),
+        2 | 20 => octaves(value),
+        5 | 7 | 19 => cents(value),
+        10 | 11 | 13 | 14 | 15 | 17 | 22 => time(value),
+        18 => rate(value),
+        24 => db(value),
+        _ => percent(value),
+    }
+}
+
+/// A time: "4.0 ms", "350 ms", "1.25 s".
+pub fn time(seconds_value: f32) -> String {
+    if seconds_value < 1.0 {
+        ms(seconds_value * 1000.0)
+    } else {
+        seconds(seconds_value)
+    }
+}
+
+/// Octaves: "+2.0 oct".
+pub fn octaves(value: f32) -> String {
+    if value > 0.04 {
+        format!("+{value:.1} oct")
+    } else {
+        format!("{value:.1} oct")
+    }
+}
+
+/// Cents: "+7 ct".
+pub fn cents(value: f32) -> String {
+    #[allow(clippy::cast_possible_truncation, reason = "a display value")]
+    let rounded = value.round() as i32;
+    if rounded > 0 {
+        format!("+{rounded} ct")
+    } else {
+        format!("{rounded} ct")
+    }
+}
+
+/// A speed: "5.0 Hz", "0.25 Hz".
+pub fn rate(value: f32) -> String {
+    if value < 1.0 {
+        format!("{value:.2} Hz")
+    } else {
+        format!("{value:.1} Hz")
+    }
+}
+
+/// A whole number of steps with its sign: "+1", "0", "-2".
+pub fn signed(value: i8) -> String {
+    if value > 0 {
+        format!("+{value}")
+    } else {
+        value.to_string()
     }
 }
 
@@ -911,11 +1153,20 @@ pub fn seconds(value: f32) -> String {
     format!("{value:.2} s")
 }
 
-// Export.
-pub const EXPORT: &str = "Export as WAV…";
+// Export (decision 0020).
+pub const EXPORT: &str = "Export…";
 pub const EXPORT_TITLE: &str = "Export the song";
-pub const EXPORT_HINT: &str =
-    "The whole song is written to a WAV file, with its echoes and reverb fading out at the end.";
+pub const EXPORT_HINT: &str = "Choose what to make of the song.";
+pub const EXPORT_SOUND: &str = "A sound file";
+pub const EXPORT_SOUND_HINT: &str = "The whole song as you hear it, with its echoes and reverb fading out at the end: to play anywhere or share.";
+pub const EXPORT_WAV: &str = "WAV";
+pub const EXPORT_WAV_HINT: &str = "Plays everywhere";
+pub const EXPORT_FLAC: &str = "FLAC";
+pub const EXPORT_FLAC_HINT: &str = "About half the size, with nothing lost";
+pub const EXPORT_DAWPROJECT: &str = "A project for another music program";
+pub const EXPORT_DAWPROJECT_HINT: &str = "DAWproject: tracks, notes, sound, mixer, plugins and automation, for Bitwig Studio, Studio One, Cubase and others.";
+pub const EXPORT_MIDI: &str = "The notes, as a MIDI file";
+pub const EXPORT_MIDI_HINT: &str = "Notes, tempo and time signatures, for any music program.";
 pub const EXPORT_CD: &str = "CD quality";
 pub const EXPORT_CD_HINT: &str = "16-bit, 44.1 kHz — plays everywhere";
 pub const EXPORT_STUDIO: &str = "Studio quality";
@@ -924,6 +1175,22 @@ pub const EXPORT_BUTTON: &str = "Choose where and export…";
 pub const EXPORTING: &str = "Exporting the song…";
 pub const EXPORT_CANCELLED: &str = "Export cancelled";
 pub const EXPORT_FILE_TYPE: &str = "WAV sound file";
+pub const FLAC_FILE_TYPE: &str = "FLAC sound file";
+pub const DAWPROJECT_FILE_TYPE: &str = "DAWproject file";
+pub const MIDI_FILE_TYPE: &str = "MIDI file";
+/// Every kind of file Open takes.
+pub const ANY_SONG_FILE_TYPE: &str = "Songs";
+
+/// The file type an export writes, for the save dialog.
+pub fn export_file_type(target: crate::export::ExportTarget) -> &'static str {
+    use crate::export::ExportTarget as T;
+    match target {
+        T::Wav => EXPORT_FILE_TYPE,
+        T::Flac => FLAC_FILE_TYPE,
+        T::DawProject => DAWPROJECT_FILE_TYPE,
+        T::Midi => MIDI_FILE_TYPE,
+    }
+}
 
 pub fn exported(path: &str) -> String {
     format!("Exported {path}")
@@ -941,9 +1208,13 @@ pub const ADD_AUDIO: &str = "Audio";
 pub const ADD_AUDIO_HINT: &str =
     "Add a track for recording from a microphone or importing sound files";
 pub const RECORD_SOUND: &str = "Record sound";
-pub const IMPORT_AUDIO: &str = "Import audio…";
-pub const IMPORT_FILE_TYPE: &str = "Sound files";
-pub const IMPORT_TITLE: &str = "Import sound files";
+pub const IMPORT_AUDIO: &str = "Import…";
+pub const USER_GUIDE: &str = "User guide";
+pub const IMPORT_FILE_TYPE: &str = "Sound and MIDI files";
+pub const IMPORT_TITLE: &str = "Import sound or MIDI files";
+pub const EDIT_IMPORT_MIDI: &str = "import MIDI file";
+/// A track named by its number ("Track 3").
+pub const TRACK: &str = "Track";
 pub const NO_INPUT_DEVICE: &str = "No microphone or sound input was found. Plug one in, or allow this program to use it, then record again.";
 pub const EDIT_ADD_AUDIO_TRACK: &str = "add audio track";
 pub const EDIT_IMPORT: &str = "import sound";
@@ -987,6 +1258,58 @@ pub fn imported(name: &str) -> String {
 
 pub fn could_not_import(name: &str, error: &str) -> String {
     format!("Could not import {name}: {error}")
+}
+
+/// Said after a MIDI file's tracks were added to the song.
+pub fn imported_midi(name: &str, tracks: usize) -> String {
+    match tracks {
+        1 => format!("Imported {name}: one track of notes"),
+        n => format!("Imported {name}: {n} tracks of notes"),
+    }
+}
+
+pub fn no_notes_in(name: &str) -> String {
+    format!("{name} has no notes to import")
+}
+
+/// Said after another program's song was opened, with what it could not
+/// bring.
+pub fn opened_other(name: &str, left_out: &[daw_formats::dawproject::LeftOut]) -> String {
+    use daw_formats::dawproject::LeftOut as L;
+    let mut parts: Vec<String> = Vec::new();
+    let devices: Vec<&str> = left_out
+        .iter()
+        .filter_map(|l| match l {
+            L::Device(name) => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    if !devices.is_empty() {
+        parts.push(format!(
+            "devices {} cannot play ({})",
+            daw_ident::PRODUCT_NAME,
+            devices.join(", ")
+        ));
+    }
+    for item in left_out {
+        match item {
+            L::Device(_) => {}
+            L::Routing => parts.push("group tracks and sends".to_owned()),
+            L::StretchedAudio => {
+                parts.push("time-stretching (the sound plays at its own speed)".to_owned());
+            }
+            L::MissingAudio(file) => parts.push(format!("the missing sound file \"{file}\"")),
+            L::Scenes => parts.push("clip launcher scenes".to_owned()),
+        }
+    }
+    if parts.is_empty() {
+        format!("Opened {name} as a new song: save it to keep it")
+    } else {
+        format!(
+            "Opened {name} as a new song. Left out: {}",
+            parts.join("; ")
+        )
+    }
 }
 
 pub fn could_not_record(error: &str) -> String {

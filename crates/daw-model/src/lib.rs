@@ -9,6 +9,7 @@ mod plugin;
 mod project;
 mod quantize;
 mod song;
+mod synth;
 mod theory;
 mod time;
 
@@ -27,7 +28,10 @@ pub use quantize::quantize_starts;
 pub use song::{
     ACOUSTIC_KIT, AudioFile, AudioId, BUILTIN_PIANO, ChannelStrip, Clip, ClipContent, ClipId,
     DEFAULT_VELOCITY, ELECTRONIC_KIT, EffectId, Instrument, MAX_KEY, Note, NoteId, PadSetting,
-    Pattern, PatternId, SoundSource, Swing, Track, TrackId, default_step,
+    Pattern, PatternId, PlayedNote, SoundSource, Swing, Track, TrackId, default_step,
+};
+pub use synth::{
+    LfoShape, SynthEnvelope, SynthFilter, SynthOscillator, SynthPreset, SynthSettings, SynthWave,
 };
 pub use theory::{
     ChordKind, ChordShape, INTERVALS, KeyChange, KeyMap, Scale, ScaleKind, invert, invert_once,

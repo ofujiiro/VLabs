@@ -913,7 +913,7 @@ checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
 
 [[package]]
 name = "daw-app"
-version = "0.0.0"
+version = "0.6.0"
 dependencies = [
  "daw-devices",
  "daw-engine",
@@ -933,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "daw-devices"
-version = "0.0.0"
+version = "0.6.0"
 dependencies = [
  "cpal",
  "daw-rt",
@@ -943,7 +943,7 @@ dependencies = [
 
 [[package]]
 name = "daw-dsp"
-version = "0.0.0"
+version = "0.6.0"
 dependencies = [
  "claxon",
  "daw-rt",
@@ -952,7 +952,7 @@ dependencies = [
 
 [[package]]
 name = "daw-engine"
-version = "0.0.0"
+version = "0.6.0"
 dependencies = [
  "daw-dsp",
  "daw-model",
@@ -963,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "daw-formats"
-version = "0.0.0"
+version = "0.6.0"
 dependencies = [
  "claxon",
  "daw-ident",
@@ -971,6 +971,7 @@ dependencies = [
  "flacenc",
  "lewton",
  "nanomp3",
+ "quick-xml 0.42.0",
  "serde",
  "serde_json",
  "zip",
@@ -978,11 +979,11 @@ dependencies = [
 
 [[package]]
 name = "daw-ident"
-version = "0.0.0"
+version = "0.6.0"
 
 [[package]]
 name = "daw-model"
-version = "0.0.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -990,7 +991,7 @@ dependencies = [
 
 [[package]]
 name = "daw-plugin-host"
-version = "0.0.0"
+version = "0.6.0"
 dependencies = [
  "clack-extensions",
  "clack-host",
@@ -1007,11 +1008,11 @@ dependencies = [
 
 [[package]]
 name = "daw-rt"
-version = "0.0.0"
+version = "0.6.0"
 
 [[package]]
 name = "daw-ui"
-version = "0.0.0"
+version = "0.6.0"
 dependencies = [
  "daw-dsp",
  "daw-engine",
@@ -2123,7 +2124,7 @@ checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
 
 [[package]]
 name = "make-drums"
-version = "0.0.0"
+version = "0.6.0"
 dependencies = [
  "claxon",
  "daw-dsp",
@@ -2132,7 +2133,7 @@ dependencies = [
 
 [[package]]
 name = "make-piano"
-version = "0.0.0"
+version = "0.6.0"
 dependencies = [
  "claxon",
  "daw-dsp",
@@ -3077,6 +3078,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "quick-xml"
+version = "0.42.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3524,7 +3534,7 @@ dependencies = [
 
 [[package]]
 name = "spike-audio-latency"
-version = "0.0.0"
+version = "0.6.0"
 dependencies = [
  "cpal",
  "daw-rt",
@@ -3534,7 +3544,7 @@ dependencies = [
 
 [[package]]
 name = "spike-piano-roll"
-version = "0.0.0"
+version = "0.6.0"
 dependencies = [
  "eframe",
  "egui",
@@ -3542,7 +3552,7 @@ dependencies = [
 
 [[package]]
 name = "spike-plugin-host"
-version = "0.0.0"
+version = "0.6.0"
 dependencies = [
  "clack-extensions",
  "clack-host",
@@ -4081,7 +4091,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "338e30461b3a2b67d70eb30a6d89f8e0c93a833e07d2ae89085cd070c4a00ac0"
 dependencies = [
  "proc-macro2",
- "quick-xml",
+ "quick-xml 0.41.0",
  "quote",
 ]
 
@@ -4780,7 +4790,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.0.0"
+version = "0.6.0"
 dependencies = [
  "daw-ident",
 ]

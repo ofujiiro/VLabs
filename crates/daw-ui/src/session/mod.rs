@@ -12,12 +12,15 @@ mod arrange;
 mod audio;
 mod audio_store;
 mod conductor;
+mod files;
 mod mixing;
 mod plugins;
 mod recorder;
+mod synth;
 mod theory;
 
-pub use audio::{LiveTake, SoundState};
+pub use audio::{LiveTake, SoundState, TakeNote};
+pub use files::SongFile;
 pub use mixing::MAX_GAIN;
 pub use plugins::{LaneChoice, PluginSearch};
 pub use theory::Draw;
@@ -33,7 +36,7 @@ use daw_model::{
 };
 use egui::Key;
 
-use crate::export::{Export, ExportFormat};
+use crate::export::{Export, ExportFormat, ExportTarget};
 use crate::keys::{HIGHEST_OFFSET, note_offset};
 use crate::settings::{Settings, clamp_base};
 use crate::text;
@@ -264,6 +267,18 @@ pub struct Session {
     input_until: Option<Instant>,
     /// The input meter's level, falling back slowly.
     input_meter: f32,
+    /// The synth tracks whose windows are open.
+    synth_windows: Vec<TrackId>,
+    /// Writes a recovery copy at once, before risky moments (decision
+    /// 0021).
+    safety: Option<Box<dyn SafetyCopy>>,
+}
+
+/// Writes a recovery copy of the song at once and waits until it is on
+/// disk (the program's autosave gives the session one, decision 0021).
+pub trait SafetyCopy {
+    /// Writes `project` (from the file `path`, if it has one).
+    fn write_now(&self, project: &Project, path: Option<&Path>);
 }
 
 impl Session {
@@ -334,6 +349,8 @@ impl Session {
             finishing: Vec::new(),
             input_until: None,
             input_meter: 0.0,
+            synth_windows: Vec::new(),
+            safety: None,
         };
         session.selection_revision = session.doc.revision();
         session.load_song_audio();
@@ -373,6 +390,24 @@ impl Session {
     }
 
     // ----- What is open
+
+    /// Gives the session a way to write a recovery copy at once.
+    pub fn set_safety_copy(&mut self, safety: Box<dyn SafetyCopy>) {
+        self.safety = Some(safety);
+    }
+
+    /// Writes a recovery copy now, if the song has unsaved changes: right
+    /// before a moment a plugin could crash the program (it loads, its
+    /// window opens).
+    pub(crate) fn safety_copy(&mut self) {
+        if !self.is_dirty() || self.safety.is_none() {
+            return;
+        }
+        self.capture_plugin_states();
+        if let Some(safety) = &self.safety {
+            safety.write_now(self.doc.project(), self.path.as_deref());
+        }
+    }
 
     /// The project as it is now.
     pub fn project(&self) -> &Project {
@@ -1437,6 +1472,7 @@ impl Session {
         self.audio_focus = None;
         self.audio_take = None;
         self.finishing.clear();
+        self.synth_windows.clear();
         // The old song's sound goes; the new song's is read.
         let wanted: HashSet<String> = self
             .project()
@@ -1490,12 +1526,18 @@ impl Session {
 
     // ----- Export
 
-    /// Starts writing the song to a WAV file in the background.
+    /// Starts writing the song to a sound file (WAV, or FLAC with
+    /// `target`) in the background.
     pub fn start_export(&mut self, path: &Path, format: ExportFormat) {
-        if self.export.is_some() {
+        self.start_sound_export(path, format, ExportTarget::Wav);
+    }
+
+    /// Starts writing the song to a WAV or FLAC file in the background.
+    pub fn start_sound_export(&mut self, path: &Path, format: ExportFormat, target: ExportTarget) {
+        if self.export.is_some() || !target.is_sound() {
             return;
         }
-        let path = crate::export::with_wav_extension(path);
+        let path = target.with_extension(path);
         self.capture_plugin_states();
         self.export = Some(Export::start(
             self.project().clone(),
@@ -1503,6 +1545,7 @@ impl Session {
             self.engine.config(),
             path,
             format,
+            target,
         ));
     }
 

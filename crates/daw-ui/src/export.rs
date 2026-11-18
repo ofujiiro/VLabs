@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Writing the song to a WAV file in the background. A second engine renders
+//! Writing the song to a sound file (WAV or FLAC) in the background. A second engine renders
 //! it offline through exactly the same processing as live playback, block by
 //! block, so a long song never has to fit in memory; the window keeps working
 //! and shows the progress, and the export can be cancelled. The song plays to
@@ -12,8 +12,99 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread::JoinHandle;
 
 use daw_engine::{EngineConfig, OfflineRender, SoundLibrary};
+use daw_formats::flac::{FlacBits, FlacWriter};
 use daw_formats::wav::{WavFormat, WavWriter};
 use daw_model::Project;
+
+/// What an export writes (decision 0020).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExportTarget {
+    /// A WAV sound file.
+    #[default]
+    Wav,
+    /// A FLAC sound file (smaller, lossless).
+    Flac,
+    /// A DAWproject file, for other music programs.
+    DawProject,
+    /// A Standard MIDI File: the notes and the tempo.
+    Midi,
+}
+
+impl ExportTarget {
+    /// The file ending, without the dot.
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Wav => "wav",
+            Self::Flac => "flac",
+            Self::DawProject => "dawproject",
+            Self::Midi => "mid",
+        }
+    }
+
+    /// Whether it is a sound file (rendered in the background).
+    pub fn is_sound(self) -> bool {
+        matches!(self, Self::Wav | Self::Flac)
+    }
+
+    /// `path` with this ending (added unless it has it already).
+    pub fn with_extension(self, path: &Path) -> PathBuf {
+        let wanted = self.extension();
+        let has_it = path.extension().is_some_and(|e| {
+            e.eq_ignore_ascii_case(wanted) || (self == Self::Midi && e.eq_ignore_ascii_case("midi"))
+        });
+        if has_it {
+            path.to_path_buf()
+        } else {
+            let mut name = path.as_os_str().to_owned();
+            name.push(".");
+            name.push(wanted);
+            PathBuf::from(name)
+        }
+    }
+}
+
+/// A sound file being written: WAV or FLAC.
+enum SoundWriter {
+    Wav(WavWriter),
+    Flac(Box<FlacWriter>),
+}
+
+impl SoundWriter {
+    fn create(
+        path: &Path,
+        target: ExportTarget,
+        format: ExportFormat,
+        rate: u32,
+    ) -> std::io::Result<Self> {
+        Ok(match target {
+            ExportTarget::Flac => {
+                Self::Flac(Box::new(FlacWriter::create(path, format.flac(), rate)?))
+            }
+            _ => Self::Wav(WavWriter::create(path, format.wav(), rate)?),
+        })
+    }
+
+    fn write(&mut self, left: &[f32], right: &[f32]) -> std::io::Result<()> {
+        match self {
+            Self::Wav(w) => w.write(left, right),
+            Self::Flac(w) => w.write(left, right),
+        }
+    }
+
+    fn finish(self) -> std::io::Result<()> {
+        match self {
+            Self::Wav(w) => w.finish(),
+            Self::Flac(w) => w.finish(),
+        }
+    }
+
+    fn cancel(self) {
+        match self {
+            Self::Wav(w) => w.cancel(),
+            Self::Flac(w) => w.cancel(),
+        }
+    }
+}
 
 /// The kinds of file offered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -40,6 +131,13 @@ impl ExportFormat {
             Self::Studio => WavFormat::Pcm24,
         }
     }
+
+    fn flac(self) -> FlacBits {
+        match self {
+            Self::Cd => FlacBits::Bits16,
+            Self::Studio => FlacBits::Bits24,
+        }
+    }
 }
 
 /// How quiet the end must be for the tail to count as over (-80 dBFS).
@@ -64,13 +162,15 @@ pub struct Export {
 }
 
 impl Export {
-    /// Starts rendering `project` into a WAV file at `path`.
+    /// Starts rendering `project` into a sound file at `path` (WAV or
+    /// FLAC, as `target` says).
     pub fn start(
         project: Project,
         library: SoundLibrary,
         config: EngineConfig,
         path: PathBuf,
         format: ExportFormat,
+        target: ExportTarget,
     ) -> Self {
         let progress = Arc::new(AtomicU32::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
@@ -83,6 +183,7 @@ impl Export {
             },
             path,
             format,
+            target,
             progress: Arc::clone(&progress),
             cancel: Arc::clone(&cancel),
         };
@@ -148,6 +249,7 @@ struct Job {
     config: EngineConfig,
     path: PathBuf,
     format: ExportFormat,
+    target: ExportTarget,
     progress: Arc<AtomicU32>,
     cancel: Arc<AtomicBool>,
 }
@@ -165,8 +267,8 @@ impl Job {
             .ceil() as u64;
         let tail_limit = song_frames + u64::from(MAX_TAIL_SECONDS * rate);
         let quiet_needed = u64::from(QUIET_SECONDS * rate);
-        let mut writer =
-            WavWriter::create(&self.path, self.format.wav(), rate).map_err(|e| e.to_string())?;
+        let mut writer = SoundWriter::create(&self.path, self.target, self.format, rate)
+            .map_err(|e| e.to_string())?;
         let mut left = vec![0.0_f32; BLOCK];
         let mut right = vec![0.0_f32; BLOCK];
         let mut quiet: u64 = 0;
@@ -207,14 +309,5 @@ impl Job {
 
 /// Adds ".wav" to a path that has another ending or none.
 pub fn with_wav_extension(path: &Path) -> PathBuf {
-    let has_it = path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("wav"));
-    if has_it {
-        path.to_path_buf()
-    } else {
-        let mut name = path.as_os_str().to_owned();
-        name.push(".wav");
-        PathBuf::from(name)
-    }
+    ExportTarget::Wav.with_extension(path)
 }

@@ -14,7 +14,7 @@ use daw_model::{EffectId, Note, PatternId, Project, TrackId};
 use egui::{Button, Event, Key, Modal, Panel, RichText, ThemePreference, Ui, ViewportCommand};
 
 use crate::effect_ui::EffectWindows;
-use crate::export::ExportFormat;
+use crate::export::{ExportFormat, ExportTarget};
 use crate::keyboard_panel::{self, KeyboardPanel};
 use crate::keys::{BindError, Command, KeyLabels, Keymap, LayoutFamily, Shortcut, note_offset};
 use crate::mixer::{MIXER_HEIGHT, MixerPanel, format_name};
@@ -33,12 +33,17 @@ pub trait Host {
     fn choose_file_to_open(&mut self) -> Option<PathBuf>;
     /// Asks the person where to save the song.
     fn choose_file_to_save(&mut self, suggested_name: &str) -> Option<PathBuf>;
-    /// Asks the person where to export the song as a WAV file.
-    fn choose_export_file(&mut self, suggested_name: &str) -> Option<PathBuf>;
-    /// Asks the person which sound files to import (none if they cancel).
+    /// Asks the person where to export the song (a sound file, a
+    /// DAWproject or a MIDI file, as `target` says).
+    fn choose_export_file(&mut self, suggested_name: &str, target: ExportTarget)
+    -> Option<PathBuf>;
+    /// Asks the person which sound or MIDI files to import (none if they
+    /// cancel).
     fn choose_audio_files(&mut self) -> Vec<PathBuf> {
         Vec::new()
     }
+    /// Shows the user guide (in the browser).
+    fn open_user_guide(&mut self) {}
 }
 
 /// Something a part of the window asks the window to do (open a dialog or
@@ -53,6 +58,14 @@ pub enum Intent {
     OpenEffect(EffectId),
     /// Choose the instrument of a new track.
     ChooseInstrument,
+}
+
+/// The instruments that come with the program, in the chooser.
+#[derive(Clone, Copy)]
+enum Included {
+    Piano,
+    Drums,
+    Synth,
 }
 
 /// What a rename dialog renames.
@@ -75,6 +88,18 @@ pub enum Request {
     FindPlugins,
 }
 
+/// What the person is told about work found after a crash (decision
+/// 0021).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RecoveryDetails {
+    /// How long ago the copy was written, in seconds.
+    pub age_seconds: u64,
+    /// Whether the song's own file was saved after the copy.
+    pub newer_file: bool,
+    /// Whether a take being recorded was brought back.
+    pub take: bool,
+}
+
 /// What to do once unsaved changes have been dealt with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Pending {
@@ -89,6 +114,7 @@ enum Dialog {
     Recovery {
         project: Box<Project>,
         path: Option<PathBuf>,
+        details: RecoveryDetails,
     },
     About,
     Shortcuts {
@@ -101,6 +127,7 @@ enum Dialog {
     },
     Export {
         format: ExportFormat,
+        target: ExportTarget,
     },
     Exporting,
     Instruments {
@@ -202,17 +229,28 @@ impl Workspace {
     }
 
     /// Offers to continue with work recovered after a crash.
-    pub fn offer_recovery(&mut self, project: Project, path: Option<PathBuf>) {
+    pub fn offer_recovery(
+        &mut self,
+        project: Project,
+        path: Option<PathBuf>,
+        details: RecoveryDetails,
+    ) {
         self.dialog = Some(Dialog::Recovery {
             project: Box::new(project),
             path,
+            details,
         });
     }
 
-    /// Opens a song (from the command line, for instance).
+    /// Opens a song (from the command line, for instance): a song of this program,
+    /// or another program's (DAWproject, MIDI) as a new unsaved song.
     pub fn open(&mut self, path: PathBuf) {
-        if self.session.open(&path).is_ok() {
-            self.settings.remember_file(path);
+        if self.session.open_any(&path).is_ok() {
+            if crate::session::SongFile::of(&path) != Some(crate::session::SongFile::Midi)
+                && crate::session::SongFile::of(&path) != Some(crate::session::SongFile::DawProject)
+            {
+                self.settings.remember_file(path);
+            }
             self.refit_views();
         }
     }
@@ -318,6 +356,7 @@ impl Workspace {
                 View::Pattern => self.roll.ui(ui, &mut self.session),
             });
         self.effects.ui(&ctx, &mut self.session);
+        crate::synth_ui::show_windows(&ctx, &mut self.session);
         self.show_dialog(&ctx);
 
         for intent in intents {
@@ -330,12 +369,11 @@ impl Workspace {
         self.schedule_repaint(&ctx);
     }
 
-    /// Sound files dropped while a pattern is open: the song comes on
-    /// screen with them (the song view takes them itself).
+    /// Files dropped on the window: a song file opens (after asking about
+    /// unsaved changes); sound and MIDI files dropped while a pattern is
+    /// open bring the song on screen with them (the song view takes them
+    /// itself otherwise).
     fn take_dropped_files(&mut self, ctx: &egui::Context) {
-        if self.session.view() != View::Pattern {
-            return;
-        }
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
                 .dropped_files
@@ -343,7 +381,21 @@ impl Workspace {
                 .map(|f| f.path().to_path_buf())
                 .collect()
         });
-        if !dropped.is_empty() {
+        if dropped.is_empty() {
+            return;
+        }
+        let song = dropped.iter().find(|p| {
+            matches!(
+                crate::session::SongFile::of(p),
+                Some(crate::session::SongFile::Native | crate::session::SongFile::DawProject)
+            )
+        });
+        if let Some(song) = song.cloned() {
+            ctx.input_mut(|i| i.raw.dropped_files.clear());
+            self.ask_then(ctx, Pending::Open(Some(song)));
+            return;
+        }
+        if self.session.view() == View::Pattern {
             ctx.input_mut(|i| i.raw.dropped_files.clear());
             self.import(dropped);
         }
@@ -617,6 +669,7 @@ impl Workspace {
                 } else {
                     self.dialog = Some(Dialog::Export {
                         format: ExportFormat::default(),
+                        target: ExportTarget::default(),
                     });
                 }
             }
@@ -629,6 +682,7 @@ impl Workspace {
             }
             // Splitting acts on clips, in the song view.
             Command::Split => {}
+            Command::UserGuide => self.host.open_user_guide(),
         }
     }
 
@@ -641,7 +695,7 @@ impl Workspace {
             .audio_track_in_focus()
             .then(|| self.session.focused_track());
         let at = self.session.song_position();
-        self.session.import_audio(files, track, at);
+        self.session.import_files(files, track, at);
     }
 
     /// Commands that mean something else in the song view: they act on the
@@ -809,6 +863,10 @@ impl Workspace {
                 });
                 ui.close();
             }
+            if item(ui, text::USER_GUIDE, Command::UserGuide, &self.keymap) {
+                actions.push(Command::UserGuide);
+                ui.close();
+            }
             if ui.button(text::ABOUT).clicked() {
                 self.dialog = Some(Dialog::About);
                 ui.close();
@@ -900,13 +958,36 @@ impl Workspace {
                 }
                 Dialog::Unsaved(pending)
             }
-            Dialog::Recovery { project, path } => {
+            Dialog::Recovery {
+                project,
+                path,
+                details,
+            } => {
                 let mut choice = None;
                 modal("recovery", ctx).show(ctx, |ui| {
-                    ui.set_width(420.0);
+                    ui.set_width(440.0);
                     ui.heading(text::RECOVER_TITLE);
                     ui.add_space(8.0);
                     ui.label(text::recover_question());
+                    ui.add_space(8.0);
+                    let name = path
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .or_else(|| {
+                            (!project.title.trim().is_empty()).then(|| project.title.clone())
+                        })
+                        .unwrap_or_else(|| text::UNTITLED.to_owned());
+                    ui.label(
+                        RichText::new(text::recovered_song(&name, details.age_seconds)).strong(),
+                    );
+                    if details.take {
+                        ui.label(text::RECOVERED_TAKE);
+                    }
+                    if details.newer_file {
+                        let p = Palette::of(ui.ctx());
+                        ui.label(RichText::new(text::RECOVERY_OLDER).color(p.record));
+                    }
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
                         if ui.button(text::RECOVER).clicked() {
@@ -931,7 +1012,11 @@ impl Workspace {
                     }
                     None => {}
                 }
-                Dialog::Recovery { project, path }
+                Dialog::Recovery {
+                    project,
+                    path,
+                    details,
+                }
             }
             Dialog::About => {
                 let response = modal("about", ctx).show(ctx, |ui| {
@@ -992,27 +1077,65 @@ impl Workspace {
                 }
                 Dialog::Rename { what, name }
             }
-            Dialog::Export { mut format } => {
+            Dialog::Export {
+                mut format,
+                mut target,
+            } => {
                 let mut choice = None;
                 modal("export", ctx).show(ctx, |ui| {
-                    ui.set_width(420.0);
+                    ui.set_width(460.0);
                     ui.heading(text::EXPORT_TITLE);
                     ui.add_space(6.0);
                     ui.label(RichText::new(text::EXPORT_HINT).weak());
                     ui.add_space(10.0);
+                    let mut sound = target.is_sound();
+                    if ui.radio(sound, text::EXPORT_SOUND).clicked() && !sound {
+                        target = ExportTarget::Wav;
+                        sound = true;
+                    }
+                    ui.indent("export-sound", |ui| {
+                        ui.label(RichText::new(text::EXPORT_SOUND_HINT).small().weak());
+                        ui.add_enabled_ui(sound, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.radio_value(&mut target, ExportTarget::Wav, text::EXPORT_WAV)
+                                    .on_hover_text(text::EXPORT_WAV_HINT);
+                                ui.add_space(16.0);
+                                ui.radio_value(&mut target, ExportTarget::Flac, text::EXPORT_FLAC)
+                                    .on_hover_text(text::EXPORT_FLAC_HINT);
+                            });
+                            for (value, label, hint) in [
+                                (
+                                    ExportFormat::Studio,
+                                    text::EXPORT_STUDIO,
+                                    text::EXPORT_STUDIO_HINT,
+                                ),
+                                (ExportFormat::Cd, text::EXPORT_CD, text::EXPORT_CD_HINT),
+                            ] {
+                                ui.radio_value(&mut format, value, label);
+                                ui.label(RichText::new(hint).small().weak());
+                            }
+                        });
+                    });
+                    ui.add_space(6.0);
                     for (value, label, hint) in [
                         (
-                            ExportFormat::Studio,
-                            text::EXPORT_STUDIO,
-                            text::EXPORT_STUDIO_HINT,
+                            ExportTarget::DawProject,
+                            text::EXPORT_DAWPROJECT,
+                            text::EXPORT_DAWPROJECT_HINT,
                         ),
-                        (ExportFormat::Cd, text::EXPORT_CD, text::EXPORT_CD_HINT),
+                        (
+                            ExportTarget::Midi,
+                            text::EXPORT_MIDI,
+                            text::EXPORT_MIDI_HINT,
+                        ),
                     ] {
-                        ui.radio_value(&mut format, value, label);
-                        ui.label(RichText::new(hint).small().weak());
-                        ui.add_space(4.0);
+                        ui.radio_value(&mut target, value, label);
+                        ui.indent(label, |ui| {
+                            ui.label(RichText::new(hint).small().weak());
+                        });
+                        ui.add_space(6.0);
                     }
-                    ui.add_space(10.0);
+                    ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         if ui.button(text::EXPORT_BUTTON).clicked() {
                             choice = Some(true);
@@ -1025,17 +1148,24 @@ impl Workspace {
                 match choice {
                     Some(true) => {
                         keep = false;
-                        let suggested = format!("{}.wav", self.session.display_name());
-                        if let Some(path) = self.host.choose_export_file(&suggested) {
-                            self.session.start_export(&path, format);
-                            self.dialog = Some(Dialog::Exporting);
-                            return;
+                        let suggested =
+                            format!("{}.{}", self.session.display_name(), target.extension());
+                        if let Some(path) = self.host.choose_export_file(&suggested, target) {
+                            if target.is_sound() {
+                                self.session.start_sound_export(&path, format, target);
+                                self.dialog = Some(Dialog::Exporting);
+                                return;
+                            }
+                            let _ = match target {
+                                ExportTarget::DawProject => self.session.export_dawproject(&path),
+                                _ => self.session.export_midi(&path),
+                            };
                         }
                     }
                     Some(false) => keep = false,
                     None => {}
                 }
-                Dialog::Export { format }
+                Dialog::Export { format, target }
             }
             Dialog::Instruments { search } => {
                 let (search, close) = self.instrument_chooser(ctx, search);
@@ -1099,8 +1229,9 @@ impl Workspace {
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     let included = [
-                        (text::ADD_PIANO, text::ADD_PIANO_HINT, false),
-                        (text::ADD_DRUMS, text::ADD_DRUMS_HINT, true),
+                        (text::ADD_PIANO, text::ADD_PIANO_HINT, Included::Piano),
+                        (text::ADD_DRUMS, text::ADD_DRUMS_HINT, Included::Drums),
+                        (text::ADD_SYNTH, text::ADD_SYNTH_HINT, Included::Synth),
                     ];
                     let included: Vec<_> = included
                         .into_iter()
@@ -1108,13 +1239,13 @@ impl Workspace {
                         .collect();
                     if !included.is_empty() {
                         ui.label(RichText::new(text::INCLUDED).weak());
-                        for (name, hint, drums) in included {
+                        for (name, hint, which) in included {
                             if choice_row(ui, name, hint) {
-                                if drums {
-                                    self.session.add_drum_track();
-                                } else {
-                                    self.session.add_piano_track();
-                                }
+                                match which {
+                                    Included::Piano => self.session.add_piano_track(),
+                                    Included::Drums => self.session.add_drum_track(),
+                                    Included::Synth => self.session.add_synth_track(),
+                                };
                                 close = true;
                             }
                         }

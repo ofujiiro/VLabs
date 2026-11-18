@@ -99,10 +99,21 @@ Libraries are pulled from crates.io when VLabs is built; they are not stored
 in this repository. Every one is permissively licensed (MIT, Apache-2.0, BSD,
 ISC or Zlib, plus the Unicode licence for one data table, see decision 0005),
 which `cargo deny` checks on every change. The crates chosen directly, and
-why, are listed in `docs/decisions/0006-adopted-crates.md`. Installers will
-include a generated file with every library's licence notice (phase 6).
+why, are listed in `docs/decisions/0006-adopted-crates.md`. Every release
+folder and installer includes `THIRD_PARTY_NOTICES.txt`, generated from the
+dependency graph with every library's licence and notice texts
+(`cargo xtask notices`, decision 0022).
 
 ## Used for testing only, never bundled or linked
+
+- **The DAWproject 1.0 schema** (`Project.xsd`, `MetaData.xsd`), MIT
+  licence (Copyright (c) 2020 Bitwig), from `github.com/bitwig/dawproject`
+  at commit `ee4dcdde75940f30e14e55401a26955a58b8322b`, unmodified, in
+  `crates/daw-formats/tests/data/dawproject/` with its licence. A test
+  checks exported projects against it with `xmllint` where installed.
+  SHA-256: `58e2fd9864772850aac3eab1f3de8693857dc5384df6d29fbc320ae1de2347cc`
+  (`Project.xsd`), `fb3ba378271770dddbcced8990aba537de3d36ff2d58573523460a699221c99f`
+  (`MetaData.xsd`).
 
 - **Surge XT** (GPL-3.0), the reference CLAP and VST3 instrument, downloaded
   by CI from `github.com/surge-synthesizer/releases-xt`. VLabs loads it as a

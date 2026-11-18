@@ -25,6 +25,10 @@ considered instead.
 | [0016](0016-plugin-screens.md) | Plugin screens: a chooser, separate editor windows, automation lanes | Accepted |
 | [0017](0017-audio-clips.md) | Audio: clips on the song timeline, recorded and imported sound | Accepted |
 | [0018](0018-theory-and-rhythm.md) | Theory and rhythm: the song's key, chord stamps, the signature row, swing | Accepted |
+| [0019](0019-built-in-synth.md) | The built-in synth: two oscillators, a filter, two envelopes, a window of its own | Accepted |
+| [0020](0020-songs-in-and-out.md) | Songs in and out: MIDI files, DAWproject, FLAC, and where they live in the menus | Accepted |
+| [0021](0021-autosave-polish.md) | Autosave polish: takes survive a crash, copies before risky moments, a clearer offer | Accepted |
+| [0022](0022-installers-notices-guide.md) | Distribution: a Windows installer, a Linux AppImage, generated notices, a user guide | Accepted |
 
 ## Writing a new record
 

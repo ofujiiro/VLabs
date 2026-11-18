@@ -943,6 +943,7 @@ impl EngineProcessor {
         let mut pan = track.pan;
         let mut volume_or_pan = false;
         let mut effects_changed = false;
+        let mut synth_changed = false;
         for lane in &mut track.automation {
             let value = lane.value_at(tick);
             let changed = value.to_bits() != lane.last.to_bits();
@@ -967,7 +968,22 @@ impl EngineProcessor {
                         instrument.set_parameter(param, f64::from(value));
                     }
                 }
+                LaneTarget::Synth { .. } => synth_changed |= changed,
                 LaneTarget::PluginEffect { .. } | LaneTarget::Instrument { .. } => {}
+            }
+        }
+        // The synth takes its base settings with every automated one
+        // applied (plain data: nothing is allocated).
+        if synth_changed && let Some(mut settings) = track.synth_base {
+            for lane in &track.automation {
+                if let LaneTarget::Synth { param } = lane.target {
+                    settings.set_param(param, lane.last);
+                }
+            }
+            if let Some(Some(instrument)) = self.instruments.get_mut(slot) {
+                instrument.apply_settings(&daw_dsp::InstrumentSettings::Synth(
+                    crate::library::synth_params(&settings),
+                ));
             }
         }
         if effects_changed {

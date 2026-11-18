@@ -32,4 +32,5 @@ The bundled sounds themselves (the piano SoundFont, the drum kit) are files in
 ## Roadmap
 
 Phase 1 (SoundFont player), phase 2 (drum sampler, effects), phase 4
-(audio buffers, rate conversion, waveforms), phase 6 (subtractive synth).
+(audio buffers, rate conversion, waveforms), phase 6 (`synth`: the
+subtractive synth of decision 0019).

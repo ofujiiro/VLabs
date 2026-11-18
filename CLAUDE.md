@@ -36,6 +36,7 @@ makes a settled decision in the brief unworkable.
 | `xtask/` | Developer commands (`cargo xtask ...`) and repository-rule tests |
 | `docs/` | Brief, architecture, decision records |
 | `assets/` *(from phase 1)* | Bundled fonts, piano, drum kit (all recorded in `THIRD_PARTY.md`) |
+| `packaging/` | Installer (NSIS) and AppImage templates; names only through placeholders filled from `daw-ident` |
 | `.github/workflows/` | CI (`ci.yml`) and the spike/integration jobs (`spikes.yml`) |
 
 ## Commands
@@ -45,7 +46,10 @@ cargo xtask ci        # everything CI checks: fmt, clippy, build, test, cargo-de
 cargo xtask fmt --fix # reformat
 cargo test -p daw-model
 cargo run -p daw-app  # the program
-cargo xtask dist      # release build in dist/, named after the product
+cargo xtask dist      # release build in dist/: program, notices, guide, icons
+cargo xtask notices   # third-party licence notices (also a CI step)
+cargo xtask installer # Windows installer from dist/ (NSIS's makensis)
+cargo xtask appimage  # Linux AppImage from dist/ (appimagetool)
 ```
 
 `cargo-deny` must be installed: `cargo install cargo-deny --locked`.
@@ -154,6 +158,12 @@ These come from the brief; tests and CI enforce most of them.
   menu there, and check double-clicks in the real program). Each square of
   the step grid is labelled ("Kick, step 1"). Test what a person does; a
   new test should be a step someone takes in the program.
+- **Playing notes in the real program:** synthetic key events from
+  `xdotool keydown --window` do not reach the note keys; hold a key of the
+  on-screen keyboard with `xdotool mousemove X Y mousedown 1` /
+  `mouseup 1` instead (middle C is the key labelled Q in the lower half).
+  The window's title is "<song> — <product>", so find it with
+  `xdotool search --name <product>`, not `^<product>`.
 - **Driving the program:** `xdotool windowfocus` can fail on a window that
   has just appeared; click the program's own buttons (Play, Stop) rather
   than relying on keys when focus is uncertain, or send keys to the window

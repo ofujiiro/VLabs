@@ -112,6 +112,9 @@ pub struct SongView {
     menu_at: Pos2,
     /// Where "Split here" splits: the moment right-clicked.
     menu_split: Ticks,
+    /// The track and moment of an empty spot right-clicked (its menu
+    /// places a chosen pattern there).
+    menu_empty: Option<(TrackId, Ticks)>,
     scrolled_at: f64,
     /// The settings offered while a track's lane chooser is open.
     lane_menu: Option<(TrackId, Vec<LaneChoice>)>,
@@ -132,6 +135,7 @@ impl Default for SongView {
             menu_clip: None,
             menu_at: Pos2::ZERO,
             menu_split: Ticks::ZERO,
+            menu_empty: None,
             scrolled_at: f64::NEG_INFINITY,
             lane_menu: None,
             lane_search: String::new(),
@@ -312,6 +316,7 @@ impl SongView {
             .ui(ui, session, layout.conductor, layout.headers.right(), axis);
         self.headers(ui, session, &layout, intents);
         self.clip_menu(ui, session);
+        self.empty_spot_menu(ui, session);
         if ui.input(|i| !i.raw.hovered_files.is_empty()) {
             let painter = ui.painter_at(layout.timeline);
             painter.rect_filled(
@@ -359,7 +364,7 @@ impl SongView {
             }
             None => (None, session.song_position()),
         };
-        session.import_audio(files, track, at);
+        session.import_files(files, track, at);
     }
 
     /// Whether a drag is in progress.
@@ -387,8 +392,9 @@ impl SongView {
     /// whether one was.
     pub fn close_popups(&mut self) -> bool {
         let menu = self.menu_clip.take().is_some();
+        let empty = self.menu_empty.take().is_some();
         let panel = self.signatures.close_panel();
-        menu || panel
+        menu || empty || panel
     }
 
     /// Zooms in time around the middle (a factor above 1 zooms in).
@@ -739,6 +745,7 @@ impl SongView {
             } else if let Some((clip, _, _)) = self.clip_at(layout, session, pos) {
                 session.select_clip(Some(clip));
                 self.menu_clip = Some(clip);
+                self.menu_empty = None;
                 self.menu_at = pos;
                 let audio = session
                     .project()
@@ -746,8 +753,19 @@ impl SongView {
                     .is_some_and(|(_, c)| c.is_audio());
                 self.menu_split =
                     Self::snap_edge(session, self.x_to_tick(layout, pos.x), alt, audio);
+            } else if let Some(row) = layout.row_at(pos.y)
+                && !session.is_audio_track(row.track)
+            {
+                // An empty spot of an instrument track: a menu of its
+                // patterns to place there.
+                self.menu_clip = None;
+                self.menu_at = pos;
+                let at = Self::snap(session, self.x_to_tick(layout, pos.x), alt);
+                self.menu_empty = Some((row.track, at));
+                session.focus_track(row.track);
             } else {
                 self.menu_clip = None;
+                self.menu_empty = None;
             }
         }
         if middle_pressed && inside {
@@ -1775,6 +1793,7 @@ impl SongView {
             Instrument::SoundFont { .. } => text::FIRST_TRACK.to_owned(),
             Instrument::Plugin(setup) => text::plugin_track(&setup.plugin.name, missing),
             Instrument::Audio => text::AUDIO_TRACK_KIND.to_owned(),
+            Instrument::Synth(settings) => text::synth_description(settings),
         };
         child.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -1792,6 +1811,8 @@ impl SongView {
                     !session.is_plugin_missing(target) && session.has_plugin_window(target)
                 }) {
                     plugin_window_button(ui, session, target, 20.0);
+                } else if instrument.synth().is_some() {
+                    crate::synth_ui::window_button(ui, session, track, 20.0);
                 }
                 ui.with_layout(EguiLayout::left_to_right(Align::Center), |ui| {
                     let recording_here = session.live_take().is_some_and(|l| l.track == track)
@@ -1888,6 +1909,31 @@ impl SongView {
                         session.open_pattern(track, pattern);
                         close = true;
                     }
+                    if let Some(pattern) = c.pattern() {
+                        let others: Vec<(daw_model::PatternId, String)> = session
+                            .patterns_of(track)
+                            .into_iter()
+                            .filter(|(id, _)| *id != pattern)
+                            .collect();
+                        // Listed in the menu itself (no submenu that a
+                        // pointer can slip off).
+                        if !others.is_empty() {
+                            ui.separator();
+                            ui.label(RichText::new(text::PLAY_ANOTHER_PATTERN).weak());
+                            egui::ScrollArea::vertical()
+                                .id_salt("other-patterns")
+                                .max_height(200.0)
+                                .show(ui, |ui| {
+                                    for (id, name) in others {
+                                        if ui.button(name).clicked() {
+                                            session.swap_clip_pattern(clip, id);
+                                            close = true;
+                                        }
+                                    }
+                                });
+                            ui.separator();
+                        }
+                    }
                     if ui
                         .add_enabled(
                             split_at > c.start && split_at < c.end(),
@@ -1936,6 +1982,54 @@ impl SongView {
                 .is_some_and(|p| p != self.menu_at);
         if close || pressed_outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.menu_clip = None;
+        }
+    }
+}
+
+impl SongView {
+    /// The right-click menu of an empty spot of an instrument track: its
+    /// patterns by name, and a new one, to place there.
+    fn empty_spot_menu(&mut self, ui: &Ui, session: &mut Session) {
+        let Some((track, at)) = self.menu_empty else {
+            return;
+        };
+        if session.project().track(track).is_none() {
+            self.menu_empty = None;
+            return;
+        }
+        let patterns = session.patterns_of(track);
+        let mut close = false;
+        let area = egui::Area::new(ui.scope_id().with("empty-spot-menu"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(self.menu_at)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::menu(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(190.0);
+                    ui.label(RichText::new(text::PLACE_PATTERN_HERE).strong());
+                    egui::ScrollArea::vertical()
+                        .max_height(320.0)
+                        .show(ui, |ui| {
+                            for (id, name) in patterns {
+                                if ui.button(name).clicked() {
+                                    session.place_this_pattern(track, at, id);
+                                    close = true;
+                                }
+                            }
+                        });
+                    ui.separator();
+                    if ui.button(text::NEW_PATTERN_HERE).clicked() {
+                        session.place_new_pattern(track, at);
+                        close = true;
+                    }
+                });
+            });
+        let pressed_outside = ui.input(|i| i.pointer.any_pressed())
+            && !area.response.contains_pointer()
+            && ui
+                .input(|i| i.pointer.interact_pos())
+                .is_some_and(|p| p != self.menu_at);
+        if close || pressed_outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.menu_empty = None;
         }
     }
 }

@@ -20,18 +20,25 @@
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
-use daw_model::Project;
+use daw_model::{AudioFile, AudioId, Project, Ticks};
+use daw_ui::TakeNote;
 use serde::{Deserialize, Serialize};
 
 /// The least time between two autosaves.
 const INTERVAL: Duration = Duration::from_secs(5);
 
+/// The longest a safety copy is waited for (decision 0021).
+const SAFETY_WAIT: Duration = Duration::from_secs(2);
+
 const LOCK_FILE: &str = "lock";
 const INFO_FILE: &str = "info.json";
+const TAKE_FILE: &str = "take.json";
 const AUDIO_FOLDER: &str = "audio";
 
 fn song_file() -> String {
@@ -51,14 +58,52 @@ pub struct Orphan {
     pub project: Project,
     /// The file it belonged to, if it had one.
     pub path: Option<PathBuf>,
+    /// When the copy was written.
+    pub saved_at: SystemTime,
+    /// The take of sound being recorded when it stopped, if one was.
+    take: Option<TakeNote>,
     folder: PathBuf,
     /// Held so no other copy of the program claims the same work.
     _lock: File,
 }
 
+/// What the person is told about work found after a crash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Found {
+    /// How long before now the copy was written, in seconds.
+    pub age_seconds: u64,
+    /// Whether the song's own file was saved after the copy.
+    pub newer_file: bool,
+    /// Whether a take being recorded was brought back.
+    pub take: bool,
+}
+
 enum Job {
     Write(Box<Project>, Option<PathBuf>),
+    /// A copy at once; the sender is told when it is on disk.
+    WriteNow(Box<Project>, Option<PathBuf>, mpsc::Sender<()>),
+    Take(Option<TakeNote>),
     Clear,
+    /// The program is ending: the writer stops (the session may still hold
+    /// a sender, so the channel alone would never close).
+    Stop,
+}
+
+/// Writes a recovery copy at once, for the session (decision 0021).
+pub struct SafetyWriter {
+    jobs: mpsc::Sender<Job>,
+    has_copy: Arc<AtomicBool>,
+}
+
+impl daw_ui::SafetyCopy for SafetyWriter {
+    fn write_now(&self, project: &Project, path: Option<&Path>) {
+        let (done, wait) = mpsc::channel();
+        let job = Job::WriteNow(Box::new(project.clone()), path.map(Path::to_path_buf), done);
+        if self.jobs.send(job).is_ok() {
+            self.has_copy.store(true, Ordering::Relaxed);
+            let _ = wait.recv_timeout(SAFETY_WAIT);
+        }
+    }
 }
 
 /// The autosaver of this copy of the program.
@@ -69,7 +114,9 @@ pub struct Autosaver {
     writer: Option<JoinHandle<()>>,
     written_version: Option<u64>,
     last_write: Option<Instant>,
-    has_copy: bool,
+    has_copy: Arc<AtomicBool>,
+    /// The take note last sent to the writer.
+    take: Option<TakeNote>,
     orphan: Option<Orphan>,
 }
 
@@ -99,9 +146,31 @@ impl Autosaver {
             writer,
             written_version: None,
             last_write: None,
-            has_copy: false,
+            has_copy: Arc::new(AtomicBool::new(false)),
+            take: None,
             orphan,
         })
+    }
+
+    /// A way for the session to write a copy at once (before a plugin
+    /// loads, say).
+    pub fn safety_writer(&self) -> Option<SafetyWriter> {
+        Some(SafetyWriter {
+            jobs: self.jobs.clone()?,
+            has_copy: Arc::clone(&self.has_copy),
+        })
+    }
+
+    /// Notes the take of sound being recorded (or that none is), so a
+    /// crash in the middle of it does not lose it.
+    pub fn note_take(&mut self, take: Option<TakeNote>) {
+        if take == self.take {
+            return;
+        }
+        if let Some(jobs) = &self.jobs {
+            let _ = jobs.send(Job::Take(take.clone()));
+        }
+        self.take = take;
     }
 
     /// Where this copy of the program keeps the song's audio files.
@@ -110,16 +179,35 @@ impl Autosaver {
     }
 
     /// The work found at start-up, to offer to the person, with its audio
-    /// files copied into this copy's audio folder.
-    pub fn take_orphan(&mut self) -> Option<(Project, Option<PathBuf>)> {
+    /// files copied into this copy's audio folder, a take that was being
+    /// recorded put back as a clip, and what to tell the person about it.
+    pub fn take_orphan(&mut self) -> Option<(Project, Option<PathBuf>, Found)> {
         let orphan = self.orphan.as_ref()?;
         let mut project = orphan.project.clone();
-        let _ = daw_formats::copy_audio(
-            &mut project,
-            &orphan.folder.join(AUDIO_FOLDER),
-            &self.audio_folder(),
-        );
-        Some((project, orphan.path.clone()))
+        let from = orphan.folder.join(AUDIO_FOLDER);
+        let into = self.audio_folder();
+        let _ = daw_formats::copy_audio(&mut project, &from, &into);
+        let take = orphan
+            .take
+            .as_ref()
+            .is_some_and(|note| recover_take(&mut project, note, &from, &into));
+        let age_seconds = SystemTime::now()
+            .duration_since(orphan.saved_at)
+            .map_or(0, |d| d.as_secs());
+        let newer_file = orphan
+            .path
+            .as_ref()
+            .and_then(|p| fs::metadata(p).and_then(|m| m.modified()).ok())
+            .is_some_and(|modified| modified > orphan.saved_at);
+        Some((
+            project,
+            orphan.path.clone(),
+            Found {
+                age_seconds,
+                newer_file,
+                take,
+            },
+        ))
     }
 
     /// Deletes the work found at start-up (after the person decided: if
@@ -145,10 +233,13 @@ impl Autosaver {
         let Some(jobs) = &self.jobs else {
             return;
         };
+        // While a take records, the song is kept even if it was saved: a
+        // crash then brings back the song with the take.
+        let dirty = dirty || self.take.is_some();
         if !dirty {
-            if self.has_copy {
+            if self.has_copy.load(Ordering::Relaxed) {
                 let _ = jobs.send(Job::Clear);
-                self.has_copy = false;
+                self.has_copy.store(false, Ordering::Relaxed);
                 self.written_version = None;
             }
             return;
@@ -159,16 +250,23 @@ impl Autosaver {
             let _ = jobs.send(Job::Write(Box::new(project), path));
             self.written_version = Some(version);
             self.last_write = Some(Instant::now());
-            self.has_copy = true;
+            self.has_copy.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Stops the writer thread, once it has written what it was given.
+    fn stop_writer(&mut self) {
+        if let Some(jobs) = self.jobs.take() {
+            let _ = jobs.send(Job::Stop);
+        }
+        if let Some(writer) = self.writer.take() {
+            let _ = writer.join();
         }
     }
 
     /// A clean exit: stops the writer and deletes this copy's folder.
     pub fn finish(&mut self) {
-        self.jobs = None;
-        if let Some(writer) = self.writer.take() {
-            let _ = writer.join();
-        }
+        self.stop_writer();
         self.lock = None;
         let _ = fs::remove_dir_all(&self.folder);
     }
@@ -178,36 +276,133 @@ impl Drop for Autosaver {
     fn drop(&mut self) {
         // Dropping without `finish` (a panic unwinding) keeps the folder,
         // so the work is offered next time.
-        self.jobs = None;
-        if let Some(writer) = self.writer.take() {
-            let _ = writer.join();
-        }
+        self.stop_writer();
+    }
+}
+
+fn write_song(folder: &Path, project: &Project, path: Option<PathBuf>) {
+    // The song's file name first, then the song: the song is what marks
+    // work to recover, so when it is there after a crash, its name is too.
+    let info = serde_json::to_vec_pretty(&Info { path }).unwrap_or_default();
+    if daw_formats::write_atomically(&folder.join(INFO_FILE), &info).is_ok() {
+        let _ = daw_formats::save_project(project, &folder.join(song_file()), None);
     }
 }
 
 fn write_jobs(folder: &Path, jobs: &mpsc::Receiver<Job>) {
     while let Ok(job) = jobs.recv() {
-        // Only the newest snapshot matters: skip ones already replaced.
-        let mut job = job;
+        // Only the newest snapshot of the song matters: skip ones already
+        // replaced (everyone waiting is told when the newest is written).
+        let mut pending = vec![job];
         while let Ok(newer) = jobs.try_recv() {
-            job = newer;
+            pending.push(newer);
         }
-        match job {
-            Job::Write(project, path) => {
-                // The song's file name first, then the song: the song is
-                // what marks work to recover, so when it is there after a
-                // crash, its name is too.
-                let info = serde_json::to_vec_pretty(&Info { path }).unwrap_or_default();
-                if daw_formats::write_atomically(&folder.join(INFO_FILE), &info).is_ok() {
-                    let _ = daw_formats::save_project(&project, &folder.join(song_file()), None);
+        let mut song: Option<(Box<Project>, Option<PathBuf>)> = None;
+        let mut clear = false;
+        let mut waiting = Vec::new();
+        let mut stop = false;
+        for job in pending {
+            match job {
+                Job::Stop => stop = true,
+                Job::Write(project, path) => {
+                    song = Some((project, path));
+                    clear = false;
+                }
+                Job::WriteNow(project, path, done) => {
+                    song = Some((project, path));
+                    clear = false;
+                    waiting.push(done);
+                }
+                Job::Clear => {
+                    song = None;
+                    clear = true;
+                }
+                Job::Take(Some(note)) => {
+                    let bytes = serde_json::to_vec_pretty(&note).unwrap_or_default();
+                    let _ = daw_formats::write_atomically(&folder.join(TAKE_FILE), &bytes);
+                }
+                Job::Take(None) => {
+                    let _ = fs::remove_file(folder.join(TAKE_FILE));
                 }
             }
-            Job::Clear => {
-                let _ = fs::remove_file(folder.join(song_file()));
-                let _ = fs::remove_file(folder.join(INFO_FILE));
-            }
+        }
+        if let Some((project, path)) = song {
+            write_song(folder, &project, path);
+        } else if clear {
+            let _ = fs::remove_file(folder.join(song_file()));
+            let _ = fs::remove_file(folder.join(INFO_FILE));
+        }
+        for done in waiting {
+            let _ = done.send(());
+        }
+        if stop {
+            break;
         }
     }
+}
+
+/// Puts a take that was being recorded when the program stopped back into
+/// the song, as a clip where recording started (decision 0021). Its file,
+/// left unfinished, is mended and copied into `into`. Returns whether a
+/// take came back.
+fn recover_take(project: &mut Project, note: &TakeNote, from: &Path, into: &Path) -> bool {
+    if project.audio.iter().any(|f| f.file == note.file) {
+        return false; // It ended and was saved with the song.
+    }
+    let finished = from.join(&note.file);
+    let source = if finished.is_file() {
+        Some(finished)
+    } else {
+        fs::read_dir(from).ok().and_then(|entries| {
+            entries.flatten().map(|e| e.path()).find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| daw_formats::wav::is_partial_of(n, &note.file))
+            })
+        })
+    };
+    let Some(source) = source else {
+        return false;
+    };
+    let Ok(repaired) = daw_formats::wav::repair(&source) else {
+        return false;
+    };
+    if repaired.frames == 0 {
+        return false;
+    }
+    let name = daw_formats::free_name(into, &note.file);
+    if fs::create_dir_all(into).is_err() || fs::copy(&source, into.join(&name)).is_err() {
+        return false;
+    }
+    let file = AudioFile {
+        id: AudioId(0),
+        name: note.name.clone(),
+        file: name,
+        frames: repaired.frames,
+        sample_rate: repaired.sample_rate,
+        channels: repaired.channels,
+    };
+    // The take starts late by the delay out and back in, as when recording
+    // ends normally.
+    let offset = file
+        .frames_in(f64::from(note.latency.max(0.0)))
+        .min(file.frames.saturating_sub(1));
+    let seconds = file.seconds_in(file.frames - offset);
+    let id = project.add_audio_file(file);
+    let start = project.tempo.seconds_at(note.at);
+    #[allow(clippy::cast_possible_truncation, reason = "a tick position")]
+    let end = Ticks(project.tempo.ticks_at(start + seconds).round() as i64);
+    let track = if project
+        .track(note.track)
+        .is_some_and(|t| t.instrument.is_audio())
+    {
+        note.track
+    } else {
+        project.add_audio_track(&note.name)
+    };
+    project
+        .add_audio_clip(track, note.at, (end - note.at).max(Ticks(1)), id, offset)
+        .is_some()
 }
 
 /// The newest folder left behind with a song in it. Empty leftovers are
@@ -240,15 +435,20 @@ fn find_orphan(root: &Path) -> Option<Orphan> {
         }
     }
     found.sort_by_key(|(modified, _, _)| *modified);
-    while let Some((_, folder, lock)) = found.pop() {
+    while let Some((saved_at, folder, lock)) = found.pop() {
         if let Ok(project) = daw_formats::load_project(&folder.join(song_file()), None) {
             let info: Info = fs::read(folder.join(INFO_FILE))
                 .ok()
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                 .unwrap_or_default();
+            let take = fs::read(folder.join(TAKE_FILE))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok());
             return Some(Orphan {
                 project,
                 path: info.path,
+                saved_at,
+                take,
                 folder,
                 _lock: lock,
             });
@@ -323,7 +523,8 @@ mod tests {
         std::mem::forget(first); // No clean exit.
 
         let mut second = Autosaver::start(&root).unwrap();
-        let (recovered, path) = second.take_orphan().expect("the work is offered");
+        let (recovered, path, found) = second.take_orphan().expect("the work is offered");
+        assert!(found.age_seconds < 60 && !found.newer_file && !found.take);
         assert_eq!(recovered.title, "Recovered");
         assert_eq!(path.as_deref(), Some(Path::new("/music/song")));
         let file = &recovered.audio[0].file;
@@ -362,6 +563,81 @@ mod tests {
         let folder = first.folder.clone();
         first.finish();
         assert!(!folder.exists(), "a clean exit tidies up");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_take_being_recorded_comes_back_after_a_crash() {
+        let root = temp_root("take");
+        let mut project = Project::starter("P", "T");
+        let voice = project.add_audio_track("Voice");
+        let mut first = Autosaver::start(&root).unwrap();
+        let audio = first.audio_folder();
+        fs::create_dir_all(&audio).unwrap();
+        // Recording has started: the take is written as it comes.
+        let mut writer = daw_formats::wav::WavWriter::create_with_channels(
+            &audio.join("take-1.wav"),
+            daw_formats::wav::WavFormat::Pcm24,
+            48_000,
+            1,
+        )
+        .unwrap();
+        writer.write_interleaved(&vec![0.25_f32; 48_000]).unwrap();
+        let note = TakeNote {
+            track: voice,
+            at: Ticks::WHOLE,
+            file: "take-1.wav".to_owned(),
+            name: "Recording 1".to_owned(),
+            latency: 0.0,
+        };
+        first.note_take(Some(note));
+        // The song was saved before recording: it is kept anyway.
+        first.tick(1, false, || (project.clone(), None));
+        let copy = first.folder.join(song_file());
+        wait_for(&copy, true);
+        wait_for(&first.folder.join(TAKE_FILE), true);
+        // Crash: the take's file is still being written.
+        writer.flush_for_test();
+        std::mem::forget(writer);
+        let lock = first.lock.take();
+        drop(lock);
+        std::mem::forget(first);
+
+        let mut second = Autosaver::start(&root).unwrap();
+        let (recovered, _, found) = second.take_orphan().expect("the work is offered");
+        assert!(found.take, "the take came back");
+        let clip = recovered
+            .track(voice)
+            .unwrap()
+            .clips
+            .first()
+            .copied()
+            .expect("as a clip on its track");
+        assert_eq!(clip.start, Ticks::WHOLE);
+        let file = recovered.audio_file(clip.audio().unwrap()).unwrap();
+        assert!(
+            file.frames >= 40_000,
+            "with what was written: {}",
+            file.frames
+        );
+        assert!(second.audio_folder().join(&file.file).is_file());
+        second.forget_orphan();
+        second.finish();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_safety_copy_is_on_disk_when_it_returns() {
+        use daw_ui::SafetyCopy;
+        let root = temp_root("safety");
+        let mut saver = Autosaver::start(&root).unwrap();
+        let writer = saver.safety_writer().unwrap();
+        writer.write_now(&Project::starter("P", "T"), None);
+        assert!(saver.folder.join(song_file()).is_file(), "written at once");
+        // Saving the song afterwards clears it, as for any copy.
+        saver.tick(1, false, || (Project::starter("P", "T"), None));
+        wait_for(&saver.folder.join(song_file()), false);
+        saver.finish();
         let _ = fs::remove_dir_all(root);
     }
 }

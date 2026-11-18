@@ -54,11 +54,25 @@ fn options() -> Options {
     options
 }
 
+/// The argument that writes the program's icon files into a folder and
+/// exits (for the installers, decision 0022).
+const WRITE_ICONS_ARGUMENT: &str = "--write-icons";
+
 fn main() {
     // A separate run that only describes one plugin file (decision 0015).
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     if arguments.first().map(String::as_str) == Some(daw_plugin_host::scan::DESCRIBE_ARGUMENT) {
         daw_plugin_host::scan::describe_and_print(&arguments[1..]);
+        return;
+    }
+    if arguments.first().map(String::as_str) == Some(WRITE_ICONS_ARGUMENT) {
+        let folder = arguments
+            .get(1)
+            .map_or_else(|| PathBuf::from("."), PathBuf::from);
+        if let Err(error) = icon::write_icons(&folder) {
+            report_fatal(&error.to_string());
+            std::process::exit(1);
+        }
         return;
     }
     daw_plugin_host::set_identity(daw_plugin_host::HostIdentity {

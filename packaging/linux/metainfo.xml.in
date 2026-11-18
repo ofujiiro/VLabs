@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>@APPID@</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>@PRODUCT@</name>
+  <summary>An easy, open music workstation</summary>
+  <description>
+    <p>Build beats on a step grid, write melodies and chords in a piano roll,
+    record your voice or an instrument, arrange everything on one timeline
+    and mix it, with included instruments and effects, CLAP and VST3
+    plugins, and no setup.</p>
+  </description>
+  <launchable type="desktop-id">@APPID@.desktop</launchable>
+  <url type="homepage">@URL@</url>
+  <provides>
+    <binary>@EXE@</binary>
+    <mediatype>application/x-@EXE@-song</mediatype>
+  </provides>
+  <releases>
+    <release version="@VERSION@"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

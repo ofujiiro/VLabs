@@ -21,7 +21,7 @@ use crate::atomic::write_atomically_with;
 /// The version of the file format this program writes. Every version ever
 /// released keeps sample files in `tests/data`, and a test proves they still
 /// open.
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 
 /// The name of the song description inside the container.
 const PROJECT_ENTRY: &str = "project.json";
@@ -330,7 +330,9 @@ fn migrate(value: Value, from: u32) -> Result<Value, FileError> {
     // container); every new field has a default again.
     // Version 5 added the song's key changes, each pattern's swing and tempo
     // glides (decision 0018); every new field has a default again.
-    // Each future format change adds a step here: `6 => migrate_5_to_6(value)`.
+    // Version 6 added the built-in synth instrument (decision 0019); older
+    // files have none, so they need no rewriting.
+    // Each future format change adds a step here: `7 => migrate_6_to_7(value)`.
     Ok(value)
 }
 
@@ -344,6 +346,15 @@ fn repair(project: &mut Project) {
     project.key.repair();
     for pattern in &mut project.patterns {
         std::sync::Arc::make_mut(pattern).sort_notes();
+    }
+    // The synth's numbers stay in their ranges, whatever wrote them.
+    for track in &mut project.tracks {
+        if let daw_model::Instrument::Synth(settings) = &track.instrument {
+            let repaired = settings.repaired();
+            if repaired != *settings {
+                std::sync::Arc::make_mut(track).instrument = daw_model::Instrument::Synth(repaired);
+            }
+        }
     }
     // A pattern without an owner belongs to the track that plays it.
     let owners: Vec<(daw_model::PatternId, daw_model::TrackId)> = project

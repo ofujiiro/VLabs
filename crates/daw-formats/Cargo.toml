@@ -16,9 +16,9 @@ daw-ident.workspace = true
 lewton.workspace = true
 nanomp3.workspace = true
 daw-model.workspace = true
+quick-xml.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 zip.workspace = true
-
-[dev-dependencies]
+# FLAC export (decision 0020).
 flacenc.workspace = true
