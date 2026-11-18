@@ -19,26 +19,30 @@ managed and tuned inside VLabs (see [ROADMAP.md](ROADMAP.md)).
 
 ## Status
 
-**Pre-alpha.** Roadmap phases 1 ("first sound"), 2 ("making a beat"), 3
-("plugins"), 4 ("audio") and 5 ("theory and rhythm") work: make a beat on the step grid with a
-recorded acoustic kit or an electronic kit, write melodies in the piano
-roll with the bundled piano or a CLAP or VST3 instrument, record your voice
-or guitar from the computer's microphone, bring in WAV, FLAC, MP3 and Ogg
-files, cut, trim and fade audio clips right on the timeline, arrange
-everything on one timeline, mix with volume, pan, mute, solo and an effect
-chain per track (EQ, compressor, reverb, delay, limiter, and plugin
-effects), make any of those settings change over the song with automation
-lanes, and export the song as a WAV file. Play from the computer keyboard
-or a MIDI keyboard, record notes with a metronome and count-in, undo
-anything, save and open songs (their sound inside the song file). Give the
-song a key and the piano roll shows its notes, keeps new notes in it and
-places whole chords with one click (built in the key, or of any kind, in
-any inversion); transpose by intervals; change the tempo (suddenly or
-gradually) and the time signature anywhere in the song, in any meter;
-write triplets, quintuplets and septuplets; swing a pattern; let patterns
-of different lengths play against each other. Your work is saved
-automatically and offered back after a crash. See
-[ROADMAP.md](ROADMAP.md) for what is done, what to try and what comes next.
+**Pre-alpha, feature-complete for v1 (phase 6).** Make a beat on the step
+grid with a recorded acoustic kit or an electronic kit, write melodies in
+the piano roll with the bundled piano, the built-in synthesizer (two
+oscillators, a filter, envelopes, an LFO and presets) or a CLAP or VST3
+instrument, record your voice or guitar from the computer's microphone,
+bring in WAV, FLAC, MP3, Ogg and MIDI files, cut, trim and fade audio clips
+right on the timeline, arrange everything on one timeline (right-click a
+track to place any of its patterns), mix with volume, pan, mute, solo and
+an effect chain per track (EQ, compressor, reverb, delay, limiter, and
+plugin effects), make any setting change over the song with automation
+lanes, and export the song as WAV or FLAC, as a MIDI file, or as a
+DAWproject file that Bitwig Studio, Studio One and Cubase open. Open
+DAWproject and MIDI files from other programs. Play from the computer
+keyboard or a MIDI keyboard, record notes with a metronome and count-in,
+undo anything, save and open songs (their sound inside the song file).
+Give the song a key and the piano roll shows its notes, keeps new notes in
+it and places whole chords with one click; transpose by intervals; change
+the tempo (suddenly or gradually) and the time signature anywhere; write
+triplets, quintuplets and septuplets; swing a pattern. Your work is saved
+automatically, even a recording in progress, and offered back after a
+crash. A Windows installer and a Linux AppImage are built for each
+milestone, with a user guide (F1 in the program, or
+[docs/user-guide.md](docs/user-guide.md)). See [ROADMAP.md](ROADMAP.md) for
+what to try and what comes next.
 
 ## Building from source
 
@@ -55,6 +59,11 @@ automatically and offered back after a crash. See
    ```bash
    cargo run --release -p daw-app
    ```
+
+4. To make the release folder (`dist/`, with the licence notices, the user
+   guide and the icons), the Windows installer (needs NSIS) or the Linux
+   AppImage (needs appimagetool): `cargo xtask dist`, then
+   `cargo xtask installer` or `cargo xtask appimage`.
 
 ## Plugins
 

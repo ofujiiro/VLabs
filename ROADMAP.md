@@ -3,15 +3,17 @@
 The phases come from the project brief. Each ends with a build the owner can
 run and a checklist of things to try. Status is updated at every milestone.
 
-**Now:** phase 5 (theory and rhythm: the song's key, chord stamps,
-swing, tuplets, tempo and time-signature changes) is built and its
-milestone build is ready for the owner to try, on branch
-`phase-5-theory-rhythm` (not yet pushed). The phase 3 and phase 4 builds
-also still await the owner's check. Phase 2 is complete and the owner
-confirmed its milestone build works. Phase 1 is complete and the owner
-confirmed its build works on Linux. Phase 0 is complete: all three risk
-spikes passed on Windows and Linux (decision 0009). The repository has
-been public since November 2026 (the owner's decision).
+**Now:** phase 6 (completing v1: the synth, MIDI files and DAWproject in
+and out, FLAC export, autosave polish, the Windows installer and the
+Linux AppImage, generated licence notices, the user guide) is built on
+branch `phase-6-completing-v1`, waiting for its pull request and the
+owner's check. Phase 5 is merged (pull request 2, CI green on Windows and
+Linux). The phase 3, 4 and 5 builds still await the owner's hands-on
+check. Phase 2 is complete and the owner confirmed its milestone build
+works. Phase 1 is complete and the owner confirmed its build works on
+Linux. Phase 0 is complete: all three risk spikes passed on Windows and
+Linux (decision 0009). The repository has been public since November 2026
+(the owner's decision).
 
 ## Phase 0 — Foundations and risk spikes
 
@@ -403,9 +405,98 @@ microphone back to you, and speakers would be recorded too.
 
 ## Phase 6 — Completing v1
 
-Subtractive synth, DAWproject and MIDI import and export, FLAC export,
-autosave polish, installers (Windows installer, Linux AppImage), generated
-third-party notices, user guide.
+- [x] How each part works and looks (decisions 0019 to 0022)
+- [x] The built-in synth (decision 0019): two oscillators (sine,
+      triangle, saw, square; band-limited) and noise, a filter (low-pass
+      steep or gentle, high-pass, band-pass) with its own envelope, a
+      volume envelope, an LFO for vibrato, wobble and tremolo, 16 voices
+      or one with glide, eight presets; its own window (presets, then
+      oscillators, filter with its curve, envelopes with their shapes,
+      movement and playing); its knobs can be automated; file format
+      version 6
+- [x] Standard MIDI Files in and out (our own reader and writer): a song
+      goes out as the notes it plays (swing, repeats), with tempo changes
+      (glides as small steps), time signatures and keys; a file comes in
+      as tracks by channel (drums on channel 10, General MIDI synth sounds
+      on the synth)
+- [x] DAWproject in and out: tracks, mixer, instruments, effects (the EQ,
+      compressor and limiter also as DAWproject's own), plugins with their
+      settings, notes, audio with fades, automation, tempo (glides as
+      linear tempo automation), time signatures; another program's file is
+      read with what was left out named; exported files match the official
+      schema
+- [x] FLAC export (16 or 24 bits), written as the song renders
+- [x] Open takes VLabs songs, DAWproject and MIDI files; Import (Ctrl+I)
+      takes sound and MIDI files; Export is one dialog (a sound file, a
+      project for another program, the notes as a MIDI file)
+- [x] Autosave polish (decision 0021): a take being recorded survives a
+      crash, a copy is written right before a plugin loads or opens its
+      window, the recovery offer names the song and says how old the copy
+      is
+- [x] Patterns: a right-click on an empty spot of a track places any of
+      its patterns (or a new one); a clip's menu swaps the pattern it plays
+      (the owner's report)
+- [x] The Windows installer (NSIS, per user, file type, uninstaller) and
+      the Linux AppImage, built by "Program builds"; generated licence
+      notices in every release; the user guide (F1 opens it)
+- [x] Version 0.6.0
+- [ ] The owner's hands-on check of the milestone build
+
+### Phase 6 milestone: things to try
+
+1. Show the song (F5), click **+ Instrument…** and choose **Synth**. Click
+   the small window button on the synth track's header: the synth opens.
+   Play the computer keyboard while you try the presets (Bass, Lead, Warm
+   pad…) and move the Cutoff, Resonance and Envelope sliders.
+2. On the synth track, click the zigzag (Automation) and choose
+   "Synth · Cutoff"; draw the cutoff rising over a few bars and play.
+3. In a drum pattern, duplicate the beat (location line menu), change the
+   copy, go back to the song and right-click an empty spot on the drum
+   track: choose the copy. Right-click the first clip: "Play another
+   pattern" swaps it.
+4. Menu › **Export…**: try a FLAC file, a DAWproject file and a MIDI file.
+   Open the DAWproject in another program if you have one (Bitwig Studio,
+   Studio One, Cubase), and the MIDI file in any music program.
+5. Menu › **Open…** a MIDI file from the internet: it opens as a new song
+   with its tracks. Or **Import…** (Ctrl+I) a MIDI file into your song.
+6. Record a take of sound on an audio track and, while it records, end the
+   program from the system (or pull the plug): start it again and recover
+   your work; the take is there.
+7. Menu › **User guide** (F1).
+8. Install from the downloads of "Program builds": the Windows installer
+   (Windows warns it is from an unknown publisher: More info › Run anyway)
+   and the Linux AppImage (make it executable, double-click it).
+
+### Known gaps in this build
+
+- The synth has two oscillators and one LFO; no unison, no effects of its
+  own (use the track's effect chain).
+- MIDI export leaves out audio tracks and plugin settings (MIDI files hold
+  notes); MIDI import ignores controllers and pitch bends.
+- DAWproject cannot carry the song's key or an audio clip's own volume;
+  reading another program's file leaves out group tracks and sends,
+  time-stretching and the noise gate (the status line names what).
+- The installer is not signed (a certificate costs money: the owner's
+  call), so Windows SmartScreen warns once.
+- What I could not check myself: the installer and the AppImage on real
+  machines (CI builds them; running the downloaded build tools locally was
+  not permitted in my session), opening our DAWproject files in Bitwig,
+  Studio One or Cubase (they match the official schema), listening (the
+  synth's pitch, envelopes, filter and levels were measured), phase 6 on
+  Windows by hand (CI runs every test on Windows).
+
+## Next — Plugins and sound libraries (the owner's request, November 2026)
+
+Asked for after phase 6, being built next:
+
+- A plugin manager in the program: add a plugin by choosing its file,
+  folder or downloaded archive (VST3, CLAP), see every plugin with its
+  state, remove, add folders to search.
+- Windows plugins on Linux, set up by VLabs through Wine and yabridge.
+- Sound libraries: folders of samples to browse, search, preview and drag
+  into songs; SoundFont and SFZ instruments.
+- VST2 plugins (`.dll`) need the owner's decision first (the brief keeps
+  VST2 out of v1 for licensing reasons).
 
 ## After v1 — Singing voices (the owner's request, November 2026)
 
