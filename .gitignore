@@ -14,3 +14,6 @@ Thumbs.db
 # Local-only settings. Secrets never belong in this repository.
 .env
 .env.*
+
+# Crash dumps (the allocation check aborts a child process on purpose)
+core.[0-9]*
