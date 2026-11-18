@@ -81,8 +81,11 @@ The brief keeps VST2 out of v1 and asks for clean-room headers and a
 licensing check first: Steinberg no longer licenses VST2, and the open
 headers in circulation either carry copyleft licences or an uncertain
 history. A `.dll` added in the Plugins window is recognised and explained
-("VST2 plugins are not supported yet: look for a VST3 or CLAP version").
-*Waiting for the owner's decision.*
+(a VST2 plugin, not supported: look for its VST3 or CLAP version).
+
+**Decided by the owner (November 2026): VST2 stays out of v1**, as the
+brief says. It may be looked at again after v1, with clean-room headers
+and a licensing check first.
 
 ## The sound library
 

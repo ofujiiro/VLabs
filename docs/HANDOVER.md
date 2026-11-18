@@ -44,6 +44,9 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   on bar 2, an AIFF loop double-clicked landed at the play position, a
   SoundFont track played middle C at 262 Hz with piano overtones, and the
   Plugins window removed a plugin added to the program's folder.
+- The owner decided (November 2026) to keep VST2 (`.dll`) plugins out of
+  v1, as the brief says (decision 0023); a `.dll` added in the Plugins
+  window is explained.
 
 ## Waiting on the owner
 
@@ -51,9 +54,6 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   Windows), and start "Program builds" to get the installer and AppImage.
   Then the one for `plugins-and-libraries`.
 - The hands-on checks of phases 3 to 6 (ROADMAP.md, "things to try").
-- A decision on VST2 (`.dll`) plugins: the brief keeps them out of v1 for
-  licensing reasons (Steinberg no longer licenses VST2; clean-room headers
-  carry legal risk).
 - A decision on bundling Wine and yabridge with the Linux build (their
   licences, LGPL and GPL, and their size), versus setting up the person's
   own Wine and yabridge.

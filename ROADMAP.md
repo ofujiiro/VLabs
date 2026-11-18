@@ -507,7 +507,8 @@ Built after phase 6 (decision 0023), on its own branch.
 - [x] SoundFont (`.sf2`) instrument tracks, with their presets in the track
       menu.
 - [ ] SFZ instruments: planned next.
-- [ ] VST2 plugins: waiting for the owner's decision (licensing).
+- VST2 plugins: kept out of v1 (the owner's decision, November 2026, as
+  the brief says).
 
 ### Things to try
 
@@ -541,7 +542,7 @@ Built after phase 6 (decision 0023), on its own branch.
 - **Installers were not run here**: opening one on Windows and running one
   through Wine on Linux are untested. A plugin's installer may also put it
   somewhere VLabs does not look; **Search another folder…** covers that.
-- **VST2 plugins** are not supported (they need the owner's decision), and
+- **VST2 plugins** are not supported (kept out of v1 by the owner), and
   **SFZ instruments** are not there yet.
 - The library cannot play MIDI files or SoundFonts to preview them (drag or
   double-click them in), shows no waveforms, and does not play sounds
