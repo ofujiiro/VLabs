@@ -8,9 +8,11 @@ use std::sync::Arc;
 
 use daw_dsp::audio::AudioBuffer;
 use daw_dsp::drums::{DrumKit, DrumSampler, PadParams, PadTable};
+use daw_dsp::synth::{EnvParams, FilterMode, OscParams, Synth, SynthParams, Wave};
 use daw_dsp::{Instrument, InstrumentSettings, SineSynth, SoundFontBank, SoundFontPlayer};
 use daw_model::{
-    ELECTRONIC_KIT, Instrument as InstrumentSpec, PadSetting, PluginFormat, PluginRef, SoundSource,
+    ELECTRONIC_KIT, Instrument as InstrumentSpec, LfoShape, PadSetting, PluginFormat, PluginRef,
+    SoundSource, SynthEnvelope, SynthFilter, SynthOscillator, SynthSettings, SynthWave,
 };
 use daw_plugin_host::PluginInfo;
 
@@ -220,12 +222,70 @@ impl SoundLibrary {
                     (Box::new(sampler), Some(problem))
                 }
             },
+            InstrumentSpec::Synth(settings) => (
+                Box::new(Synth::new(sample_rate, synth_params(settings))),
+                None,
+            ),
             // The engine loads plugins itself (they have a main-thread half);
             // an audio track has no instrument (its clips are mixed in).
             InstrumentSpec::Plugin(_) | InstrumentSpec::Audio => {
                 (Box::new(crate::plugins::Silence), None)
             }
         }
+    }
+}
+
+/// The synth's sound settings from the song's (decision 0019). Plain
+/// arithmetic, safe on the audio thread (automation uses it there).
+pub(crate) fn synth_params(settings: &SynthSettings) -> SynthParams {
+    let s = settings.repaired();
+    let osc = |o: &SynthOscillator| OscParams {
+        wave: match o.wave {
+            SynthWave::Sine => Wave::Sine,
+            SynthWave::Triangle => Wave::Triangle,
+            SynthWave::Saw => Wave::Saw,
+            SynthWave::Square => Wave::Square,
+        },
+        pitch: o.pitch(),
+        level: o.level,
+    };
+    let env = |e: &SynthEnvelope| EnvParams {
+        attack: e.attack,
+        decay: e.decay,
+        sustain: e.sustain,
+        release: e.release,
+    };
+    SynthParams {
+        osc: [osc(&s.osc1), osc(&s.osc2)],
+        pulse_width: s.pulse_width,
+        noise: s.noise,
+        filter_mode: match s.filter {
+            SynthFilter::LowPass24 => FilterMode::LowPass24,
+            SynthFilter::LowPass12 => FilterMode::LowPass12,
+            SynthFilter::HighPass => FilterMode::HighPass,
+            SynthFilter::BandPass => FilterMode::BandPass,
+        },
+        cutoff_hz: s.cutoff_hz,
+        resonance: s.resonance,
+        filter_env_octaves: s.envelope_amount,
+        key_tracking: s.key_tracking,
+        amp_env: env(&s.amp_envelope),
+        filter_env: env(&s.filter_envelope),
+        lfo_shape: match s.lfo_shape {
+            LfoShape::Sine => daw_dsp::synth::LfoShape::Sine,
+            LfoShape::Triangle => daw_dsp::synth::LfoShape::Triangle,
+            LfoShape::Square => daw_dsp::synth::LfoShape::Square,
+            LfoShape::Saw => daw_dsp::synth::LfoShape::Saw,
+            LfoShape::Random => daw_dsp::synth::LfoShape::Random,
+        },
+        lfo_rate_hz: s.lfo_rate_hz,
+        vibrato_cents: s.vibrato_cents,
+        wobble_octaves: s.wobble_octaves,
+        tremolo: s.tremolo,
+        mono: s.mono,
+        glide_seconds: s.glide_seconds,
+        velocity: s.velocity,
+        gain: daw_dsp::db_to_gain(s.volume_db),
     }
 }
 
@@ -236,6 +296,7 @@ pub(crate) fn instrument_settings(spec: &InstrumentSpec) -> Option<InstrumentSet
         InstrumentSpec::Drums { pads, .. } => {
             Some(InstrumentSettings::Drums(Box::new(pad_table(pads))))
         }
+        InstrumentSpec::Synth(settings) => Some(InstrumentSettings::Synth(synth_params(settings))),
         InstrumentSpec::SoundFont { .. } | InstrumentSpec::Plugin(_) | InstrumentSpec::Audio => {
             None
         }

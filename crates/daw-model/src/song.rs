@@ -201,7 +201,56 @@ fn rounded_div(a: i128, b: i128) -> i128 {
     (2 * a + b).div_euclid(2 * b)
 }
 
+/// A note as a clip plays it: positions on the song's timeline.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlayedNote {
+    /// Where it starts.
+    pub start: Ticks,
+    /// Where it ends (after its start).
+    pub end: Ticks,
+    /// The key.
+    pub key: u8,
+    /// How hard, from 0 to 1.
+    pub velocity: f32,
+}
+
 impl Pattern {
+    /// The notes a clip of this pattern plays, in order: the pattern
+    /// repeated from the clip's offset for the clip's length, swung as it
+    /// plays (decision 0018), every note cut at the clip's end. This is the
+    /// one place that says what a clip plays: the engine and the exporters
+    /// both use it.
+    pub fn played_in(&self, clip: &Clip) -> Vec<PlayedNote> {
+        let ClipContent::Pattern { offset, .. } = clip.content else {
+            return Vec::new();
+        };
+        let mut notes = Vec::new();
+        if self.length <= Ticks::ZERO {
+            return notes;
+        }
+        let mut cycle_start = clip.start - offset;
+        while cycle_start < clip.end() {
+            for note in &self.notes {
+                if note.start >= self.length {
+                    continue;
+                }
+                let start = cycle_start + self.swing.apply(note.start);
+                let end = (cycle_start + self.swing.apply(note.end())).min(clip.end());
+                if start >= clip.start && start < clip.end() && end > start {
+                    notes.push(PlayedNote {
+                        start,
+                        end,
+                        key: note.key,
+                        velocity: note.velocity,
+                    });
+                }
+            }
+            cycle_start += self.length;
+        }
+        notes.sort_by_key(|n| (n.start, n.key));
+        notes
+    }
+
     /// Sorts the notes into the canonical order (by start, then key).
     pub fn sort_notes(&mut self) {
         self.notes.sort_by_key(|n| (n.start, n.key, n.id));
@@ -256,6 +305,8 @@ pub enum Instrument {
     /// No instrument: the track plays the recorded or imported sound of its
     /// audio clips.
     Audio,
+    /// The built-in subtractive synth (decision 0019).
+    Synth(crate::synth::SynthSettings),
 }
 
 impl Instrument {
@@ -286,6 +337,14 @@ impl Instrument {
         matches!(self, Self::Audio)
     }
 
+    /// The synth's settings, if this is the built-in synth.
+    pub fn synth(&self) -> Option<&crate::synth::SynthSettings> {
+        match self {
+            Self::Synth(settings) => Some(settings),
+            _ => None,
+        }
+    }
+
     /// The plugin, if this is a plugin instrument.
     pub fn plugin(&self) -> Option<&crate::plugin::PluginSetup> {
         match self {
@@ -301,6 +360,8 @@ impl Instrument {
             (Self::Drums { kit: a, .. }, Self::Drums { kit: b, .. }) => a == b,
             // A plugin's settings live in the plugin while it plays.
             (Self::Plugin(a), Self::Plugin(b)) => a.plugin == b.plugin,
+            // The synth takes new settings while it plays.
+            (Self::Synth(_), Self::Synth(_)) => true,
             _ => self == other,
         }
     }
@@ -313,7 +374,9 @@ impl Instrument {
                 .find(|p| p.key == key)
                 .copied()
                 .unwrap_or_else(|| PadSetting::new(key)),
-            Self::SoundFont { .. } | Self::Plugin(_) | Self::Audio => PadSetting::new(key),
+            Self::SoundFont { .. } | Self::Plugin(_) | Self::Audio | Self::Synth(_) => {
+                PadSetting::new(key)
+            }
         }
     }
 
