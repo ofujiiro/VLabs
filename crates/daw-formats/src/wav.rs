@@ -146,6 +146,12 @@ impl WavWriter {
         }
     }
 
+    /// Pushes buffered sound to the file without finishing it (as the
+    /// system would before a crash; for tests).
+    pub fn flush_for_test(&mut self) {
+        let _ = self.out.flush();
+    }
+
     /// Frames written so far.
     pub fn frames(&self) -> u64 {
         self.frames
@@ -185,6 +191,77 @@ impl WavWriter {
         drop(self.out);
         let _ = std::fs::remove_file(&self.temporary);
     }
+}
+
+/// What a repaired WAV file holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Repaired {
+    /// Frames of sound.
+    pub frames: u64,
+    /// Frames per second.
+    pub sample_rate: u32,
+    /// Channels.
+    pub channels: u16,
+}
+
+/// Mends a WAV file this module was writing when the program stopped (a
+/// crash in the middle of a take, decision 0021): its sizes are worked
+/// out from the sound written so far, a part-written last frame is cut
+/// off. Files written by other programs are left alone.
+pub fn repair(path: &Path) -> io::Result<Repaired> {
+    let damaged = || io::Error::new(io::ErrorKind::InvalidData, "not a take this program wrote");
+    let mut file = File::options().read(true).write(true).open(path)?;
+    let mut header = [0_u8; 58];
+    debug_assert_eq!(header.len() as u64, HEADER_BYTES);
+    std::io::Read::read_exact(&mut file, &mut header).map_err(|_| damaged())?;
+    let le16 = |at: usize| u16::from_le_bytes([header[at], header[at + 1]]);
+    let le32 = |at: usize| {
+        u32::from_le_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]])
+    };
+    if &header[..4] != b"RIFF"
+        || &header[8..16] != b"WAVEfmt "
+        || le32(16) != 18
+        || &header[38..42] != b"fact"
+        || &header[50..54] != b"data"
+    {
+        return Err(damaged());
+    }
+    let tag = le16(20);
+    let channels = le16(22);
+    let sample_rate = le32(24);
+    let bits = le16(34);
+    let format = match (tag, bits) {
+        (1, 16) => WavFormat::Pcm16,
+        (1, 24) => WavFormat::Pcm24,
+        (3, 32) => WavFormat::Float32,
+        _ => return Err(damaged()),
+    };
+    if !(1..=2).contains(&channels) || sample_rate == 0 {
+        return Err(damaged());
+    }
+    let block = u64::from(channels) * u64::from(format.bytes_per_sample());
+    let length = file.metadata()?.len();
+    let frames = length.saturating_sub(HEADER_BYTES) / block;
+    let frames = u32::try_from(frames).unwrap_or(u32::MAX / 8);
+    file.set_len(HEADER_BYTES + u64::from(frames) * block)?;
+    file.seek(SeekFrom::Start(0))?;
+    write_header(&mut file, format, sample_rate, channels, frames)?;
+    file.sync_all()?;
+    Ok(Repaired {
+        frames: u64::from(frames),
+        sample_rate,
+        channels,
+    })
+}
+
+/// The name of the file a [`WavWriter`] writes before it is complete, for
+/// a target file `name` (any running copy of the program).
+pub fn is_partial_of(candidate: &str, name: &str) -> bool {
+    candidate
+        .strip_prefix('.')
+        .and_then(|rest| rest.strip_prefix(name))
+        .and_then(|rest| rest.strip_prefix('.'))
+        .is_some_and(|rest| rest.ends_with(".partial"))
 }
 
 fn write_header(
@@ -232,6 +309,42 @@ mod tests {
 
     fn temp(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("wav-test-{}-{name}.wav", std::process::id()))
+    }
+
+    #[test]
+    fn a_take_cut_off_by_a_crash_is_repaired() {
+        let path = temp("crash");
+        let mut writer =
+            WavWriter::create_with_channels(&path, WavFormat::Pcm24, 48_000, 1).unwrap();
+        let samples: Vec<f32> = (0..1000).map(|i| (i as f32 * 0.01).sin() * 0.5).collect();
+        writer.write_interleaved(&samples).unwrap();
+        writer.out.flush().unwrap();
+        // The program stops here: the file has its first header (no sound
+        // in it) and a frame and a half more than whole frames.
+        let partial = writer.temporary.clone();
+        std::mem::forget(writer);
+        {
+            let mut file = File::options().append(true).open(&partial).unwrap();
+            file.write_all(&[1, 2]).unwrap();
+        }
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let partial_name = partial.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(is_partial_of(&partial_name, &name));
+        assert!(!is_partial_of("other.wav", &name));
+        let repaired = repair(&partial).unwrap();
+        assert_eq!(
+            repaired,
+            Repaired {
+                frames: 1000,
+                sample_rate: 48_000,
+                channels: 1
+            }
+        );
+        let (_, bits, rate, back) = read(&partial);
+        assert_eq!((bits, rate, back.len()), (24, 48_000, 1000));
+        assert!((back[500] - samples[500]).abs() < 1e-4);
+        assert!(repair(Path::new("/nonexistent/take.wav")).is_err());
+        std::fs::remove_file(partial).ok();
     }
 
     /// Reads back a file this module wrote: (format tag, bits, rate, samples).

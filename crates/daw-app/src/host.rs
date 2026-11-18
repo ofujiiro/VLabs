@@ -37,7 +37,7 @@ impl DialogHost {
 
 impl Host for DialogHost {
     fn choose_file_to_open(&mut self) -> Option<PathBuf> {
-        // VLabs songs, and other programs' (decision 0020).
+        // this program's songs, and other programs' (decision 0020).
         let native = daw_ident::PROJECT_FILE_EXTENSION;
         let dialog = rfd::FileDialog::new()
             .add_filter(

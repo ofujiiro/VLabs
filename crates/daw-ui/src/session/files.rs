@@ -16,7 +16,7 @@ use crate::text;
 /// The kinds of song file that open as a song.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SongFile {
-    /// A VLabs song.
+    /// A song of this program.
     Native,
     /// A DAWproject file from another program.
     DawProject,
@@ -59,7 +59,7 @@ fn shown(path: &Path) -> String {
 }
 
 impl Session {
-    /// Opens any song file: a VLabs song, or another program's song as a
+    /// Opens any song file: a song of this program, or another program's song as a
     /// new, unsaved song (Save then asks where, so the file is never
     /// overwritten).
     pub fn open_any(&mut self, path: &Path) -> Result<(), String> {

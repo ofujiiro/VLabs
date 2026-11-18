@@ -82,6 +82,7 @@ impl Session {
     /// empty four-bar pattern at the start of the song, and puts it in
     /// focus.
     pub fn add_plugin_track(&mut self, info: &PluginInfo) -> TrackId {
+        self.safety_copy();
         let name = self.unique_track_name(&info.name);
         let instrument = Instrument::Plugin(PluginSetup::new(plugin_ref(info)));
         let track = self.doc.edit(text::EDIT_ADD_TRACK, |p| {
@@ -98,6 +99,7 @@ impl Session {
     /// Adds a plugin effect at the end of a chain, loading it at once (so
     /// its window can open straight away).
     pub fn add_plugin_effect(&mut self, place: ChainPlace, info: &PluginInfo) -> Option<EffectId> {
+        self.safety_copy();
         let kind = EffectKind::Plugin(PluginSetup::new(plugin_ref(info)));
         let id = self.add_effect(place, kind);
         self.sync_engine();
@@ -173,6 +175,7 @@ impl Session {
 
     /// Opens a plugin's window, or brings it to the front.
     pub fn show_plugin_window(&mut self, target: PluginTarget) {
+        self.safety_copy();
         let place = match target {
             PluginTarget::Instrument(track) => self.project().track(track).map(|t| t.name.clone()),
             PluginTarget::Effect(id) => match self.project().effect_place(id) {

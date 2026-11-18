@@ -23,6 +23,8 @@ pub mod workspace;
 
 pub use export::{ExportFormat, ExportTarget};
 pub use keys::{Command, KeyLabels, Keymap, LayoutFamily, Shortcut};
-pub use session::{Grid, LaneChoice, LiveTake, PluginSearch, Session, SoundState, View};
+pub use session::{
+    Grid, LaneChoice, LiveTake, PluginSearch, SafetyCopy, Session, SoundState, TakeNote, View,
+};
 pub use settings::{LabelChoice, Settings, ThemeChoice};
-pub use workspace::{Host, Intent, Request, Workspace};
+pub use workspace::{Host, Intent, RecoveryDetails, Request, Workspace};

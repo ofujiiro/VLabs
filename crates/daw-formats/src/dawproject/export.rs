@@ -75,7 +75,7 @@ struct Targets {
 struct Writer<'a> {
     project: &'a Project,
     next_id: u64,
-    /// Plugin settings and VLabs's own device settings: entry and bytes.
+    /// Plugin settings and the program's own device settings: entry and bytes.
     files: Vec<(String, Vec<u8>)>,
     /// Audio files: entry in the ZIP and file on disk.
     audio: Vec<(String, PathBuf)>,
@@ -260,7 +260,7 @@ impl Writer<'_> {
     }
 
     /// The `<Parameters>` of a device: one for each automated setting of
-    /// it, numbered as VLabs numbers them, as a fraction of its range.
+    /// it, numbered as the program numbers them, as a fraction of its range.
     fn parameters(
         &mut self,
         wanted: impl Iterator<Item = (AutomationTarget, u32, Option<f32>)>,
@@ -326,7 +326,7 @@ impl Writer<'_> {
         ))
     }
 
-    /// One of VLabs's own devices, with its exact settings in `state`, and
+    /// One of the program's own devices, with its exact settings in `state`, and
     /// whatever extra elements a standard device carries after them.
     #[allow(clippy::too_many_arguments, reason = "one element's attributes")]
     fn own_device(

@@ -377,6 +377,24 @@ pub fn recover_question() -> String {
 }
 
 pub const RECOVER: &str = "Recover it";
+pub const RECOVERED_TAKE: &str =
+    "It includes the sound that was being recorded when the program stopped.";
+pub const RECOVERY_OLDER: &str =
+    "The song's file was saved after this copy was made: recovering may bring back older work.";
+
+/// Which song was found after a crash, and how old the copy is.
+pub fn recovered_song(name: &str, age_seconds: u64) -> String {
+    let minutes = age_seconds / 60;
+    let when = match minutes {
+        0 => "less than a minute ago".to_owned(),
+        1 => "about a minute ago".to_owned(),
+        2..=59 => format!("about {minutes} minutes ago"),
+        60..=119 => "about an hour ago".to_owned(),
+        _ if minutes < 48 * 60 => format!("about {} hours ago", minutes / 60),
+        _ => format!("about {} days ago", minutes / (24 * 60)),
+    };
+    format!("{name}, saved automatically {when}")
+}
 pub const OPEN_TITLE: &str = "Open a song";
 pub const SAVE_TITLE: &str = "Save the song";
 

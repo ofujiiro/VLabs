@@ -124,7 +124,7 @@ fn read_entry<R: Read + Seek>(
     Ok(Some(bytes))
 }
 
-/// What an automation lane's parameter is, as VLabs knows it.
+/// What an automation lane's parameter is, as the program knows it.
 #[derive(Clone, Copy, Debug)]
 enum Param {
     Volume(TrackId),
@@ -432,7 +432,7 @@ impl<R: Read + Seek> Importer<'_, R> {
         Ok(())
     }
 
-    /// Remembers a device's parameters (`parameterID` is VLabs's number for
+    /// Remembers a device's parameters (`parameterID` is the program's number for
     /// the setting, or the plugin's parameter id).
     fn parameters(&mut self, device: &Node, param: impl Fn(u32) -> Param) {
         let Some(parameters) = device.child("Parameters") else {
@@ -520,7 +520,7 @@ impl<R: Read + Seek> Importer<'_, R> {
         Ok(Instrument::builtin_piano())
     }
 
-    /// An effect device as one of VLabs's effects, if VLabs has one like
+    /// An effect device as one of the program's effects, if the program has one like
     /// it.
     fn effect_kind(&mut self, device: &Node) -> Result<Option<EffectKind>, DawProjectError> {
         match device.name.as_str() {
@@ -755,7 +755,7 @@ impl<R: Read + Seek> Importer<'_, R> {
         if clip_length <= Ticks::ZERO {
             return;
         }
-        // Notes that repeat every few bars (a beat written out, as VLabs
+        // Notes that repeat every few bars (a beat written out, as the program
         // writes its patterns) become a pattern of one repeat, which the
         // clip plays again and again.
         let bar = self.project.meter.signature_at(clip_start).bar_length();
@@ -1158,7 +1158,7 @@ fn milliseconds(device: &Node, name: &str) -> Option<f32> {
     })
 }
 
-/// DAWproject's standard EQ as VLabs's: a high-pass for the low cut, the
+/// DAWproject's standard EQ as the program's: a high-pass for the low cut, the
 /// first low shelf, bell and high shelf, a low-pass for the high cut.
 fn equalizer(device: &Node) -> EqSettings {
     let mut eq = EqSettings::default();

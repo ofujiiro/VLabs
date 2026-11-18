@@ -86,6 +86,18 @@ pub enum Request {
     FindPlugins,
 }
 
+/// What the person is told about work found after a crash (decision
+/// 0021).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RecoveryDetails {
+    /// How long ago the copy was written, in seconds.
+    pub age_seconds: u64,
+    /// Whether the song's own file was saved after the copy.
+    pub newer_file: bool,
+    /// Whether a take being recorded was brought back.
+    pub take: bool,
+}
+
 /// What to do once unsaved changes have been dealt with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Pending {
@@ -100,6 +112,7 @@ enum Dialog {
     Recovery {
         project: Box<Project>,
         path: Option<PathBuf>,
+        details: RecoveryDetails,
     },
     About,
     Shortcuts {
@@ -214,14 +227,20 @@ impl Workspace {
     }
 
     /// Offers to continue with work recovered after a crash.
-    pub fn offer_recovery(&mut self, project: Project, path: Option<PathBuf>) {
+    pub fn offer_recovery(
+        &mut self,
+        project: Project,
+        path: Option<PathBuf>,
+        details: RecoveryDetails,
+    ) {
         self.dialog = Some(Dialog::Recovery {
             project: Box::new(project),
             path,
+            details,
         });
     }
 
-    /// Opens a song (from the command line, for instance): a VLabs song,
+    /// Opens a song (from the command line, for instance): a song of this program,
     /// or another program's (DAWproject, MIDI) as a new unsaved song.
     pub fn open(&mut self, path: PathBuf) {
         if self.session.open_any(&path).is_ok() {
@@ -932,13 +951,36 @@ impl Workspace {
                 }
                 Dialog::Unsaved(pending)
             }
-            Dialog::Recovery { project, path } => {
+            Dialog::Recovery {
+                project,
+                path,
+                details,
+            } => {
                 let mut choice = None;
                 modal("recovery", ctx).show(ctx, |ui| {
-                    ui.set_width(420.0);
+                    ui.set_width(440.0);
                     ui.heading(text::RECOVER_TITLE);
                     ui.add_space(8.0);
                     ui.label(text::recover_question());
+                    ui.add_space(8.0);
+                    let name = path
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .or_else(|| {
+                            (!project.title.trim().is_empty()).then(|| project.title.clone())
+                        })
+                        .unwrap_or_else(|| text::UNTITLED.to_owned());
+                    ui.label(
+                        RichText::new(text::recovered_song(&name, details.age_seconds)).strong(),
+                    );
+                    if details.take {
+                        ui.label(text::RECOVERED_TAKE);
+                    }
+                    if details.newer_file {
+                        let p = Palette::of(ui.ctx());
+                        ui.label(RichText::new(text::RECOVERY_OLDER).color(p.record));
+                    }
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
                         if ui.button(text::RECOVER).clicked() {
@@ -963,7 +1005,11 @@ impl Workspace {
                     }
                     None => {}
                 }
-                Dialog::Recovery { project, path }
+                Dialog::Recovery {
+                    project,
+                    path,
+                    details,
+                }
             }
             Dialog::About => {
                 let response = modal("about", ctx).show(ctx, |ui| {

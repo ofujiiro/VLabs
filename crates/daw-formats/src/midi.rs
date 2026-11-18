@@ -76,7 +76,7 @@ pub struct Event {
     pub kind: EventKind,
 }
 
-/// The events VLabs uses; everything else is skipped when reading.
+/// The events the program uses; everything else is skipped when reading.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EventKind {
     /// A note starts (velocity 1 to 127).
@@ -739,7 +739,7 @@ pub struct ImportedTrack {
     pub notes: Vec<Note>,
 }
 
-/// What a MIDI file holds, as VLabs understands it.
+/// What a MIDI file holds, as the program understands it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImportedSong {
     /// The song's name, from the first track's name in a format 1 file.

@@ -26,7 +26,7 @@ use crate::text;
 const INPUT_KEPT: Duration = Duration::from_secs(30);
 
 /// A take of sound: asked for, recording, or being finished.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct AudioTake {
     /// The engine's number for it, once recording started.
     pub number: Option<u32>,
@@ -34,6 +34,24 @@ pub(super) struct AudioTake {
     pub track: TrackId,
     /// Where in the song it started.
     pub at: Ticks,
+    /// The delay to make up for, in seconds.
+    pub latency: f32,
+    /// The file it is written to, once recording started.
+    pub file: Option<String>,
+}
+
+/// A take of sound being recorded, as autosave notes it so a crash does
+/// not lose it (decision 0021).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TakeNote {
+    /// The track it goes on.
+    pub track: TrackId,
+    /// Where in the song it started.
+    pub at: Ticks,
+    /// The file it is written to, in the song's audio folder.
+    pub file: String,
+    /// Its name ("Recording 3").
+    pub name: String,
     /// The delay to make up for, in seconds.
     pub latency: f32,
 }
@@ -187,6 +205,7 @@ impl Session {
             track,
             at: Ticks::ZERO,
             latency: 0.0,
+            file: None,
         });
         self.input_until = None;
         self.sync_engine();
@@ -213,9 +232,23 @@ impl Session {
         self.input_meter
     }
 
+    /// The take of sound being recorded, for autosave (none before the
+    /// count-in ends).
+    pub fn take_in_progress(&self) -> Option<TakeNote> {
+        let take = self.audio_take.as_ref()?;
+        take.number?;
+        Some(TakeNote {
+            track: take.track,
+            at: take.at,
+            file: take.file.clone()?,
+            name: self.next_recording_name(),
+            latency: take.latency,
+        })
+    }
+
     /// The take being recorded, for drawing it.
     pub fn live_take(&self) -> Option<LiveTake> {
-        let take = self.audio_take?;
+        let take = self.audio_take.as_ref()?;
         take.number?;
         Some(LiveTake {
             track: take.track,
@@ -237,6 +270,7 @@ impl Session {
         take.at = at;
         take.latency = latency;
         let name = self.audio.fresh_name("wav");
+        take.file = Some(name.clone());
         let path = self.audio.folder().join(name);
         if let Some(recorder) = &self.recorder {
             recorder.begin(number, path);
@@ -261,7 +295,7 @@ impl Session {
     /// Recording stopped: a take asked for that never started (stopped
     /// during the count-in) is let go.
     pub(super) fn audio_recording_ended(&mut self) {
-        if self.audio_take.is_some_and(|t| t.number.is_none()) {
+        if self.audio_take.as_ref().is_some_and(|t| t.number.is_none()) {
             self.audio_take = None;
             self.input_until = Some(Instant::now() + INPUT_KEPT);
         }

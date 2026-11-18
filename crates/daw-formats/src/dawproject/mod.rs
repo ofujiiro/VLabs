@@ -7,12 +7,12 @@
 //! Exporting writes the tracks (with their mixer settings, instruments and
 //! effects), pattern clips as the notes they play, audio clips with their
 //! files, automation lanes, the tempo (glides as linear tempo automation)
-//! and the time signatures. VLabs's own instruments and effects travel as
-//! devices of VLabs's own with their exact settings, so VLabs reads them
+//! and the time signatures. the program's own instruments and effects travel as
+//! devices of the program's own with their exact settings, so the program reads them
 //! back unchanged; the EQ, compressor and limiter are also written as
 //! DAWproject's standard devices.
 //!
-//! Importing reads what VLabs can play and says what it left out. Files
+//! Importing reads what the program can play and says what it left out. Files
 //! from outside are untrusted: sizes are limited and damage gives an
 //! error, never a crash.
 
@@ -29,13 +29,13 @@ pub use import::{ImportNames, Imported, import};
 /// the person after opening it).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum LeftOut {
-    /// A device VLabs cannot play: its name (VST2 and AU plugins, other
+    /// A device the program cannot play: its name (VST2 and AU plugins, other
     /// programs' own instruments and effects, a noise gate).
     Device(String),
-    /// Group, effect and submix tracks and sends (VLabs has no buses yet);
+    /// Group, effect and submix tracks and sends (the program has no buses yet);
     /// the tracks inside them are kept.
     Routing,
-    /// Audio that another program stretched in time; VLabs plays it at its
+    /// Audio that another program stretched in time; the program plays it at its
     /// own speed.
     StretchedAudio,
     /// An audio file the project names but does not hold: its name.
@@ -82,12 +82,12 @@ impl From<zip::result::ZipError> for DawProjectError {
     }
 }
 
-/// The ID of one of VLabs's own devices (piano, drums, synth, effects).
+/// The ID of one of the program's own devices (piano, drums, synth, effects).
 fn own_device_id(kind: &str) -> String {
     format!("{}.{kind}", daw_ident::APPLICATION_ID)
 }
 
-/// Whether a device is one of VLabs's own.
+/// Whether a device is one of the program's own.
 fn is_own_device(id: &str) -> bool {
     id.strip_prefix(daw_ident::APPLICATION_ID)
         .is_some_and(|rest| rest.starts_with('.'))
@@ -116,7 +116,7 @@ fn swap_vst3_id(id: &str, windows: bool) -> String {
     order.iter().map(|&i| bytes[i]).collect()
 }
 
-/// A `.vstpreset` file from a VST3 plugin's saved settings as VLabs keeps
+/// A `.vstpreset` file from a VST3 plugin's saved settings as the program keeps
 /// them (two blocks, each with its length: the component's state, then the
 /// controller's), for the plugin with `class_id` (canonical, 32 digits).
 fn vstpreset(class_id: &str, state: &[u8]) -> Option<Vec<u8>> {
@@ -144,7 +144,7 @@ fn vstpreset(class_id: &str, state: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// The two blocks of VLabs's VST3 settings.
+/// The two blocks of the program's VST3 settings.
 fn split_vst3_state(state: &[u8]) -> Option<(&[u8], &[u8])> {
     let block = |at: usize| -> Option<(&[u8], usize)> {
         let length = u32::from_le_bytes(state.get(at..at + 4)?.try_into().ok()?) as usize;
@@ -156,7 +156,7 @@ fn split_vst3_state(state: &[u8]) -> Option<(&[u8], &[u8])> {
     Some((component, controller))
 }
 
-/// VLabs's VST3 settings from a `.vstpreset` file (and the class id it
+/// the program's VST3 settings from a `.vstpreset` file (and the class id it
 /// names), if it is one.
 fn from_vstpreset(bytes: &[u8]) -> Option<(String, Vec<u8>)> {
     if bytes.get(..4) != Some(b"VST3") {

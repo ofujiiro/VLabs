@@ -43,8 +43,13 @@ showed where it still falls short:
    was saved after this copy was made: recovering may bring back older
    work"). The choices stay "Recover it" and "Start fresh".
 4. **Several pieces of work** left by several copies of the program that
-   all stopped (a power cut with two windows open) are offered one after
-   the other, newest first, at the same start, instead of one per start.
+   all stopped (a power cut with two windows open) stay offered one per
+   start, newest first, as before: offering a second right after the
+   person recovered the first would replace that recovered song before
+   it could be saved.
+5. **While a take records, the song is kept** in the recovery folder even
+   if it had just been saved, so that after a crash the song comes back
+   with its take.
 
 ## Alternatives considered
 

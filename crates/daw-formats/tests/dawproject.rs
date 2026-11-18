@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! DAWproject (decision 0020): a VLabs song goes out and comes back with
+//! DAWproject (decision 0020): a song of this program goes out and comes back with
 //! its tracks, mixer, instruments, effects, plugins and their settings,
 //! notes, sound, automation, tempo and signatures; files written in the
-//! style of other programs are read, with what VLabs cannot play named;
+//! style of other programs are read, with what the program cannot play named;
 //! damaged files are refused.
 
 #![allow(
@@ -81,7 +81,7 @@ fn plugin(format: PluginFormat, id: &str, name: &str, state: Vec<u8>) -> PluginS
     }
 }
 
-/// VLabs's VST3 settings: two blocks, each with its length.
+/// the program's VST3 settings: two blocks, each with its length.
 fn vst3_state() -> Vec<u8> {
     let mut state = Vec::new();
     for block in [&b"component state"[..], &b"controller"[..]] {
@@ -91,7 +91,7 @@ fn vst3_state() -> Vec<u8> {
     state
 }
 
-/// A song with every kind of track and setting VLabs has.
+/// A song with every kind of track and setting the program has.
 fn song(audio: &Path) -> Project {
     let mut project = Project::starter("Melody", "Piano");
     "Everything".clone_into(&mut project.title);
