@@ -9,6 +9,7 @@ pub mod keyboard_panel;
 pub mod keys;
 pub mod mixer;
 pub mod piano_roll;
+pub mod plugin_manager;
 pub mod session;
 pub mod settings;
 pub mod signature_row;
@@ -23,6 +24,7 @@ pub mod workspace;
 
 pub use export::{ExportFormat, ExportTarget};
 pub use keys::{Command, KeyLabels, Keymap, LayoutFamily, Shortcut};
+pub use plugin_manager::{BridgeState, InstallerRun, PluginJobDone, PluginPlaces};
 pub use session::{
     Grid, LaneChoice, LiveTake, PluginSearch, SafetyCopy, Session, SoundState, TakeNote, View,
 };

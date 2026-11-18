@@ -9,6 +9,7 @@ mod host;
 mod icon;
 mod layout;
 mod paths;
+mod plugin_jobs;
 mod recovery;
 
 use std::path::PathBuf;

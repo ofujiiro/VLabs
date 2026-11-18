@@ -995,6 +995,159 @@ pub fn plugin_by(vendor: &str) -> String {
     }
 }
 
+// The Plugins window (decision 0023).
+pub const MANAGE_PLUGINS: &str = "Plugins…";
+pub const MANAGE_PLUGINS_HINT: &str =
+    "Add plugins from files, folders or downloads, and see every plugin found";
+pub const PLUGINS_TITLE: &str = "Plugins";
+pub const ADD_PLUGIN_FILES: &str = "Add plugin files…";
+pub const ADD_PLUGIN_FILES_HINT: &str =
+    "Add .vst3 or .clap plugins, downloaded .zip files, or a plugin's installer";
+pub const ADD_PLUGIN_FOLDER: &str = "Add a plugin folder…";
+pub const ADD_PLUGIN_FOLDER_HINT: &str = "Add a .vst3 plugin (which is a folder) or a folder with plugins inside: they are copied into the program's own plugin folder";
+pub const DROP_PLUGINS_HINT: &str =
+    "You can also drop plugin files, folders or downloaded .zip files onto the window.";
+pub const PLUGINS_BUSY: &str = "Adding plugins…";
+pub const INSTRUMENTS_HEADING: &str = "Instruments";
+pub const EFFECTS_HEADING: &str = "Effects";
+pub const REMOVE: &str = "Remove";
+pub const WINDOWS_PLUGINS_WAITING: &str = "Windows plugins waiting for yabridge";
+pub const WINDOWS_PLUGINS_HEADING: &str = "Windows plugins: not set up";
+pub const WINDOWS_PLUGINS_READY_HEADING: &str = "Windows plugins: ready";
+pub const WINDOWS_PLUGINS_READY: &str = "Wine and yabridge are installed: Windows plugins you add here are set up for this program automatically.";
+pub const WINDOWS_PLUGINS_STEPS: &[&str] = &[
+    "1. Install Wine from your distribution (for instance: sudo apt install wine).",
+    "2. Download yabridge from github.com/robbert-vdh/yabridge/releases and unpack it into ~/.local/share/yabridge.",
+    "3. Click Check again, then add your Windows plugins here.",
+];
+pub const CHECK_AGAIN: &str = "Check again";
+pub const CHECK_AGAIN_HINT: &str =
+    "Look for Wine and yabridge again, and set up the Windows plugins added here";
+pub const FOLDERS_SEARCHED: &str = "Folders searched";
+pub const OWN_PLUGIN_FOLDER: &str = "Plugins added here are kept in the program's own folder.";
+pub const SHOW_FOLDER: &str = "Show";
+pub const STOP_SEARCHING_FOLDER: &str = "Stop searching this folder";
+pub const SEARCH_ANOTHER_FOLDER: &str = "Search another folder…";
+pub const SEARCH_ANOTHER_FOLDER_HINT: &str =
+    "Look for plugins in a folder of your own, where they are (nothing is copied)";
+pub const PLUGIN_FILE_TYPE: &str = "Plugins, downloads and installers";
+pub const CHOOSE_PLUGINS_TITLE: &str = "Add plugins";
+
+/// A heading with how many things are under it: "Effects (4)".
+pub fn counted(what: &str, count: usize) -> String {
+    format!("{what} ({count})")
+}
+
+/// The hint of a plugin's Remove button.
+pub fn remove_plugin(name: &str) -> String {
+    format!("Remove {name} from the program's plugin folder")
+}
+
+/// What is missing for Windows plugins on Linux.
+pub fn windows_plugins_missing(wine: bool, yabridge: bool) -> String {
+    match (wine, yabridge) {
+        (false, false) => "To use Windows plugins on Linux, install Wine and yabridge:".to_owned(),
+        (true, false) => "Wine is installed, yabridge is missing:".to_owned(),
+        (false, true) => "yabridge is installed, Wine is missing:".to_owned(),
+        (true, true) => WINDOWS_PLUGINS_READY.to_owned(),
+    }
+}
+
+/// A short list of names: "A, B and C", or "A, B, C and 4 more".
+fn name_list(names: &[String]) -> String {
+    const SHOWN: usize = 5;
+    match names.len() {
+        0 => String::new(),
+        1 => names[0].clone(),
+        n if n <= SHOWN => format!("{} and {}", names[..n - 1].join(", "), names[n - 1]),
+        n => format!("{} and {} more", names[..SHOWN].join(", "), n - SHOWN),
+    }
+}
+
+/// The file name of a path, for messages.
+fn file_name(path: &std::path::Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
+/// What adding, removing or setting up plugins did, line by line.
+pub fn plugin_job_lines(done: &crate::plugin_manager::PluginJobDone) -> Vec<String> {
+    use crate::plugin_manager::{InstallerRun, file_title};
+    use daw_plugin_host::install::Skip;
+    let titles = |paths: &[std::path::PathBuf]| -> Vec<String> {
+        paths.iter().map(|p| file_title(p)).collect()
+    };
+    let mut lines = Vec::new();
+    if !done.added.is_empty() {
+        lines.push(format!("Added: {}.", name_list(&titles(&done.added))));
+    }
+    if !done.windows.is_empty() {
+        let names = name_list(&titles(&done.windows));
+        lines.push(match &done.bridge {
+            Some(Ok(())) => format!("Set up with yabridge: {names}."),
+            Some(Err(why)) => {
+                format!("{names}: Windows plugins that yabridge could not set up ({why}).")
+            }
+            None => format!(
+                "{names}: Windows plugins. Install Wine and yabridge to use them (see Windows plugins below)."
+            ),
+        });
+    } else if let Some(bridge) = &done.bridge {
+        lines.push(match bridge {
+            Ok(()) => "yabridge has set up the Windows plugins added here.".to_owned(),
+            Err(why) => format!("yabridge could not set up the Windows plugins ({why})."),
+        });
+    }
+    for (path, run) in &done.installers {
+        let file = file_name(path);
+        lines.push(match run {
+            InstallerRun::Opened => {
+                format!("{file}: the installer has opened. When it has finished, click Look again.")
+            }
+            InstallerRun::Finished => format!("{file}: the installer has finished."),
+            InstallerRun::Failed(why) => format!("{file}: the installer could not run ({why})."),
+            InstallerRun::NeedsWine => format!(
+                "{file} is a Windows installer: install Wine to run it (see Windows plugins below)."
+            ),
+        });
+    }
+    for (path, skip) in &done.skipped {
+        let file = file_name(path);
+        lines.push(match skip {
+            Skip::NotAPlugin => format!("{file}: no plugin found inside."),
+            Skip::Vst2 => format!(
+                "{file} is a VST2 plugin: those are not supported yet. Look for its VST3 or CLAP version."
+            ),
+            Skip::Installer => format!("{file} is an installer: run it, then click Look again."),
+            Skip::OtherSystem(system) => {
+                let name = |s: daw_engine::PluginSystem| match s {
+                    daw_engine::PluginSystem::Windows => "Windows",
+                    daw_engine::PluginSystem::Linux => "Linux",
+                    daw_engine::PluginSystem::Mac => "Mac",
+                };
+                format!(
+                    "{file} is made for {}: get its {} version.",
+                    name(*system),
+                    name(daw_engine::PluginSystem::current())
+                )
+            }
+            Skip::Failed(why) => format!("{file} could not be added ({why})."),
+        });
+    }
+    if !done.removed.is_empty() {
+        lines.push(format!("Removed: {}.", name_list(&titles(&done.removed))));
+    }
+    if let Some((path, why)) = &done.remove_failed {
+        lines.push(format!(
+            "{} could not be removed ({why}).",
+            file_title(path)
+        ));
+    }
+    lines
+}
+
 /// What a plugin track plays, under its name.
 pub fn plugin_track(name: &str, missing: bool) -> String {
     if missing {
