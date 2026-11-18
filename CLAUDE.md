@@ -14,6 +14,9 @@ Guidance for any session (human or AI) picking up this repository.
    [`docs/decisions/`](docs/decisions/README.md) before changing anything
    structural.
 
+The repository is public (since November 2026): everything committed is
+published once pushed.
+
 ## Who is who
 
 The **project owner** directs the product and does not read or write Rust.
@@ -99,7 +102,10 @@ These come from the brief; tests and CI enforce most of them.
 ## Testing without hardware (Linux containers)
 
 - **Virtual screen:** `xvfb-run -a -s "-screen 0 1600x1000x24" <command>`;
-  screenshots with `import -window root shot.png` (ImageMagick).
+  screenshots with `import -window root shot.png` (ImageMagick). The
+  window's renderer needs Mesa's software drivers (`mesa-vulkan-drivers`,
+  `libegl1`); without them the program says it "could not start" (no
+  surface for any backend).
 - **Virtual sound card:** start a private PipeWire with a null sink, then use
   the normal default device:
 
@@ -112,6 +118,21 @@ These come from the brief; tests and CI enforce most of them.
   ```
 
   (packages: `pipewire pipewire-alsa pipewire-jack wireplumber dbus`).
+- **Virtual microphone:** to test recording, make a virtual source and feed
+  it the virtual speakers' sound, so the program records what it plays
+  (its metronome falls on the beats, which shows how well takes line up):
+
+  ```bash
+  pw-cli create-node adapter '{ factory.name=support.null-audio-sink node.name=test-mic media.class=Audio/Source/Virtual object.linger=true audio.position=[FL FR] }'
+  pw-link test-speakers:monitor_FL test-mic:input_FL
+  pw-link test-speakers:monitor_FR test-mic:input_FR
+  ```
+
+  The program's audio files, and its autosave copy (`song.teto`, which says
+  each clip's offset), are in the scratch home's
+  `.local/share/<product>/recovery/<run>/`. A program that was killed
+  offers its work back at the next start: answer the dialog before
+  clicking anything else.
 - **Driving the program:** with the virtual sound card running, start
   `target/debug/daw-app` under `xvfb-run`, find the window with
   `xdotool search --name <product name>`, then click and type with
@@ -121,6 +142,10 @@ These come from the brief; tests and CI enforce most of them.
   Point `HOME`, `XDG_CONFIG_HOME` and `XDG_DATA_HOME` at a scratch folder so
   settings and recovery copies do not leak between runs. `--silent` starts
   the program without opening a sound device.
+- **Audio test files:** `crates/daw-formats/tests/data/sine-440.*` were made
+  for the tests from a generated tone (LAME and oggenc, from the Ubuntu
+  archive: `lame vorbis-tools`); the interface and session tests write
+  their own WAV files.
 - **Interface tests** (`crates/daw-ui/tests/interface.rs`) use
   `egui_kittest`: find controls by their accessible label, click them, send
   keys. Dialogs re-centre for a few frames after opening; run a few frames

@@ -130,3 +130,33 @@ rule for both is easier to learn.
   is for later.
 - Device delays are measured from what the system reports, which varies
   between systems; a setting to adjust it by hand may be needed.
+
+## As built (phase 4)
+
+- **Where things are:** "+ Audio" under the track list; Record (its tooltip
+  says "Record sound" when an audio track is in focus); "Import audio…"
+  (Ctrl+I) in the menu; Ctrl+B splits the selected clip at the play
+  position; a clip's menu has Split here and Volume. Clicking an empty spot
+  of an audio track puts the play position there, so the next take starts
+  from it. An empty audio track says how to fill it.
+- **Snapping:** clips move on bars (beats with Alt), as patterns do; audio
+  clips' ends and splits land on beats (exactly with Alt); fades follow the
+  pointer. A pattern clip's left end trims into its pattern.
+- **Focus:** an audio track can be in focus in the song view while notes
+  and the keyboard keep going to the instrument track whose pattern was
+  open; the last instrument track cannot be deleted.
+- **Imports:** each file of a drop or a choice gets its own new track (the
+  first may go on the audio track under the pointer), so stems stay lined
+  up.
+- **Waveforms:** loudness summaries keep the lowest and highest sample per
+  32 frames and coarser runs above, and answer any span exactly.
+- **Lining takes up, measured:** on the test setup (a virtual PipeWire
+  sound card whose speakers feed a virtual microphone, so the program
+  records its own metronome), takes landed within about 5 ms of the beat
+  over eleven takes: the delay the devices report varied by one audio block
+  (256 frames) from one opening of the devices to the next, and so did the
+  real round trip, not always together. Two refinements were tried and
+  dropped on that evidence: timing how long input waits for the audio
+  thread (PipeWire calls back several blocks in a burst, so clock time does
+  not match song time) and adding half a block (it made the average worse
+  here). A by-hand adjustment remains possible later.

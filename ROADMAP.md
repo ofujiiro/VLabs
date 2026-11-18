@@ -3,11 +3,14 @@
 The phases come from the project brief. Each ends with a build the owner can
 run and a checklist of things to try. Status is updated at every milestone.
 
-**Now:** the phase 3 milestone build (plugins and automation) is ready
-for the owner to try. Phase 2 is complete and the owner confirmed its
-milestone build works. Phase 1 is complete and the owner confirmed its
-build works on Linux. Phase 0 is complete: all three risk spikes passed on
-Windows and Linux (decision 0009).
+**Now:** phase 4 (audio: recording, importing, shaping clips) is built
+and its milestone build is ready for the owner to try; the phase 3 build
+(plugins and automation) also still awaits the owner's check. Phase 2 is
+complete and the owner confirmed its milestone build works. Phase 1 is
+complete and the owner confirmed its build works on Linux. Phase 0 is
+complete: all three risk spikes passed on Windows and Linux (decision
+0009). The repository has been public since November 2026 (the owner's
+decision).
 
 ## Phase 0 — Foundations and risk spikes
 
@@ -226,9 +229,92 @@ installers put them in the usual folders.
 
 ## Phase 4 — Audio
 
-Recording from the built-in microphone or an interface, audio clips on the
-timeline, cut, trim, fades, waveform display, file import (WAV, FLAC, MP3,
-OGG).
+- [x] How sound is kept and shown (decision 0017): audio tracks, clips that
+      start on the beat and play their file at its own speed, the song
+      file keeping its audio files (format version 4)
+- [x] Recording from the default input (the built-in microphone or an
+      interface): Record on an audio track counts in and records from the
+      play position; the take grows on screen with its waveform and an
+      input meter; it is lined up by the delays the system reports; one
+      undo step
+- [x] The input opens only while recording (and half a minute after), and
+      the person is told when no sound came in or no input exists
+- [x] Importing WAV, FLAC, MP3 and Ogg Vorbis: "Import audio…" (Ctrl+I) or
+      dropping files on the song; several files get a track each, lined up
+- [x] Shaping clips on the timeline: trim either end (pattern clips too),
+      fade in and out with handles, split (at the mouse or the play
+      position, Ctrl+B), volume, move to another audio track; a new take or
+      import replaces what it covers
+- [x] Waveforms drawn from loudness summaries at any zoom; files decoded
+      and converted to the engine's rate in the background (our own
+      converter)
+- [x] Audio clips through the same mixer, effects, automation and export
+      as everything else; cuts never click; a tempo change keeps sound at
+      its own speed
+- [x] Songs open and save with their sound; autosave keeps it; a recovered
+      song comes back with it
+- [ ] The owner's hands-on check of the milestone build
+
+### Phase 4 milestone: things to try
+
+Headphones are best for recording: the program does not play the
+microphone back to you, and speakers would be recorded too.
+
+1. Show the song (click the song's name at the left of the location line,
+   or press F5) and click "+ Audio" under the tracks: an "Audio" track
+   appears, in focus. Its empty row says what to do.
+2. Press Ctrl+R (or the red button, whose tooltip now says "Record
+   sound"): one bar of clicks, then sing or play into the computer's
+   microphone. A red clip grows with your waveform and a meter in the
+   track's header shows how loud you are. Press Space to stop: the status
+   line says how many seconds were recorded. One Ctrl+Z takes it away.
+3. Press Space to hear it with the rest of the song. Click an empty spot of
+   the audio track at bar 3: the play position goes there; record again:
+   the new take starts there and replaces what it covers.
+4. Bring in a sound file: menu › Import audio… (Ctrl+I), or drag WAV,
+   FLAC, MP3 or Ogg files from your file manager onto the song view: onto
+   an audio track (it lands on the beat under the pointer), or elsewhere
+   for a new track. Several files at once get a track each, lined up.
+5. Shape a clip: drag its left or right end to trim it (it stops on beats;
+   hold Alt to place it exactly), drag the small squares at its top
+   corners to fade it in or out, drag the clip to move it, also onto
+   another audio track. Right-click it: Split here, and Volume. Or select
+   it, put the play position inside it and press Ctrl+B.
+6. Press F9: audio tracks have mixer strips and effects like any track;
+   their automation lanes work too.
+7. Save, close the program and open the song again: the sound is inside
+   the song file. Change the tempo: recordings keep their own speed.
+8. Export as WAV (Ctrl+E): the audio clips are in the file.
+9. A drum sound's name (left of the step grid) plays the sound once per
+   click again, even on a quick tap of a touchpad (see the known gaps).
+
+### Known gaps in this build
+
+- No time-stretching: after a tempo change, recordings and imported loops
+  play at their own speed and drift from the beat.
+- The program does not play the microphone back through itself (no input
+  monitoring); use headphones plugged into the computer or the interface.
+- Takes are lined up using the delays the system reports. On the test
+  setup (a virtual PipeWire sound card) they landed within about 5 ms of
+  the beat, varying by one audio block from one opening of the devices to
+  the next. There is no setting to adjust this by hand yet.
+- While recording sound the song plays on through its loop: one take is
+  one clip (no takes per loop pass).
+- Several clips cannot be selected at once, and clips have no copy and
+  paste (Duplicate places a copy right after a clip).
+- A song's sound is kept in memory while it is open (about 23 MB per minute
+  of stereo sound); recordings are stored as 24-bit WAV in the song file
+  (FLAC later). A crash in the middle of a take loses that take.
+- The stacking noise the owner heard when clicking a drum sound's name did
+  not happen on the test setup; the click now plays its sound on the press
+  itself, once, which also fixed quick clicks that played nothing. Please
+  try it again and say which system it was on if it still happens.
+- What I could not check myself: a real microphone (recording was tested
+  with a virtual one fed by the program's own output), the import file
+  dialog (the test screen has no dialog program; importing itself is
+  tested), dragging files from a real file manager (tested by simulating
+  the drop), and phase 4 on Windows by hand. I cannot listen: timing and
+  levels were checked by measuring recorded sound.
 
 ## Phase 5 — Theory and rhythm
 
