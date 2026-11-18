@@ -79,6 +79,30 @@ impl Host for DialogHost {
         path
     }
 
+    fn open_user_guide(&mut self) {
+        // Beside the program (Windows, a dist folder), or in the AppImage's
+        // documents; else the copy on the project's site.
+        let exe = std::env::current_exe().ok();
+        let folder = exe.as_deref().and_then(Path::parent);
+        let page = "user-guide.html";
+        let local = folder.and_then(|folder| {
+            [
+                folder.join(page),
+                folder
+                    .join("../share/doc")
+                    .join(daw_ident::EXECUTABLE_NAME)
+                    .join(page),
+            ]
+            .into_iter()
+            .find(|p| p.is_file())
+        });
+        let target = local.map_or_else(
+            || daw_ident::USER_GUIDE_URL.to_owned(),
+            |p| p.display().to_string(),
+        );
+        open_in_browser(&target);
+    }
+
     fn choose_audio_files(&mut self) -> Vec<PathBuf> {
         let mut dialog = rfd::FileDialog::new()
             .add_filter(
@@ -95,4 +119,14 @@ impl Host for DialogHost {
         }
         files
     }
+}
+
+/// Opens a page or an address with the desktop's own handler.
+fn open_in_browser(target: &str) {
+    let opener = if cfg!(windows) {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(opener).arg(target).spawn();
 }

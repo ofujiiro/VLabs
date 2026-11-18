@@ -42,6 +42,8 @@ pub trait Host {
     fn choose_audio_files(&mut self) -> Vec<PathBuf> {
         Vec::new()
     }
+    /// Shows the user guide (in the browser).
+    fn open_user_guide(&mut self) {}
 }
 
 /// Something a part of the window asks the window to do (open a dialog or
@@ -680,6 +682,7 @@ impl Workspace {
             }
             // Splitting acts on clips, in the song view.
             Command::Split => {}
+            Command::UserGuide => self.host.open_user_guide(),
         }
     }
 
@@ -858,6 +861,10 @@ impl Workspace {
                     capturing: None,
                     message: None,
                 });
+                ui.close();
+            }
+            if item(ui, text::USER_GUIDE, Command::UserGuide, &self.keymap) {
+                actions.push(Command::UserGuide);
                 ui.close();
             }
             if ui.button(text::ABOUT).clicked() {

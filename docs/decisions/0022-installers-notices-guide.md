@@ -79,10 +79,13 @@ patterns and the piano roll, the step grid, the song, recording notes and
 sound, the mixer and effects, plugins, automation, the key and chords,
 tempo and signatures, the synth, files (saving, recovery, importing and
 exporting), keyboard shortcuts, and what to do when something does not
-work. `cargo xtask dist` turns it into one self-contained HTML page (with
-`pulldown-cmark`, MIT, a developer tool only) shipped next to the program;
-the menu's "User guide" (F1) opens it in the browser, or the copy on the
-project's website when it is not there (a build from source).
+work. `cargo xtask dist` turns it into one self-contained HTML page, its
+pictures inside, shipped next to the program; the menu's "User guide" (F1)
+opens it in the browser, or the copy on the project's site when it is not
+there (a build from source). The guide is written in a small, plain part of
+Markdown that `xtask` converts itself, and `cargo metadata`'s JSON is read
+by a small reader of its own, so `xtask` keeps its rule of using the
+standard library only (a Markdown crate was considered and set aside).
 
 ## The version
 
@@ -96,6 +99,10 @@ once the hands-on checks of phases 3 to 6 are done.
   AppImage, and the plain release folders as before.
 - The program writes its icon files when asked (`--write-icons <folder>`),
   so the installer, the desktop entry and the window share one drawing.
+- Which crates are in the program comes from `cargo tree` for each system
+  (it resolves features per system as the build does; `cargo metadata`
+  merges the systems and would list crates that are never built, such as
+  the Windows clipboard crate decision 0005 keeps out).
 - What I could not check myself: the installer on a real Windows machine
   (CI builds it; `makensis` checks the script on Linux too), SmartScreen's
   warning, and the AppImage on distributions other than Ubuntu.

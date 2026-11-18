@@ -143,6 +143,7 @@ pub fn command_name(command: crate::keys::Command) -> &'static str {
         C::Export => "Export",
         C::Split => "Split the clip at the play position",
         C::ImportAudio => "Import",
+        C::UserGuide => "User guide",
     }
 }
 pub const ABOUT: &str = "About";
@@ -1204,6 +1205,7 @@ pub const ADD_AUDIO_HINT: &str =
     "Add a track for recording from a microphone or importing sound files";
 pub const RECORD_SOUND: &str = "Record sound";
 pub const IMPORT_AUDIO: &str = "Import…";
+pub const USER_GUIDE: &str = "User guide";
 pub const IMPORT_FILE_TYPE: &str = "Sound and MIDI files";
 pub const IMPORT_TITLE: &str = "Import sound or MIDI files";
 pub const EDIT_IMPORT_MIDI: &str = "import MIDI file";

@@ -24,6 +24,13 @@ pub const PROJECT_FILE_EXTENSION: &str = "teto";
 /// release makes existing installations look like a different application.
 pub const APPLICATION_ID: &str = "io.github.ofujiiro.VLabs";
 
+/// The project's home on the web: the source, and the user guide when a
+/// build has no copy of it beside the program.
+pub const PROJECT_URL: &str = "https://github.com/ofujiiro/VLabs";
+
+/// The user guide on the web (its Markdown source, readable there).
+pub const USER_GUIDE_URL: &str = "https://github.com/ofujiiro/VLabs/blob/main/docs/user-guide.md";
+
 #[cfg(test)]
 mod tests {
     use super::{APPLICATION_ID, EXECUTABLE_NAME, PRODUCT_NAME, PROJECT_FILE_EXTENSION};

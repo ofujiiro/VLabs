@@ -286,11 +286,13 @@ pub enum Command {
     Split,
     /// Import sound files.
     ImportAudio,
+    /// Open the user guide.
+    UserGuide,
 }
 
 impl Command {
     /// Every command, in the order the shortcuts window lists them.
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 37] = [
         Self::PlayStop,
         Self::Record,
         Self::ToStart,
@@ -327,6 +329,7 @@ impl Command {
         Self::Export,
         Self::ImportAudio,
         Self::Split,
+        Self::UserGuide,
     ];
 
     /// The stable name used in the settings file.
@@ -366,6 +369,7 @@ impl Command {
             Self::Export => "export",
             Self::Split => "split",
             Self::ImportAudio => "import_audio",
+            Self::UserGuide => "user_guide",
             Self::InvertUp => "invert_up",
             Self::InvertDown => "invert_down",
         }
@@ -591,6 +595,7 @@ impl Default for Keymap {
             (Command::Export, S::ctrl(Key::E)),
             (Command::Split, S::ctrl(Key::B)),
             (Command::ImportAudio, S::ctrl(Key::I)),
+            (Command::UserGuide, S::plain(Key::F1)),
         ];
         Self { bindings }
     }

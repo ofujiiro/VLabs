@@ -1,6 +1,7 @@
 # Build output
 /target/
 /dist/
+/dist-installer/
 
 # Editor and operating-system files
 .DS_Store

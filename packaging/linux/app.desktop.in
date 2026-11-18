@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=@PRODUCT@
+GenericName=Music workstation
+Comment=Make music: beats, melodies, recordings, mixing
+Exec=@EXE@ %f
+Icon=@APPID@
+Terminal=false
+Categories=AudioVideo;Audio;Music;Midi;Sequencer;
+Keywords=music;daw;midi;synth;drums;piano roll;recording;
+MimeType=application/x-@EXE@-song;
+StartupWMClass=@APPID@

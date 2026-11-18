@@ -13,6 +13,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
+mod guide;
+mod json;
+mod notices;
+mod package;
 #[cfg(test)]
 mod rules;
 
@@ -25,7 +29,12 @@ Developer commands. Usage: cargo xtask <command>
   build   Build everything
   test    Run every test
   deny    Check the licences, security advisories and sources of dependencies
-  dist    Build the release program into dist/, under its product name
+  dist    Build the release program into dist/, under its product name, with
+          its licence notices, user guide and icons
+  notices Write the third-party licence notices (dist/THIRD_PARTY_NOTICES.txt)
+  guide   Turn docs/user-guide.md into one HTML page (dist/user-guide.html)
+  installer  Make the Windows installer from dist/ (needs NSIS's makensis)
+  appimage   Make the Linux AppImage from dist/ (needs appimagetool)
   help    Show this text
 ";
 
@@ -38,6 +47,11 @@ const DENY_TARGETS: [&str; 2] = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-
 /// Files copied next to the program in `dist/`. The GPL requires its text to
 /// travel with the program.
 const DIST_DOCUMENTS: [&str; 2] = ["LICENSE", "THIRD_PARTY.md"];
+
+/// The generated licence notices, in `dist/` (decision 0022).
+const NOTICES: &str = "THIRD_PARTY_NOTICES.txt";
+/// The user guide as a page, in `dist/`.
+const GUIDE: &str = "user-guide.html";
 
 type Outcome = Result<(), String>;
 
@@ -61,6 +75,12 @@ fn main() -> ExitCode {
         Some("test") => test(),
         Some("deny") => deny(),
         Some("dist") => dist(),
+        Some("notices") => notices(&workspace_root().join("dist").join(NOTICES)).map(|count| {
+            println!("Notices for {count} crates written.");
+        }),
+        Some("guide") => guide(&workspace_root().join("dist").join(GUIDE)),
+        Some("installer") => installer(),
+        Some("appimage") => appimage(),
         Some(other) => Err(format!("unknown command `{other}`\n\n{HELP}")),
     };
 
@@ -75,12 +95,18 @@ fn main() -> ExitCode {
 
 /// Runs every check, keeps going after a failure, and reports all of them.
 fn ci() -> Outcome {
-    let steps: [Step; 5] = [
+    let steps: [Step; 6] = [
         ("fmt", || fmt(false)),
         ("lint", lint),
         ("build", build),
         ("test", test),
         ("deny", deny),
+        // Every crate's licence text is found (or the release would lack
+        // its notices).
+        ("notices", || {
+            let out = target_dir()?.join("notices-check").join(NOTICES);
+            notices(&out).map(|count| println!("Notices for {count} crates."))
+        }),
     ];
 
     let mut failed = Vec::new();
@@ -188,6 +214,19 @@ fn dist() -> Outcome {
         let source = root.join(document);
         fs::copy(&source, dist.join(document)).map_err(|error| describe(&source, &error))?;
     }
+    let count = notices(&dist.join(NOTICES))?;
+    println!("Licence notices for {count} crates written.");
+    guide(&dist.join(GUIDE))?;
+    // The icon files come from the program itself, so every picture of it
+    // is the same drawing.
+    let icons = Command::new(&program)
+        .arg("--write-icons")
+        .arg(dist.join("icons"))
+        .status()
+        .map_err(|error| describe(&program, &error))?;
+    if !icons.success() {
+        return Err("the program could not write its icon files".to_owned());
+    }
 
     println!(
         "{} {} is ready: {}",
@@ -195,6 +234,60 @@ fn dist() -> Outcome {
         env!("CARGO_PKG_VERSION"),
         program.display(),
     );
+    Ok(())
+}
+
+/// Writes the licence notices for the program to `out`; returns how many
+/// crates they cover.
+fn notices(out: &Path) -> Result<usize, String> {
+    let root = workspace_root();
+    let cargo = env::var_os("CARGO").map_or_else(|| PathBuf::from("cargo"), PathBuf::from);
+    let extra = [
+        (
+            "Fonts (assets/fonts)",
+            root.join("assets/fonts/LICENSE-Go-fonts.txt"),
+        ),
+        (
+            "The piano (assets/sounds)",
+            root.join("assets/sounds/LICENSE-piano.txt"),
+        ),
+        (
+            "The acoustic drum kit (assets/drums)",
+            root.join("assets/drums/LICENSE-drums.txt"),
+        ),
+        (
+            "The AppImage runtime",
+            root.join("packaging/linux/appimage-runtime-licences.txt"),
+        ),
+    ];
+    notices::generate(&cargo, root, APP_PACKAGE, &DENY_TARGETS, &extra, out)
+}
+
+/// Writes the user guide as one page to `out`.
+fn guide(out: &Path) -> Outcome {
+    let title = format!("{} user guide", daw_ident::PRODUCT_NAME);
+    guide::render_file(&workspace_root().join("docs/user-guide.md"), out, &title)?;
+    println!("User guide written: {}", out.display());
+    Ok(())
+}
+
+fn installer() -> Outcome {
+    let root = workspace_root();
+    let made = package::installer(root, &root.join("dist"), &root.join("dist-installer"))?;
+    println!("Installer ready: {}", made.display());
+    Ok(())
+}
+
+fn appimage() -> Outcome {
+    let root = workspace_root();
+    let work = target_dir()?.join("appimage");
+    let made = package::appimage(
+        root,
+        &root.join("dist"),
+        &work,
+        &root.join("dist-installer"),
+    )?;
+    println!("AppImage ready: {}", made.display());
     Ok(())
 }
 

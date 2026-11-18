@@ -1,0 +1,98 @@
+; The Windows installer (decision 0022), for NSIS 3. `cargo xtask installer`
+; fills in the names (between at signs) from crates/daw-ident and the version,
+; then runs makensis. Installs for the current user: no administrator rights.
+
+Unicode true
+SetCompressor /SOLID lzma
+!include "MUI2.nsh"
+!include "FileFunc.nsh"
+
+!define PRODUCT "@PRODUCT@"
+!define EXE "@EXE@.exe"
+!define EXT "@EXT@"
+!define APPID "@APPID@"
+!define VERSION "@VERSION@"
+!define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPID}"
+!define CLASS "${APPID}.song"
+
+Name "${PRODUCT} ${VERSION}"
+OutFile "@OUT@"
+InstallDir "$LOCALAPPDATA\Programs\${PRODUCT}"
+InstallDirRegKey HKCU "Software\${APPID}" "InstallDir"
+RequestExecutionLevel user
+BrandingText "${PRODUCT} ${VERSION}"
+
+!define MUI_ICON "@DIST@/icons/icon.ico"
+!define MUI_UNICON "@DIST@/icons/icon.ico"
+!define MUI_ABORTWARNING
+!define MUI_FINISHPAGE_RUN "$INSTDIR\${EXE}"
+!define MUI_FINISHPAGE_RUN_TEXT "Start ${PRODUCT}"
+
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_LICENSE "@DIST@/LICENSE"
+!insertmacro MUI_PAGE_COMPONENTS
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+!insertmacro MUI_LANGUAGE "English"
+
+Section "${PRODUCT}" SecProgram
+  SectionIn RO
+  SetOutPath "$INSTDIR"
+  File "@DIST@/${EXE}"
+  File "@DIST@/LICENSE"
+  File "@DIST@/THIRD_PARTY.md"
+  File "@DIST@/THIRD_PARTY_NOTICES.txt"
+  File "@DIST@/user-guide.html"
+  File "@DIST@/icons/icon.ico"
+  WriteUninstaller "$INSTDIR\uninstall.exe"
+  CreateShortcut "$SMPROGRAMS\${PRODUCT}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\icon.ico"
+
+  ; Songs open in the program when double-clicked.
+  WriteRegStr HKCU "Software\Classes\.${EXT}" "" "${CLASS}"
+  WriteRegStr HKCU "Software\Classes\${CLASS}" "" "${PRODUCT} song"
+  WriteRegStr HKCU "Software\Classes\${CLASS}\DefaultIcon" "" "$INSTDIR\icon.ico"
+  WriteRegStr HKCU "Software\Classes\${CLASS}\shell\open\command" "" '"$INSTDIR\${EXE}" "%1"'
+
+  ; Settings > Apps lists it, with its uninstaller.
+  WriteRegStr HKCU "${UNINSTKEY}" "DisplayName" "${PRODUCT}"
+  WriteRegStr HKCU "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
+  WriteRegStr HKCU "${UNINSTKEY}" "DisplayIcon" "$INSTDIR\icon.ico"
+  WriteRegStr HKCU "${UNINSTKEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
+  WriteRegStr HKCU "${UNINSTKEY}" "QuietUninstallString" '"$INSTDIR\uninstall.exe" /S'
+  WriteRegStr HKCU "${UNINSTKEY}" "InstallLocation" "$INSTDIR"
+  WriteRegDWORD HKCU "${UNINSTKEY}" "NoModify" 1
+  WriteRegDWORD HKCU "${UNINSTKEY}" "NoRepair" 1
+  ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
+  IntFmt $0 "0x%08X" $0
+  WriteRegDWORD HKCU "${UNINSTKEY}" "EstimatedSize" "$0"
+  WriteRegStr HKCU "Software\${APPID}" "InstallDir" "$INSTDIR"
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+SectionEnd
+
+Section "Desktop shortcut" SecDesktop
+  CreateShortcut "$DESKTOP\${PRODUCT}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\icon.ico"
+SectionEnd
+
+; Removes the program, never the person's songs or settings.
+Section "Uninstall"
+  Delete "$INSTDIR\${EXE}"
+  Delete "$INSTDIR\LICENSE"
+  Delete "$INSTDIR\THIRD_PARTY.md"
+  Delete "$INSTDIR\THIRD_PARTY_NOTICES.txt"
+  Delete "$INSTDIR\user-guide.html"
+  Delete "$INSTDIR\icon.ico"
+  Delete "$INSTDIR\uninstall.exe"
+  RMDir "$INSTDIR"
+  Delete "$SMPROGRAMS\${PRODUCT}.lnk"
+  Delete "$DESKTOP\${PRODUCT}.lnk"
+  DeleteRegKey HKCU "Software\Classes\${CLASS}"
+  ReadRegStr $0 HKCU "Software\Classes\.${EXT}" ""
+  StrCmp $0 "${CLASS}" 0 +2
+    DeleteRegKey HKCU "Software\Classes\.${EXT}"
+  DeleteRegKey HKCU "${UNINSTKEY}"
+  DeleteRegKey HKCU "Software\${APPID}"
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+SectionEnd
