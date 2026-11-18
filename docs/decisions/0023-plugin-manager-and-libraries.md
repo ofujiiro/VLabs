@@ -70,10 +70,9 @@ them (Wine from the distribution, yabridge from its releases), with a
 
 **Bundling Wine and yabridge with VLabs** would make it work with nothing
 else installed, but Wine is large (hundreds of megabytes) and both are
-copyleft (Wine LGPL, yabridge GPL). They would run as separate programs,
-not linked with VLabs, but shipping them inside VLabs's own downloads is
-a licensing choice for the owner, with the dual-licensing question of
-decision 0005 in mind. *Not done until the owner decides.*
+copyleft (Wine LGPL, yabridge GPL). **Decided by the owner (November
+2026): not bundled.** VLabs uses the person's own Wine and yabridge, and
+the Plugins window says how to install them.
 
 ## VST2 plugins (`.dll`)
 
