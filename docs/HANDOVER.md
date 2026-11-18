@@ -7,8 +7,8 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
 - Phases 0–5, merged into `main` (phase 5 is pull request 2, CI green on
   Windows and Linux). The owner confirmed the phase 1 and 2 builds;
   phases 3, 4 and 5 await their hands-on check.
-- Phase 6, completing v1, on branch `phase-6-completing-v1` (pushed, pull
-  request to be opened by the owner): decisions 0019–0022; the synth
+- Phase 6, completing v1, merged into `main` (pull request 3): decisions
+  0019–0022; the synth
   (`daw-dsp::synth`, `daw-model::SynthSettings`, engine settings and
   automation, `daw-ui::synth_ui`, file format v6); MIDI files and
   DAWproject in and out, FLAC export, the Open/Import/Export menus;
@@ -25,9 +25,8 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   the export dialog and the recovery dialog in screenshots; a synth note
   recorded from the program measured 261.66 Hz for middle C.
 
-- Plugins and sound libraries (the owner's request after phase 6), on
-  branch `plugins-and-libraries`, which starts from phase 6 (pushed, pull
-  request to be opened by the owner after phase 6's): decision 0023;
+- Plugins and sound libraries (the owner's request after phase 6), merged
+  into `main` (pull request 4): decision 0023;
   `daw-plugin-host::install` (plugins put in place from files, folders and
   archives; yabridge), the Plugins window (`daw-ui::plugin_manager`) and
   `daw-app`'s plugin worker; AIFF reading; `daw-formats::library`
@@ -44,16 +43,25 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   on bar 2, an AIFF loop double-clicked landed at the play position, a
   SoundFont track played middle C at 262 Hz with piano overtones, and the
   Plugins window removed a plugin added to the program's folder.
+- The owner decided (November 2026) to keep VST2 (`.dll`) plugins out of
+  v1, as the brief says (decision 0023); a `.dll` added in the Plugins
+  window is explained.
+
+- After those merges, CI failed on Windows and fixes are on branch
+  `plugins-and-libraries` (pull request to be opened): two install tests
+  wrote Linux binary headers into their test plugins, which Windows then
+  set aside as made for Linux; and the installer script pieced file paths
+  together with `/`, which NSIS's `File` cannot follow on Windows (it
+  finds a file's folder by its last `\`), so makensis found nothing. The
+  script now gets each file's whole path. "Program builds" made the Linux
+  AppImage successfully.
 
 ## Waiting on the owner
 
-- Open the pull request for `phase-6-completing-v1` (CI then runs on
-  Windows), and start "Program builds" to get the installer and AppImage.
-  Then the one for `plugins-and-libraries`.
+- Open the pull request for `plugins-and-libraries` (the Windows fixes
+  and the VST2 note); before merging, run "Program builds" on that branch
+  to check that the Windows installer is made now.
 - The hands-on checks of phases 3 to 6 (ROADMAP.md, "things to try").
-- A decision on VST2 (`.dll`) plugins: the brief keeps them out of v1 for
-  licensing reasons (Steinberg no longer licenses VST2; clean-room headers
-  carry legal risk).
 - A decision on bundling Wine and yabridge with the Linux build (their
   licences, LGPL and GPL, and their size), versus setting up the person's
   own Wine and yabridge.
@@ -68,9 +76,11 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
 
 ## Not verified (say so if asked)
 
-- The installer and the AppImage on real machines: CI builds them; running
-  the downloaded build tools (appimagetool) was not permitted in the
-  development session, so neither was built locally.
+- The installer and the AppImage on real machines. CI made the AppImage;
+  the Windows installer's fix has not run on CI yet. Running the
+  downloaded build tools (appimagetool) or making a stand-in program for
+  makensis was not permitted in the development session, so neither was
+  built locally.
 - Opening our DAWproject files in Bitwig Studio, Studio One or Cubase.
 - Listening: the synth was measured, not heard.
 - Phase 6 on Windows by hand (CI runs every test on Windows).

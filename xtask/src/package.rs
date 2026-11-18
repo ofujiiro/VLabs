@@ -54,6 +54,28 @@ fn tool(variable: &str, name: &str) -> PathBuf {
     std::env::var_os(variable).map_or_else(|| PathBuf::from(name), PathBuf::from)
 }
 
+/// The files the installer packs, by the placeholder that names each in
+/// its script, and where the installer is written: whole paths, as the
+/// system writes them. NSIS's File command finds a file's folder by the
+/// path's last separator, which on Windows is only `\`; a path pieced
+/// together with `/` makes it look in the wrong folder.
+fn installer_paths(dist: &Path, out: &Path) -> Vec<(&'static str, String)> {
+    // `$` starts a variable in NSIS strings.
+    let whole = |path: PathBuf| path.display().to_string().replace('$', "$$");
+    vec![
+        (
+            "@PROGRAM@",
+            whole(dist.join(format!("{}.exe", daw_ident::EXECUTABLE_NAME))),
+        ),
+        ("@LICENSE_FILE@", whole(dist.join("LICENSE"))),
+        ("@THIRD_PARTY@", whole(dist.join("THIRD_PARTY.md"))),
+        ("@NOTICES@", whole(dist.join("THIRD_PARTY_NOTICES.txt"))),
+        ("@GUIDE@", whole(dist.join("user-guide.html"))),
+        ("@ICON@", whole(dist.join("icons").join("icon.ico"))),
+        ("@OUT@", whole(out.to_path_buf())),
+    ]
+}
+
 /// Makes the Windows installer from `dist` (which holds the Windows
 /// program): writes the NSIS script beside it and runs `makensis`
 /// (`MAKENSIS` names it if it is not on the PATH). Returns the installer.
@@ -71,10 +93,9 @@ pub fn installer(root: &Path, dist: &Path, out_dir: &Path) -> Result<PathBuf, St
         daw_ident::PRODUCT_NAME,
         env!("CARGO_PKG_VERSION")
     ));
-    let slashes = |p: &Path| p.display().to_string().replace('\\', "/");
     let script = fill(
         &read(&root.join("packaging/windows/installer.nsi.in"))?,
-        &[("@DIST@", slashes(dist)), ("@OUT@", slashes(&out))],
+        &installer_paths(dist, &out),
     );
     let script_path = out_dir.join("installer.nsi");
     write(&script_path, &script)?;
@@ -198,14 +219,41 @@ mod tests {
             ] {
                 assert!(!text.contains(name), "{template} spells out {name}");
             }
-            let filled = fill(
-                &text,
-                &[("@DIST@", "d".to_owned()), ("@OUT@", "o".to_owned())],
-            );
+            let filled = fill(&text, &installer_paths(Path::new("d"), Path::new("o")));
             assert!(
                 !filled.contains('@'),
                 "{template} has an unknown placeholder"
             );
+        }
+    }
+
+    #[test]
+    fn the_installer_packs_each_file_by_its_whole_path() {
+        // NSIS on Windows finds a File's folder by its last `\` only: a
+        // path pieced together in the script ("@DIST@/name") fails there.
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let text = read(&root.join("packaging/windows/installer.nsi.in")).unwrap();
+        let files: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("File "))
+            .collect();
+        assert_eq!(files.len(), 6, "{files:?}");
+        for file in &files {
+            let placeholder = file.trim_matches('"');
+            assert!(
+                placeholder.starts_with('@')
+                    && placeholder.ends_with('@')
+                    && placeholder[1..placeholder.len() - 1]
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c == '_'),
+                "File {file} is not one whole path"
+            );
+        }
+        let paths = installer_paths(&root.join("dist"), &root.join("dist-installer"));
+        let filled = fill(&text, &paths);
+        let other = if cfg!(windows) { '/' } else { '\\' };
+        for line in filled.lines().filter(|l| l.trim().starts_with("File ")) {
+            assert!(!line.contains(other), "{line} mixes separators");
         }
     }
 }

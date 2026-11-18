@@ -482,6 +482,14 @@ pub fn own_plugins(own: &Path) -> BTreeSet<PathBuf> {
 mod tests {
     use super::*;
 
+    /// The first bytes of a binary built for the system the tests run on
+    /// (a single-file plugin is told apart by them).
+    const NATIVE: &[u8] = if cfg!(windows) {
+        b"MZ\x90\x00"
+    } else {
+        b"\x7fELF"
+    };
+
     fn scratch(name: &str) -> PathBuf {
         let folder = std::env::temp_dir().join(format!("install-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&folder);
@@ -508,9 +516,9 @@ mod tests {
         } else {
             "x86_64-linux"
         };
-        let synth = bundle(&source, "Synth", native, b"\x7fELF");
+        let synth = bundle(&source, "Synth", native, NATIVE);
         let clap = source.join("Delay.clap");
-        fs::write(&clap, b"\x7fELF0000").unwrap();
+        fs::write(&clap, NATIVE).unwrap();
         let added = add(&[synth, clap], &own);
         assert_eq!(added.plugins.len(), 2, "{added:?}");
         assert!(own.join("vst3/Synth.vst3/Contents").is_dir());
@@ -550,17 +558,17 @@ mod tests {
                 options,
             )
             .unwrap();
-            std::io::Write::write_all(&mut zip, b"\x7fELF").unwrap();
+            std::io::Write::write_all(&mut zip, NATIVE).unwrap();
             zip.start_file("Pack/README.txt", options).unwrap();
             zip.start_file("__MACOSX/Pack/._Reverb.vst3", options)
                 .unwrap();
             zip.start_file("../escape.clap", options).unwrap();
-            std::io::Write::write_all(&mut zip, b"\x7fELF").unwrap();
+            std::io::Write::write_all(&mut zip, NATIVE).unwrap();
             zip.finish().unwrap();
         }
         let folder = source.join("Folder");
         fs::create_dir_all(folder.join("deep")).unwrap();
-        fs::write(folder.join("deep/Chorus.clap"), b"\x7fELF").unwrap();
+        fs::write(folder.join("deep/Chorus.clap"), NATIVE).unwrap();
         let dll = source.join("Old.dll");
         fs::write(&dll, b"MZ").unwrap();
         let installer = source.join("Setup.exe");
@@ -661,7 +669,7 @@ mod tests {
         fs::write(folder.join("sounds/kicks/kick.wav"), b"RIFF").unwrap();
         assert!(!holds_plugins(&folder.join("sounds")));
         fs::create_dir_all(folder.join("plugins/vendor")).unwrap();
-        fs::write(folder.join("plugins/vendor/Synth.clap"), b"\x7fELF").unwrap();
+        fs::write(folder.join("plugins/vendor/Synth.clap"), NATIVE).unwrap();
         assert!(holds_plugins(&folder.join("plugins")));
         assert!(holds_plugins(&folder));
         let _ = fs::remove_dir_all(folder);
