@@ -1,6 +1,8 @@
 ; The Windows installer (decision 0022), for NSIS 3. `cargo xtask installer`
-; fills in the names (between at signs) from crates/daw-ident and the version,
-; then runs makensis. Installs for the current user: no administrator rights.
+; fills in the names (between at signs) from crates/daw-ident, the version and
+; each packed file's whole path, then runs makensis. (NSIS finds a File's
+; folder by its last `\` on Windows, so paths are never pieced together
+; here.) Installs for the current user: no administrator rights.
 
 Unicode true
 SetCompressor /SOLID lzma
@@ -22,14 +24,14 @@ InstallDirRegKey HKCU "Software\${APPID}" "InstallDir"
 RequestExecutionLevel user
 BrandingText "${PRODUCT} ${VERSION}"
 
-!define MUI_ICON "@DIST@/icons/icon.ico"
-!define MUI_UNICON "@DIST@/icons/icon.ico"
+!define MUI_ICON "@ICON@"
+!define MUI_UNICON "@ICON@"
 !define MUI_ABORTWARNING
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT "Start ${PRODUCT}"
 
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE "@DIST@/LICENSE"
+!insertmacro MUI_PAGE_LICENSE "@LICENSE_FILE@"
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
@@ -41,12 +43,12 @@ BrandingText "${PRODUCT} ${VERSION}"
 Section "${PRODUCT}" SecProgram
   SectionIn RO
   SetOutPath "$INSTDIR"
-  File "@DIST@/${EXE}"
-  File "@DIST@/LICENSE"
-  File "@DIST@/THIRD_PARTY.md"
-  File "@DIST@/THIRD_PARTY_NOTICES.txt"
-  File "@DIST@/user-guide.html"
-  File "@DIST@/icons/icon.ico"
+  File "@PROGRAM@"
+  File "@LICENSE_FILE@"
+  File "@THIRD_PARTY@"
+  File "@NOTICES@"
+  File "@GUIDE@"
+  File "@ICON@"
   WriteUninstaller "$INSTDIR\uninstall.exe"
   CreateShortcut "$SMPROGRAMS\${PRODUCT}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\icon.ico"
 
