@@ -1775,6 +1775,7 @@ impl SongView {
             Instrument::SoundFont { .. } => text::FIRST_TRACK.to_owned(),
             Instrument::Plugin(setup) => text::plugin_track(&setup.plugin.name, missing),
             Instrument::Audio => text::AUDIO_TRACK_KIND.to_owned(),
+            Instrument::Synth(settings) => text::synth_description(settings),
         };
         child.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -1792,6 +1793,8 @@ impl SongView {
                     !session.is_plugin_missing(target) && session.has_plugin_window(target)
                 }) {
                     plugin_window_button(ui, session, target, 20.0);
+                } else if instrument.synth().is_some() {
+                    crate::synth_ui::window_button(ui, session, track, 20.0);
                 }
                 ui.with_layout(EguiLayout::left_to_right(Align::Center), |ui| {
                     let recording_here = session.live_take().is_some_and(|l| l.track == track)

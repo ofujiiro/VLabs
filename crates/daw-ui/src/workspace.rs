@@ -55,6 +55,14 @@ pub enum Intent {
     ChooseInstrument,
 }
 
+/// The instruments that come with the program, in the chooser.
+#[derive(Clone, Copy)]
+enum Included {
+    Piano,
+    Drums,
+    Synth,
+}
+
 /// What a rename dialog renames.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Renaming {
@@ -318,6 +326,7 @@ impl Workspace {
                 View::Pattern => self.roll.ui(ui, &mut self.session),
             });
         self.effects.ui(&ctx, &mut self.session);
+        crate::synth_ui::show_windows(&ctx, &mut self.session);
         self.show_dialog(&ctx);
 
         for intent in intents {
@@ -1099,8 +1108,9 @@ impl Workspace {
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     let included = [
-                        (text::ADD_PIANO, text::ADD_PIANO_HINT, false),
-                        (text::ADD_DRUMS, text::ADD_DRUMS_HINT, true),
+                        (text::ADD_PIANO, text::ADD_PIANO_HINT, Included::Piano),
+                        (text::ADD_DRUMS, text::ADD_DRUMS_HINT, Included::Drums),
+                        (text::ADD_SYNTH, text::ADD_SYNTH_HINT, Included::Synth),
                     ];
                     let included: Vec<_> = included
                         .into_iter()
@@ -1108,13 +1118,13 @@ impl Workspace {
                         .collect();
                     if !included.is_empty() {
                         ui.label(RichText::new(text::INCLUDED).weak());
-                        for (name, hint, drums) in included {
+                        for (name, hint, which) in included {
                             if choice_row(ui, name, hint) {
-                                if drums {
-                                    self.session.add_drum_track();
-                                } else {
-                                    self.session.add_piano_track();
-                                }
+                                match which {
+                                    Included::Piano => self.session.add_piano_track(),
+                                    Included::Drums => self.session.add_drum_track(),
+                                    Included::Synth => self.session.add_synth_track(),
+                                };
                                 close = true;
                             }
                         }

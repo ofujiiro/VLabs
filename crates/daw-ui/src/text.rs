@@ -667,6 +667,221 @@ pub fn problem(problem: &daw_engine::Problem) -> String {
     }
 }
 
+// The synth (decision 0019).
+pub const ADD_SYNTH: &str = "Synth";
+pub const ADD_SYNTH_HINT: &str =
+    "Add a track with the included synth: shape your own sounds, from basses to pads";
+/// A new synth track's name.
+pub const SYNTH_TRACK: &str = "Synth";
+pub const OPEN_SYNTH: &str = "Open the synth";
+pub const CLOSE_SYNTH: &str = "Close the synth";
+pub const EDIT_ADD_SYNTH: &str = "Add a synth track";
+pub const EDIT_CHANGE_SYNTH: &str = "Change the synth";
+pub const EDIT_SYNTH_PRESET: &str = "Choose a synth preset";
+pub const SYNTH_PRESET: &str = "Preset";
+pub const SYNTH_PRESET_HINT: &str = "A starting point: every control is set for a kind of sound";
+pub const SYNTH_CUSTOM: &str = "Custom";
+pub const OSCILLATORS: &str = "Oscillators";
+pub const OSCILLATOR_1: &str = "Oscillator 1";
+pub const OSCILLATOR_2: &str = "Oscillator 2";
+pub const WAVE: &str = "Wave";
+pub const OCTAVE: &str = "Octave";
+pub const SEMITONES: &str = "Semitones";
+pub const FINE_TUNE: &str = "Fine";
+pub const FINE_TUNE_HINT: &str = "Detune a little: two oscillators slightly apart sound wider";
+pub const NOISE: &str = "Noise";
+pub const PULSE_WIDTH: &str = "Pulse width";
+pub const PULSE_WIDTH_HINT: &str = "Changes the colour of the square waves";
+pub const FILTER: &str = "Filter";
+pub const FILTER_KIND: &str = "Kind";
+pub const CUTOFF: &str = "Cutoff";
+pub const CUTOFF_HINT: &str = "Lower makes the sound darker";
+pub const RESONANCE: &str = "Resonance";
+pub const RESONANCE_HINT: &str = "Makes the filter ring at the cutoff";
+pub const ENVELOPE_AMOUNT: &str = "Envelope";
+pub const ENVELOPE_AMOUNT_HINT: &str =
+    "How far the filter envelope opens the filter as a note plays (below zero, it closes it)";
+pub const KEY_TRACKING: &str = "Follow keys";
+pub const KEY_TRACKING_HINT: &str = "Higher notes open the filter further";
+pub const FILTER_CURVE: &str = "The filter's response";
+pub const ENVELOPES: &str = "Envelopes";
+pub const VOLUME_ENVELOPE: &str = "Volume";
+pub const FILTER_ENVELOPE: &str = "Filter";
+pub const DECAY: &str = "Decay";
+pub const SUSTAIN: &str = "Sustain";
+pub const ENVELOPE_SHAPE: &str = "The envelope's shape";
+pub const MOVEMENT: &str = "Movement";
+pub const LFO_SHAPE: &str = "Shape";
+pub const LFO_RATE: &str = "Speed";
+pub const VIBRATO: &str = "Vibrato";
+pub const VIBRATO_HINT: &str = "Wavers the pitch";
+pub const WOBBLE: &str = "Wobble";
+pub const WOBBLE_HINT: &str = "Moves the filter up and down";
+pub const TREMOLO: &str = "Tremolo";
+pub const TREMOLO_HINT: &str = "Wavers the volume";
+pub const PLAYING: &str = "Playing";
+pub const MONO: &str = "One note at a time";
+pub const MONO_HINT: &str = "Like a solo instrument: a new note takes over, and can glide";
+pub const SYNTH_GLIDE: &str = "Glide";
+pub const SYNTH_GLIDE_HINT: &str = "Notes slide into each other (one note at a time only)";
+pub const VELOCITY_AMOUNT: &str = "Velocity";
+pub const VELOCITY_AMOUNT_HINT: &str = "How much harder playing is louder and brighter";
+
+/// The synth window's title: "Synth · Bass line".
+pub fn synth_title(track: &str) -> String {
+    format!("{SYNTH_TRACK} · {track}")
+}
+
+/// What a synth track plays, under its name: "Synth · Warm pad".
+pub fn synth_description(settings: &daw_model::SynthSettings) -> String {
+    match daw_model::SynthPreset::matching(settings) {
+        Some(preset) => format!("{SYNTH_TRACK} · {}", synth_preset_name(preset)),
+        None => format!("{SYNTH_TRACK} · {SYNTH_CUSTOM}"),
+    }
+}
+
+/// A synth preset's name.
+pub fn synth_preset_name(preset: daw_model::SynthPreset) -> &'static str {
+    use daw_model::SynthPreset as P;
+    match preset {
+        P::SoftKeys => "Soft keys",
+        P::WarmPad => "Warm pad",
+        P::Bass => "Bass",
+        P::SubBass => "Sub bass",
+        P::Lead => "Lead",
+        P::Pluck => "Pluck",
+        P::Brass => "Brass",
+        P::Plain => "Plain",
+    }
+}
+
+/// An oscillator wave's name.
+pub fn synth_wave_name(wave: daw_model::SynthWave) -> &'static str {
+    use daw_model::SynthWave as W;
+    match wave {
+        W::Sine => "Sine",
+        W::Triangle => "Triangle",
+        W::Saw => "Saw",
+        W::Square => "Square",
+    }
+}
+
+/// A filter kind's name.
+pub fn synth_filter_name(filter: daw_model::SynthFilter) -> &'static str {
+    use daw_model::SynthFilter as F;
+    match filter {
+        F::LowPass24 => "Low-pass, steep",
+        F::LowPass12 => "Low-pass, gentle",
+        F::HighPass => "High-pass",
+        F::BandPass => "Band-pass",
+    }
+}
+
+/// An LFO shape's name.
+pub fn lfo_shape_name(shape: daw_model::LfoShape) -> &'static str {
+    use daw_model::LfoShape as S;
+    match shape {
+        S::Sine => "Smooth",
+        S::Triangle => "Triangle",
+        S::Square => "Square",
+        S::Saw => "Saw",
+        S::Random => "Random",
+    }
+}
+
+/// The name of a synth setting that can change over the song (in the
+/// order of [`daw_model::SynthSettings::params`]).
+pub fn synth_param_name(index: usize) -> &'static str {
+    const NAMES: [&str; 25] = [
+        CUTOFF,
+        RESONANCE,
+        "Filter envelope",
+        KEY_TRACKING,
+        "Oscillator 1 level",
+        "Oscillator 1 fine",
+        "Oscillator 2 level",
+        "Oscillator 2 fine",
+        NOISE,
+        PULSE_WIDTH,
+        ATTACK,
+        DECAY,
+        SUSTAIN,
+        RELEASE,
+        "Filter attack",
+        "Filter decay",
+        "Filter sustain",
+        "Filter release",
+        "LFO speed",
+        VIBRATO,
+        WOBBLE,
+        TREMOLO,
+        SYNTH_GLIDE,
+        VELOCITY_AMOUNT,
+        VOLUME,
+    ];
+    NAMES.get(index).copied().unwrap_or("")
+}
+
+/// A synth setting as people read it ("1.2 kHz", "350 ms", "+2.0 oct").
+pub fn synth_param_value(index: usize, value: f32) -> String {
+    match index {
+        0 => hz(value),
+        2 | 20 => octaves(value),
+        5 | 7 | 19 => cents(value),
+        10 | 11 | 13 | 14 | 15 | 17 | 22 => time(value),
+        18 => rate(value),
+        24 => db(value),
+        _ => percent(value),
+    }
+}
+
+/// A time: "4.0 ms", "350 ms", "1.25 s".
+pub fn time(seconds_value: f32) -> String {
+    if seconds_value < 1.0 {
+        ms(seconds_value * 1000.0)
+    } else {
+        seconds(seconds_value)
+    }
+}
+
+/// Octaves: "+2.0 oct".
+pub fn octaves(value: f32) -> String {
+    if value > 0.04 {
+        format!("+{value:.1} oct")
+    } else {
+        format!("{value:.1} oct")
+    }
+}
+
+/// Cents: "+7 ct".
+pub fn cents(value: f32) -> String {
+    #[allow(clippy::cast_possible_truncation, reason = "a display value")]
+    let rounded = value.round() as i32;
+    if rounded > 0 {
+        format!("+{rounded} ct")
+    } else {
+        format!("{rounded} ct")
+    }
+}
+
+/// A speed: "5.0 Hz", "0.25 Hz".
+pub fn rate(value: f32) -> String {
+    if value < 1.0 {
+        format!("{value:.2} Hz")
+    } else {
+        format!("{value:.1} Hz")
+    }
+}
+
+/// A whole number of steps with its sign: "+1", "0", "-2".
+pub fn signed(value: i8) -> String {
+    if value > 0 {
+        format!("+{value}")
+    } else {
+        value.to_string()
+    }
+}
+
 // Plugins.
 pub const ADD_INSTRUMENT: &str = "Instrument…";
 pub const ADD_INSTRUMENT_HINT: &str =

@@ -15,6 +15,7 @@ mod conductor;
 mod mixing;
 mod plugins;
 mod recorder;
+mod synth;
 mod theory;
 
 pub use audio::{LiveTake, SoundState};
@@ -264,6 +265,8 @@ pub struct Session {
     input_until: Option<Instant>,
     /// The input meter's level, falling back slowly.
     input_meter: f32,
+    /// The synth tracks whose windows are open.
+    synth_windows: Vec<TrackId>,
 }
 
 impl Session {
@@ -334,6 +337,7 @@ impl Session {
             finishing: Vec::new(),
             input_until: None,
             input_meter: 0.0,
+            synth_windows: Vec::new(),
         };
         session.selection_revision = session.doc.revision();
         session.load_song_audio();
@@ -1437,6 +1441,7 @@ impl Session {
         self.audio_focus = None;
         self.audio_take = None;
         self.finishing.clear();
+        self.synth_windows.clear();
         // The old song's sound goes; the new song's is read.
         let wanted: HashSet<String> = self
             .project()

@@ -271,6 +271,17 @@ impl Session {
                 }
             }
         }
+        if t.instrument.synth().is_some() {
+            for index in 0..daw_model::SynthSettings::params().len() {
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "a couple of dozen settings"
+                )]
+                targets.push(AutomationTarget::Instrument {
+                    param: index as u32,
+                });
+            }
+        }
         let last = self.last_moved.and_then(|(target, param)| match target {
             PluginTarget::Instrument(id) if id == track => {
                 Some(AutomationTarget::Instrument { param })
@@ -413,6 +424,9 @@ impl Session {
                 };
                 text::lane_name(&text::effect_name(&kind), &setting)
             }
+            AutomationTarget::Instrument { param } if self.synth_settings(track).is_some() => {
+                text::lane_name(text::SYNTH_TRACK, text::synth_param_name(param as usize))
+            }
             AutomationTarget::Instrument { param } => {
                 let target = PluginTarget::Instrument(track);
                 let setting = self.param_name(target, param);
@@ -449,6 +463,14 @@ impl Session {
                     }
                 }
             }
+            AutomationTarget::Instrument { param } if self.synth_settings(track).is_some() => {
+                let index = param as usize;
+                daw_model::SynthSettings::params()
+                    .get(index)
+                    .map_or_else(String::new, |spec| {
+                        text::synth_param_value(index, spec.value(value))
+                    })
+            }
             AutomationTarget::Instrument { param } => self
                 .engine
                 .plugin_param_text(PluginTarget::Instrument(track), param, f64::from(value))
@@ -475,10 +497,13 @@ impl Session {
                     None => 0.5,
                 }
             }
-            AutomationTarget::Instrument { param } => self
-                .engine
-                .plugin_param_value(PluginTarget::Instrument(track), param)
-                .map_or(0.5, |v| v as f32),
+            AutomationTarget::Instrument { param } => match t.instrument.synth() {
+                Some(settings) => settings.param(param as usize).unwrap_or(0.5),
+                None => self
+                    .engine
+                    .plugin_param_value(PluginTarget::Instrument(track), param)
+                    .map_or(0.5, |v| v as f32),
+            },
         }
     }
 

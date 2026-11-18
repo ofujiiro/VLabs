@@ -265,7 +265,10 @@ impl Session {
             .track(track)
             .and_then(|t| match &t.instrument {
                 Instrument::Drums { kit, .. } => Some(kit.as_str()),
-                Instrument::SoundFont { .. } | Instrument::Plugin(_) | Instrument::Audio => None,
+                Instrument::SoundFont { .. }
+                | Instrument::Plugin(_)
+                | Instrument::Audio
+                | Instrument::Synth(_) => None,
             });
         if current.is_none_or(|k| k == kit) {
             return;
@@ -283,7 +286,10 @@ impl Session {
     pub fn kit(&self, track: TrackId) -> Option<&str> {
         match &self.project().track(track)?.instrument {
             Instrument::Drums { kit, .. } => Some(kit),
-            Instrument::SoundFont { .. } | Instrument::Plugin(_) | Instrument::Audio => None,
+            Instrument::SoundFont { .. }
+            | Instrument::Plugin(_)
+            | Instrument::Audio
+            | Instrument::Synth(_) => None,
         }
     }
 

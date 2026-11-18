@@ -1729,3 +1729,124 @@ fn panels_and_menus_take_clicks_that_last_several_frames() {
         "the clip menu's entry worked"
     );
 }
+
+#[test]
+fn the_synth_is_chosen_from_the_list_and_shaped_in_its_own_window() {
+    let mut f = new_song();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    f.harness
+        .get_by_label(&format!("+ {}", text::ADD_INSTRUMENT))
+        .click();
+    f.harness.run_steps(3);
+    f.harness
+        .get_by_label_contains(text::ADD_SYNTH_HINT)
+        .click();
+    f.harness.run_steps(3);
+    let synth = f.session().project().tracks.last().unwrap().clone();
+    assert_eq!(synth.name, text::SYNTH_TRACK);
+    assert_eq!(
+        synth.instrument.synth(),
+        Some(&daw_model::SynthPreset::SoftKeys.settings()),
+        "a new synth starts with Soft keys"
+    );
+    f.harness.get_by_label_contains("Synth · Soft keys");
+
+    // Its window opens from the track header.
+    f.harness.get_by_label(text::OPEN_SYNTH).click();
+    f.harness.run_steps(4);
+    f.harness
+        .get_by_label(&text::synth_title(text::SYNTH_TRACK));
+    f.harness.get_by_label(text::FILTER_CURVE);
+    assert!(f.session().is_synth_window_open(synth.id));
+
+    // A preset sets everything at once: one undo step.
+    f.harness.get_by_label(text::SYNTH_PRESET).click();
+    f.harness.run_steps(3);
+    f.harness.get_by_label("Bass").click();
+    f.harness.run_steps(3);
+    assert_eq!(
+        f.session().synth_settings(synth.id),
+        Some(daw_model::SynthPreset::Bass.settings())
+    );
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_SYNTH_PRESET)
+    );
+
+    // Dragging the cutoff slider changes it as one undo step.
+    let before = f.session().synth_settings(synth.id).unwrap();
+    let slider = f
+        .harness
+        .get_by_role_and_label(egui::accesskit::Role::Slider, text::CUTOFF)
+        .rect();
+    let depth = f.session().document().undo_depth();
+    f.drag(
+        slider.left_center() + vec2(10.0, 0.0),
+        slider.left_center() + vec2(70.0, 0.0),
+        Modifiers::NONE,
+    );
+    let after = f.session().synth_settings(synth.id).unwrap();
+    assert!(after.cutoff_hz > before.cutoff_hz, "the filter opened");
+    assert_eq!(f.session().document().undo_depth(), depth + 1, "one step");
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_CHANGE_SYNTH)
+    );
+    f.key(Key::Z, Key::Z, true, Modifiers::COMMAND);
+    f.key(Key::Z, Key::Z, false, Modifiers::COMMAND);
+    assert_eq!(f.session().synth_settings(synth.id), Some(before));
+
+    // The computer keyboard plays the synth while its window is open.
+    f.harness.run_steps(2);
+    f.key(Key::Z, Key::Z, true, Modifiers::NONE);
+    f.tick();
+    let heard = listen(&mut f, 16);
+    f.key(Key::Z, Key::Z, false, Modifiers::NONE);
+    assert!(
+        heard.iter().fold(0.0_f32, |m, s| m.max(s.abs())) > 0.01,
+        "a note is heard"
+    );
+
+    // The same button closes the window (it opened clear of it), and so
+    // does the window's own close button.
+    f.harness.get_by_label(text::CLOSE_SYNTH).click();
+    f.harness.run_steps(3);
+    assert!(!f.session().is_synth_window_open(synth.id));
+    assert!(
+        f.harness
+            .query_by_label(&text::synth_title(text::SYNTH_TRACK))
+            .is_none()
+    );
+    f.harness.get_by_label(text::OPEN_SYNTH).click();
+    f.harness.run_steps(4);
+    f.harness.get_by_label("Close window").click();
+    f.harness.run_steps(3);
+    assert!(!f.session().is_synth_window_open(synth.id));
+}
+
+#[test]
+fn a_synth_setting_changes_over_the_song_with_a_lane() {
+    let mut f = new_song();
+    let synth = f.workspace_mut().session_mut().add_synth_track();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(3);
+    // The synth's Automation button (third track) offers its settings.
+    f.harness
+        .get_all_by_label(text::AUTOMATION)
+        .nth(2)
+        .unwrap()
+        .click();
+    f.harness.run_steps(3);
+    let cutoff = text::lane_name(text::SYNTH_TRACK, text::CUTOFF);
+    f.harness.get_by_label(&cutoff).click();
+    f.harness.run_steps(3);
+    let target = AutomationTarget::Instrument { param: 0 };
+    let lane = f.session().project().lane(synth, target).unwrap().clone();
+    let settings = f.session().synth_settings(synth).unwrap();
+    assert_eq!(lane.points.len(), 1);
+    assert!(
+        (lane.points[0].value - settings.param(0).unwrap()).abs() < 1e-6,
+        "it starts at the present cutoff"
+    );
+}

@@ -57,13 +57,16 @@ in place.
 
 **A. A window of its own, laid out as the sound flows (chosen).** The
 synth's window opens from the same window button as a plugin's (track
-header, location line, mixer strip): presets on top, then columns from
-left to right in signal order: *Oscillators*, *Filter* (with its response
-drawn), *Envelopes* (each drawn as its shape), *Movement and playing*. It
-is a window inside VLabs, like the effect windows, so it can stay open
-while the computer keyboard plays the track: shaping a sound is playing
-it. Every control has the usual slider with its value in words ("1.2
-kHz", "350 ms"); a drag is one undo step.
+header, location line, mixer strip): presets on top, then three columns
+from left to right in signal order: *Oscillators*; the *Filter* (with its
+response drawn) and the *Movement* that sways it; the *Envelopes* (each
+drawn as its shape) and how notes *play*. Three columns of compact rows
+(about 810 by 580 points) fit the program's smallest window; it opens to
+the right of the song view's track headers, so the button that opened it
+stays in reach. It is a window inside VLabs, like the effect windows, so
+it can stay open while the computer keyboard plays the track: shaping a
+sound is playing it. Every control has the usual slider with its value in
+words ("1.2 kHz", "350 ms"); a drag is one undo step.
 
 **B. A drawer at the bottom,** in the keyboard's place, like the mixer.
 *Rejected:* the keyboard is where a sound is auditioned, so the two would
