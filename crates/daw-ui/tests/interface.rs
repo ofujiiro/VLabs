@@ -1301,3 +1301,77 @@ fn audio_clips_are_trimmed_faded_and_split_with_the_mouse() {
         "the new part is selected"
     );
 }
+
+/// Runs the audio thread for one frame's worth of sound and returns it
+/// (left channel).
+fn listen(f: &mut Fixture, blocks: usize) -> Vec<f32> {
+    let mut buffer = vec![0.0_f32; 512];
+    let mut heard = Vec::new();
+    for _ in 0..blocks {
+        f.processor.process(&mut buffer, 2);
+        heard.extend(buffer.iter().step_by(2));
+    }
+    heard
+}
+
+/// How many times a sound starts in `samples`: blocks of 256 frames whose
+/// loudest sample jumps well above the block before.
+fn starts(samples: &[f32]) -> usize {
+    let peaks: Vec<f32> = std::iter::once(0.0)
+        .chain(
+            samples
+                .chunks(256)
+                .map(|c| c.iter().fold(0.0_f32, |m, s| m.max(s.abs()))),
+        )
+        .collect();
+    peaks
+        .windows(2)
+        .filter(|w| w[1] > 0.05 && w[1] > w[0] * 2.0)
+        .count()
+}
+
+#[test]
+fn clicking_a_sound_name_plays_it_once() {
+    let mut f = new_song();
+    let name = f
+        .harness
+        .get_by_label(text::pad_name(PadSound::Snare))
+        .rect()
+        .center();
+    let mut heard = Vec::new();
+    f.harness.hover_at(name);
+    f.harness.step();
+    f.press(name, PointerButton::Primary, true, Modifiers::NONE);
+    for _ in 0..6 {
+        f.harness.step();
+        heard.extend(listen(&mut f, 8));
+    }
+    f.press(name, PointerButton::Primary, false, Modifiers::NONE);
+    for _ in 0..12 {
+        f.harness.step();
+        heard.extend(listen(&mut f, 8));
+    }
+    assert_eq!(starts(&heard), 1, "the snare starts once, and only once");
+    assert_eq!(f.session().pointer_note(), None, "released");
+}
+
+#[test]
+fn a_quick_click_on_a_sound_name_plays_it_too() {
+    let mut f = new_song();
+    let name = f
+        .harness
+        .get_by_label(text::pad_name(PadSound::Kick))
+        .rect()
+        .center();
+    f.harness.hover_at(name);
+    f.harness.step();
+    // Pressed and released between two frames (a tap on a touchpad).
+    f.press(name, PointerButton::Primary, true, Modifiers::NONE);
+    f.press(name, PointerButton::Primary, false, Modifiers::NONE);
+    let mut heard = Vec::new();
+    for _ in 0..12 {
+        f.harness.step();
+        heard.extend(listen(&mut f, 8));
+    }
+    assert_eq!(starts(&heard), 1, "the kick plays once");
+}
