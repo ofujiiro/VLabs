@@ -164,6 +164,13 @@ These come from the brief; tests and CI enforce most of them.
   `mouseup 1` instead (middle C is the key labelled Q in the lower half).
   The window's title is "<song> — <product>", so find it with
   `xdotool search --name <product>`, not `^<product>`.
+- **Dragging in the real program** (the library onto the song, say):
+  `xdotool mousemove X Y mousedown 1`, then several `mousemove` steps with
+  short pauses, then `mouseup 1`; one jump does not start a drag.
+- **Crash dumps:** the allocation check aborts a child process on purpose;
+  where the system writes core files into the current folder, they land in
+  `crates/daw-rt/`. They are ignored by git; turn core files off in the
+  test container (`ulimit -c 0`).
 - **Driving the program:** `xdotool windowfocus` can fail on a window that
   has just appeared; click the program's own buttons (Play, Stop) rather
   than relying on keys when focus is uncertain, or send keys to the window

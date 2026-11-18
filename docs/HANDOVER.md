@@ -25,10 +25,31 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   the export dialog and the recovery dialog in screenshots; a synth note
   recorded from the program measured 261.66 Hz for middle C.
 
+- Plugins and sound libraries (the owner's request after phase 6), on
+  branch `plugins-and-libraries`, which starts from phase 6 (pushed, pull
+  request to be opened by the owner after phase 6's): decision 0023;
+  `daw-plugin-host::install` (plugins put in place from files, folders and
+  archives; yabridge), the Plugins window (`daw-ui::plugin_manager`) and
+  `daw-app`'s plugin worker; AIFF reading; `daw-formats::library`
+  (listing folders), the engine's preview voice, the library drawer
+  (`daw-ui::library_panel`, F6); SoundFont file tracks with their presets
+  in the track menu. Two crash dumps a test had left in the tree in phase
+  5 were removed (they held only the build container's environment) and
+  core files are ignored.
+- Checked for that branch: `cargo xtask ci`, the reference plugins' tests
+  (with a new one: Dexed added from its folder is found by the real
+  search, and removed), and the program on the virtual screen: the
+  library listed a folder, a click played the kick (recorded: exactly its
+  0.6 s, at the expected level), a loop dragged from the library landed
+  on bar 2, an AIFF loop double-clicked landed at the play position, a
+  SoundFont track played middle C at 262 Hz with piano overtones, and the
+  Plugins window removed a plugin added to the program's folder.
+
 ## Waiting on the owner
 
 - Open the pull request for `phase-6-completing-v1` (CI then runs on
   Windows), and start "Program builds" to get the installer and AppImage.
+  Then the one for `plugins-and-libraries`.
 - The hands-on checks of phases 3 to 6 (ROADMAP.md, "things to try").
 - A decision on VST2 (`.dll`) plugins: the brief keeps them out of v1 for
   licensing reasons (Steinberg no longer licenses VST2; clean-room headers
@@ -37,13 +58,13 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   licences, LGPL and GPL, and their size), versus setting up the person's
   own Wine and yabridge.
 
-## Next: plugins and sound libraries (the owner's request)
+- Whether ".mse", in the owner's list of file kinds, meant `.msi`
+  (installers, which the Plugins window takes) or something else.
 
-A plugin manager inside the program (add a plugin file, folder or archive;
-see every plugin and its state; remove; extra folders), Windows plugins on
-Linux through Wine and yabridge, sound libraries (folders of samples to
-browse, preview and drag in), SoundFont and SFZ instruments. See
-ROADMAP.md.
+## Next
+
+- SFZ instruments (a sampler of their own), then the singing voices
+  (ROADMAP.md).
 
 ## Not verified (say so if asked)
 
@@ -53,6 +74,10 @@ ROADMAP.md.
 - Opening our DAWproject files in Bitwig Studio, Studio One or Cubase.
 - Listening: the synth was measured, not heard.
 - Phase 6 on Windows by hand (CI runs every test on Windows).
+- Plugins and libraries: Windows plugins through a real Wine and yabridge
+  (no Wine on the test computer; yabridge is tested through a stand-in);
+  installers on Windows and through Wine; the Plugins window's file and
+  folder dialogs, and dropping files from a real file manager.
 - From earlier phases: recording from a real microphone, the import file
   dialog, dragging files from a real file manager, phase 4 on Windows by
   hand, closing a plugin window with its own close button on a real
@@ -68,8 +93,10 @@ ROADMAP.md.
 - Audio: no time-stretching, no input monitoring, no by-hand latency
   adjustment, no takes per loop pass, no multi-clip selection or clip copy
   and paste, sound kept in memory, recordings stored as WAV.
-- Earlier: no extra plugin folders setting (the plugin manager adds it);
-  automation drawn, not recorded; no master-bus lanes; no instrument swap;
+- Plugins and libraries: no VST2, no SFZ, no preview of MIDI files or
+  SoundFonts, no waveforms in the library, large SoundFonts load on the
+  interface thread.
+- Earlier: automation drawn, not recorded; no master-bus lanes; no instrument swap;
   plugins in-process; plugin latency not compensated.
 - On Windows, VST3 class ids are kept in the order the plugin reports them
   (COM order); DAWproject converts them at its edge, but a song saved on

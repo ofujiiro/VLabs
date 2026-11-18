@@ -485,18 +485,71 @@ microphone back to you, and speakers would be recorded too.
   synth's pitch, envelopes, filter and levels were measured), phase 6 on
   Windows by hand (CI runs every test on Windows).
 
-## Next — Plugins and sound libraries (the owner's request, November 2026)
+## Plugins and sound libraries (the owner's request, November 2026)
 
-Asked for after phase 6, being built next:
+Built after phase 6 (decision 0023), on its own branch.
 
-- A plugin manager in the program: add a plugin by choosing its file,
-  folder or downloaded archive (VST3, CLAP), see every plugin with its
-  state, remove, add folders to search.
-- Windows plugins on Linux, set up by VLabs through Wine and yabridge.
-- Sound libraries: folders of samples to browse, search, preview and drag
-  into songs; SoundFont and SFZ instruments.
-- VST2 plugins (`.dll`) need the owner's decision first (the brief keeps
-  VST2 out of v1 for licensing reasons).
+- [x] A Plugins window (menu, and the instrument chooser): every plugin
+      found, the files that cannot be used and why, a search field.
+- [x] Add plugins by dropping a `.vst3`, `.clap`, a folder or a downloaded
+      `.zip` on the window, or with the window's buttons: copied into the
+      program's own plugin folder, always searched.
+- [x] Remove plugins added this way; add and remove folders to search.
+- [x] Installers: opened on Windows; run through Wine on Linux.
+- [x] Windows plugins on Linux: set up through yabridge automatically when
+      Wine and yabridge are installed; the window shows how to install them.
+- [x] VST2 plugins (`.dll`) and plugins for other systems are recognised
+      and explained.
+- [x] A sound library in place of the keyboard (F6): folders of sounds, MIDI
+      files and SoundFonts, however large; browse, search, click to hear,
+      drag onto the song or double-click to add.
+- [x] AIFF files read (import, library).
+- [x] SoundFont (`.sf2`) instrument tracks, with their presets in the track
+      menu.
+- [ ] SFZ instruments: planned next.
+- [ ] VST2 plugins: waiting for the owner's decision (licensing).
+
+### Things to try
+
+1. Open the menu, choose **Plugins…**: your plugins are listed, with who
+   made them; files that cannot be used are explained.
+2. Download a free plugin (for instance Surge XT or Dexed) and drop the
+   `.zip` itself on the VLabs window. The Plugins window says "Added: …",
+   and **+ Instrument…** offers it. Click **Remove** next to it: it goes.
+3. Drop a `.dll` (a VST2 plugin) or a Mac plugin: VLabs says why it cannot
+   use it and what to look for instead.
+4. On Linux with a Windows `.vst3`: install Wine and yabridge as the
+   Plugins window says, click **Check again**, then drop the Windows
+   plugin. It should appear as "Set up with yabridge" and be playable.
+5. Press **F6**, click **Add a folder…** and choose a folder of samples
+   (thousands of files is fine). Click sounds to hear them, type in
+   **Search**, drag a sound onto the song, double-click another.
+6. Drop a whole folder of samples on the window: it joins the library.
+7. Drop a SoundFont (`.sf2`) on the window, or choose **SoundFont…** in
+   **+ Instrument…**: a track plays it; pick its sounds in the track menu
+   (the track's name at the top left of its pattern).
+8. The pattern menus from phase 6: right-click an empty spot of a track to
+   place any of its patterns by name; right-click a clip, **Play another
+   pattern**, to swap it.
+
+### Known gaps in this build
+
+- **Windows plugins on Linux were not run end to end here**: the test
+  computer has no Wine. The yabridge calls are tested with a stand-in for
+  yabridge, and the Windows plugin files are set aside correctly; the rest
+  needs a try on a real Linux desktop (item 4 above).
+- **Installers were not run here**: opening one on Windows and running one
+  through Wine on Linux are untested. A plugin's installer may also put it
+  somewhere VLabs does not look; **Search another folder…** covers that.
+- **VST2 plugins** are not supported (they need the owner's decision), and
+  **SFZ instruments** are not there yet.
+- The library cannot play MIDI files or SoundFonts to preview them (drag or
+  double-click them in), shows no waveforms, and does not play sounds
+  larger than 256 MB (drag those in).
+- A large SoundFont (hundreds of megabytes) pauses the window for a moment
+  when it is added or when a song using it opens.
+- Bundling Wine and yabridge with the Linux version (so nothing else needs
+  installing) is a licensing and size decision for the owner.
 
 ## After v1 — Singing voices (the owner's request, November 2026)
 
