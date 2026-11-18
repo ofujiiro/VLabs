@@ -20,9 +20,9 @@ memory. "Planned" means checked and chosen, but not yet in `Cargo.toml`.
 | `windows-sys` | 0.61.2 | MIT OR Apache-2.0 | 2026-11-16 | Win32 windows for plugin editors on Windows. |
 | `libloading` | 0.9.1 | ISC | 2026-11-16 | Loading VST3 plugin libraries. |
 | `egui`, `eframe` | 0.37.0 | MIT OR Apache-2.0 | 2026-11-16 | The interface, as decided in the brief (released October 2026). Used with the wgpu renderer (wgpu 30), AccessKit for accessibility, X11 and Wayland; without the default fonts, the system fonts, or (on Windows) the clipboard feature. |
-| `rustysynth` | 1.3.8 | MIT | 2026-11-16 | SoundFont playback for the bundled piano. |
+| `rustysynth` | 1.3.8 | MIT | 2026-11-16 | SoundFont playback for the bundled piano, and for SoundFont files the person adds (decision 0023). |
 | `serde`, `serde_json` | 1.0.229, 1.0.154 | MIT OR Apache-2.0 | 2026-11-16 | The human-readable project description and the settings file. |
-| `zip` | 9.6.0 | MIT | 2026-11-16 | The single-file project container (deflate only). |
+| `zip` | 9.6.0 | MIT | 2026-11-16 | The single-file project container (deflate only); also opens downloaded plugin archives (decision 0023). |
 | `midir` | 0.11.1 | MIT | 2026-11-16 | MIDI keyboard input with hot-plugging. |
 | `rfd` | 0.18.0 | MIT | 2026-11-16 | The desktop's own open and save dialogs: Windows' file dialog; on Linux the XDG portal over D-Bus (loaded at run time) or zenity. Default features. |
 | `claxon` | 0.4.3 | Apache-2.0 | 2026-11-16 | FLAC decoding: the bundled drum kit is stored as FLAC and decoded when loaded; also the piano and drum build tools, and importing FLAC files (phase 4). Stable for years, no open safety issues. |

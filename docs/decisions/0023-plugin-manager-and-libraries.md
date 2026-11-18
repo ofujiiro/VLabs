@@ -28,11 +28,22 @@ why; a search field narrows the list. Its buttons:
   runs again.
 - **Remove** takes a plugin the program copied out of its folder (plugins
   installed elsewhere are left alone: their own uninstallers own them).
+  For a Windows plugin set up by yabridge, Remove takes the Windows plugin
+  and yabridge then removes its stand-in.
+- **Dropping** plugin files, folders, downloads or installers anywhere on
+  the window adds them the same way and opens the Plugins window to say
+  what happened. (A dropped folder with no plugins inside joins the sound
+  library instead.)
 - **Folders to search**: the usual folders are listed; the person can add
   others (a known gap since phase 3) and remove them again.
-- **Installers** (`.exe`, `.msi`) are run: on Windows as they are, then the
-  plugins they install are found by looking again; on Linux through Wine,
-  when it is installed, inside the Wine setup yabridge uses (below).
+- **Installers** (`.exe`, `.msi`) are run: on Windows they are opened as a
+  double-click would (they may ask for permission); the person finishes
+  them, then clicks Look again. On Linux they run through Wine, when it is
+  installed; the program waits for them, then has yabridge set up the
+  plugins they put in Wine's usual plugin folders, and looks again.
+- Copying, unpacking and installing run on a thread of their own; the
+  window says what each file became ("Added: …", "Old.dll is a VST2
+  plugin…", "made for Mac: get its Linux version").
 
 **B. Only a list of folders to search.** Simpler, but it leaves the person
 to learn where plugins go and to unpack archives themselves. *Rejected.*
@@ -75,15 +86,21 @@ history. A `.dll` added in the Plugins window is recognised and explained
 
 ## The sound library
 
-**A. A Library drawer, beside the keyboard and the mixer (chosen).** The
-person adds folders ("Add a folder…"); VLabs lists their sound files (WAV,
-FLAC, MP3, Ogg), MIDI files and SoundFonts in the background, however many
-there are, and shows them by folder with a search field (a search looks
-through every folder at once). A click plays a sound once (it stops on the
-next click); dragging an item onto the song puts it there (a sound as an
-audio clip, a MIDI file as tracks of notes), and double-clicking adds it at
-the play position. Nothing is copied: the library points at the person's
-folders.
+**A. A Library drawer, in place of the keyboard like the mixer (chosen).**
+The person adds folders ("Add a folder…", or by dropping a folder on the
+window); VLabs lists their sound files (WAV, AIFF, FLAC, MP3, Ogg), MIDI
+files and SoundFonts in the background, however many there are (up to half
+a million per folder), and shows them by folder with a search field (a
+search looks through every folder at once, for every word typed). A click
+plays a sound once, over the song, at about -3 dB after the master effects
+(like the metronome); a second click stops it. Dragging an item onto the
+song puts it there (a sound as an audio clip on the beat it is dropped on,
+a MIDI file as tracks of notes, a SoundFont as an instrument track), and
+double-clicking (or "Add to the song" in its menu) adds it at the play
+position. The library points at the person's folders and copies nothing;
+a sound used in a song is copied into the song like any import. F6 shows
+and hides it. AIFF files, common in sample collections, are read from now
+on.
 
 **B. A side panel always beside the song.** Quicker to reach, but it takes
 room from the focus surface all the time (decision 0011). *Rejected.*
@@ -92,10 +109,12 @@ room from the focus surface all the time (decision 0011). *Rejected.*
 sounds or search thousands of files quickly. *Rejected.*
 
 **SoundFonts** (`.sf2`) become instruments: "SoundFont…" in the instrument
-chooser (and SoundFonts in the library) make a track playing the file,
-whose presets are chosen from the location line. The song refers to the
+chooser, SoundFonts in the library, and `.sf2` files dropped on the window
+make a track playing the file (its first preset), whose presets are chosen
+from the location line. The bundled piano already played a SoundFont
+through `rustysynth`; the same player plays these. The song refers to the
 file where it is; when it is missing (a song from another computer) the
-track plays a plain sound and the person is told, as for missing plugins.
+track plays a plain sound and the person is told where the file was.
 
 **SFZ instruments** (the open format of many free sampled instruments)
 need a sampler of their own: planned next, not in this round.
@@ -107,4 +126,7 @@ need a sampler of their own: planned next, not in this round.
   program runs it off the interface thread and looks for plugins again.
 - The settings gain extra plugin folders and the library's folders.
 - The engine gains a preview voice that plays one sound at a time over the
-  song, for the library.
+  song, for the library; the audio thread neither allocates nor frees for
+  it (the sound comes in, and goes back to be freed, through the queues).
+- The interface's `Host` gains dialogs for plugin files, folders and
+  SoundFonts, and a way to show a folder in the file manager.
