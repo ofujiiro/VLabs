@@ -21,7 +21,7 @@ use egui::Key;
 
 const BLOCK: usize = 256;
 
-/// A new song as a new user sees it: open on the empty beat.
+/// A new song as a new user sees it: the whole song.
 fn new_song() -> (Session, EngineProcessor) {
     let (engine, processor) = Engine::new(EngineConfig::default(), SoundLibrary::new());
     let mut session = Session::starter(engine);

@@ -9,8 +9,8 @@ built and merged (pull requests 1 to 7), including SFZ instruments
 fixes for plugins the owner tried (MT Power Drum Kit 2, Decent Sampler),
 merged in pull request 7. The owner has tried every milestone build and
 the plugins round (November 2026): everything works, which closes v1.
-Next: a new or opened song starts on the whole song, not an
-instrument (the owner's request); then the singing voices. The
+A new or opened song now starts on the whole song, not an instrument
+(the owner's request). Next: the singing voices. The
 repository has been public since November 2026 (the owner's decision).
 
 ## Phase 0 — Foundations and risk spikes
@@ -108,7 +108,9 @@ repository has been public since November 2026 (the owner's decision).
 
 ### Phase 2 milestone: things to try
 
-1. Start the program: a new song opens on the drum step grid. Click the
+1. Start the program: a new song opens on the whole song (since November
+   2026; it opened on the drum step grid before). Double-click the
+   **Beat 1** clip to open the step grid. Click the
    Kick squares on steps 1, 5, 9 and 13 and the Snare squares on 5 and 13,
    then press Space. Drag along the Closed hi-hat row to add a hi-hat on
    every step; Ctrl+Z removes the whole drag.
@@ -610,9 +612,10 @@ request 4).
 
 ## After v1 — Opening on the whole song (the owner's request, November 2026)
 
-- [ ] A new song, and a song opened from a file or recovered, starts on
+- [x] A new song, and a song opened from a file or recovered, starts on
       the whole song (the song view), not on an instrument's piano roll
-      or step grid. Today a new song opens on the drum step grid.
+      or step grid. Opened and recovered songs already did; a new song
+      opened on the drum step grid and now opens on the song too.
 
 ## After v1 — Singing voices (the owner's request, November 2026)
 

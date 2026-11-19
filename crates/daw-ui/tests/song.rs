@@ -26,7 +26,7 @@ use egui::Key;
 
 const BLOCK: usize = 256;
 
-/// A new song, open on its beat. No piano is registered: the piano plays
+/// A new song, showing the whole song. No piano is registered: the piano plays
 /// a sine synth, the drums the electronic kit.
 fn new_song() -> (Session, EngineProcessor) {
     let (engine, processor) = Engine::new(EngineConfig::default(), SoundLibrary::new());
@@ -69,8 +69,19 @@ fn temp_path(name: &str) -> PathBuf {
 }
 
 #[test]
-fn a_new_song_opens_on_an_empty_beat_that_plays_at_once() {
+fn a_new_song_opens_on_the_song_and_its_empty_beat_plays_at_once() {
     let (mut s, mut processor) = new_song();
+    assert_eq!(s.view(), View::Song, "a new song shows the whole song");
+    assert!(!s.is_dirty(), "nothing to save yet");
+    assert!(s.is_drum_track(), "F5 opens the beat");
+    let drums = s
+        .project()
+        .tracks
+        .iter()
+        .find(|t| t.instrument.is_drums())
+        .unwrap()
+        .id;
+    s.open_track(drums);
     assert_eq!(s.view(), View::Pattern);
     assert!(s.is_drum_track());
     assert_eq!(s.pattern().length, Ticks::WHOLE, "a one-bar beat");

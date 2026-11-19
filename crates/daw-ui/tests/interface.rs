@@ -105,21 +105,30 @@ struct Fixture {
 
 /// A new song, open on its piano pattern (the phase 1 tests work there).
 fn fixture() -> Fixture {
-    let mut f = new_song();
+    open_first_track(new_song(), |drums| !drums)
+}
+
+/// A new song, open on its empty beat (the step grid tests work there).
+fn beat() -> Fixture {
+    open_first_track(new_song(), |drums| drums)
+}
+
+/// Opens the first track whose instrument's drumness `wanted` accepts.
+fn open_first_track(mut f: Fixture, wanted: impl Fn(bool) -> bool) -> Fixture {
     let session = f.harness.state_mut().as_mut().unwrap().session_mut();
-    let piano = session
+    let track = session
         .project()
         .tracks
         .iter()
-        .find(|t| !t.instrument.is_drums())
+        .find(|t| wanted(t.instrument.is_drums()))
         .unwrap()
         .id;
-    session.open_track(piano);
+    session.open_track(track);
     f.harness.run_steps(3);
     f
 }
 
-/// A new song as a new user sees it: open on the empty beat.
+/// A new song as a new user sees it: the whole song.
 fn new_song() -> Fixture {
     let mut harness = Harness::builder()
         .with_size(vec2(1280.0, 800.0))
@@ -647,8 +656,16 @@ fn square(f: &Fixture, sound: PadSound, step: usize) -> Pos2 {
 }
 
 #[test]
-fn a_new_song_opens_on_the_step_grid_and_squares_make_a_beat() {
-    let mut f = new_song();
+fn a_new_song_opens_on_the_whole_song() {
+    let f = new_song();
+    assert_eq!(f.session().view(), View::Song);
+    f.harness.get_by_label(text::SONG_VIEW);
+    assert!(f.harness.query_by_label(text::STEP_GRID).is_none());
+}
+
+#[test]
+fn the_beat_opens_on_the_step_grid_and_squares_make_a_beat() {
+    let mut f = beat();
     f.harness.get_by_label(text::STEP_GRID);
     assert!(f.session().is_drum_track());
     assert!(f.notes().is_empty());
@@ -701,7 +718,7 @@ fn a_new_song_opens_on_the_step_grid_and_squares_make_a_beat() {
 
 #[test]
 fn a_sound_name_plays_it_and_opens_its_settings() {
-    let mut f = new_song();
+    let mut f = beat();
     f.harness
         .get_by_label(text::pad_name(PadSound::Snare))
         .click();
@@ -827,7 +844,7 @@ fn exporting_asks_where_then_writes_the_song() {
 
 #[test]
 fn tracks_and_patterns_are_renamed_in_a_dialog() {
-    let mut f = new_song();
+    let mut f = beat();
     f.harness.get_by_label_contains(text::FIRST_BEAT).click();
     f.harness.run_steps(2);
     f.harness.get_by_label(text::RENAME_PATTERN).click();
@@ -1375,7 +1392,7 @@ fn starts(samples: &[f32]) -> usize {
 
 #[test]
 fn clicking_a_sound_name_plays_it_once() {
-    let mut f = new_song();
+    let mut f = beat();
     let name = f
         .harness
         .get_by_label(text::pad_name(PadSound::Snare))
@@ -1400,7 +1417,7 @@ fn clicking_a_sound_name_plays_it_once() {
 
 #[test]
 fn a_quick_click_on_a_sound_name_plays_it_too() {
-    let mut f = new_song();
+    let mut f = beat();
     let name = f
         .harness
         .get_by_label(text::pad_name(PadSound::Kick))
@@ -1464,7 +1481,7 @@ fn a_sound_file_dropped_on_an_audio_track_lands_on_its_beat() {
 
 #[test]
 fn a_sound_file_dropped_on_a_pattern_brings_the_song_with_it() {
-    let mut f = new_song();
+    let mut f = beat();
     assert_eq!(f.session().view(), View::Pattern);
     f.harness
         .input_mut()
@@ -1576,7 +1593,7 @@ fn the_snap_menu_offers_tuplets_and_keeping_notes_in_the_key() {
 
 #[test]
 fn swing_is_chosen_for_the_beat() {
-    let mut f = new_song();
+    let mut f = beat();
     f.harness.get_by_label(text::STRAIGHT).click();
     f.harness.run_steps(3);
     f.harness.get_by_label(text::TRIPLET_FEEL).click();
@@ -1590,7 +1607,7 @@ fn swing_is_chosen_for_the_beat() {
 
 #[test]
 fn the_end_of_a_beat_is_dragged_to_any_step() {
-    let mut f = new_song();
+    let mut f = beat();
     let last = f.harness.get_by_label("Kick, step 16").rect();
     let step = last.width();
     let y = last.top() - 13.0;
@@ -1747,7 +1764,7 @@ fn the_tempo_line_takes_changes_that_are_dragged_and_removed() {
 fn panels_and_menus_take_clicks_that_last_several_frames() {
     // A person's click lasts longer than a frame: the press must not close
     // the panel or menu it lands in before the release.
-    let mut f = new_song();
+    let mut f = beat();
     f.harness
         .get_by_label(text::pad_name(PadSound::Snare))
         .click();
@@ -1973,7 +1990,7 @@ fn open_export(f: &mut Fixture) {
 
 #[test]
 fn the_export_dialog_writes_flac_dawproject_and_midi() {
-    let mut f = new_song();
+    let mut f = beat();
     // A note in the beat, so every file has something in it.
     let kick = square(&f, PadSound::Kick, 1);
     f.click(kick, Modifiers::NONE);
@@ -2350,7 +2367,7 @@ fn loudest(f: &mut Fixture) -> f32 {
 
 #[test]
 fn the_library_browses_folders_and_plays_a_sound_when_clicked() {
-    let mut f = new_song();
+    let mut f = beat();
     let folder = sound_folder();
     open_library(&mut f, &folder);
     assert_eq!(f.workspace().settings().sound_folders, vec![folder.clone()]);
@@ -2749,7 +2766,7 @@ fn a_custom_kit_is_made_of_chosen_sounds_and_played_from_the_step_grid() {
 
 #[test]
 fn a_library_folder_becomes_a_custom_kit() {
-    let mut f = new_song();
+    let mut f = beat();
     let folder = sound_folder();
     open_library(&mut f, &folder);
     let row = f.harness.get_by_label("Drums").rect().center();

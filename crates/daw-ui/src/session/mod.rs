@@ -367,11 +367,9 @@ impl Session {
     }
 
     /// The song a new user starts with: a drum track and a piano track,
-    /// open on the empty beat (decision 0014).
+    /// shown as the whole song, like every song opened (decision 0014).
     pub fn starter(engine: Engine) -> Self {
-        let mut session = Self::new(engine, starter_project(), None, true);
-        session.open_first_beat();
-        session
+        Self::new(engine, starter_project(), None, true)
     }
 
     /// Takes the preferences that affect playing and recording.
@@ -1523,24 +1521,9 @@ impl Session {
         }
     }
 
-    /// Starts a new song, open on its beat.
+    /// Starts a new song, shown as the whole song.
     pub fn new_song(&mut self) {
         self.replace(starter_project(), None, true);
-        self.open_first_beat();
-    }
-
-    /// Opens the first drum pattern (a new song starts there).
-    fn open_first_beat(&mut self) {
-        let beat = self
-            .project()
-            .tracks
-            .iter()
-            .find(|t| t.instrument.is_drums())
-            .map(|t| t.id)
-            .and_then(|track| self.current_pattern(track).map(|p| (track, p)));
-        if let Some((track, pattern)) = beat {
-            self.open_pattern(track, pattern);
-        }
     }
 
     // ----- Export

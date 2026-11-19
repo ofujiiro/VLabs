@@ -34,7 +34,7 @@ fn session() -> (Session, EngineProcessor) {
     (session, processor)
 }
 
-/// A new song as a new user sees it: open on the empty beat.
+/// A new song as a new user sees it: the whole song.
 fn new_song() -> (Session, EngineProcessor) {
     // No piano is registered, so the piano plays a sine synth: quick to
     // build and still audible. Drums fall back to the electronic kit.

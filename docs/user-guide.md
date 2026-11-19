@@ -28,12 +28,16 @@ Tools such as AppImageLauncher can add it to your applications menu.
 
 ## The first minute
 
-When VLabs starts, a new song is open on the **step grid** of its drum track:
+When VLabs starts, a new song shows the **whole song**: a **Drums** track
+and a **Piano** track, each with an empty pattern placed on the first four
+bars.
 
-1. Click a few squares in the **Kick** and **Snare** rows.
-2. Press <kbd>Space</kbd>: the beat plays. Press <kbd>Space</kbd> again to
+1. Double-click the **Beat 1** clip on the Drums track (or press
+   <kbd>F5</kbd>): its **step grid** opens.
+2. Click a few squares in the **Kick** and **Snare** rows.
+3. Press <kbd>Space</kbd>: the beat plays. Press <kbd>Space</kbd> again to
    stop.
-3. Play the computer keyboard: the key caps on the left of the grid show
+4. Play the computer keyboard: the key caps on the left of the grid show
    which key plays which drum.
 
 That is a song. The rest of this guide shows how to grow it.

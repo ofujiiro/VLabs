@@ -63,6 +63,9 @@ two open tracks fight over the screen.
 
 - A new song opens on its drum pattern: four clicks and Space give a beat
   in seconds; the piano is one click away in the location line.
+  *Changed November 2026 (the owner's request):* a new song opens on the
+  whole song, like every song opened or recovered; a double-click on the
+  beat's clip, or F5, opens the step grid.
 - The pattern being edited and the song are never shown at once; the
   location line, the clip previews and the looped playback carry the
   context instead.

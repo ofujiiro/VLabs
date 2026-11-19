@@ -108,13 +108,16 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   round, SFZ instruments, custom kits and the plugin fixes (November
   2026): everything works. That closes v1.
 
+- After v1, the owner's request: a new song starts on the whole song (the
+  song view), not on the drum step grid; opened and recovered songs
+  already did (`Session::starter` and `Session::new_song` no longer open
+  the beat; the interface tests use a `beat()` fixture for the step grid).
+  Checked: `cargo xtask ci`, and the program on the virtual screen opened
+  on the song view.
+
 ## Next
 
-- The owner's request: a new song, and a song opened or recovered, starts
-  on the whole song (the song view), not on an instrument's piano roll or
-  step grid (ROADMAP.md, "After v1"). Today a new song opens on the drum
-  step grid.
-- Then the singing voices (ROADMAP.md).
+- The singing voices (ROADMAP.md).
   Possible SFZ follow-ups: LFOs and pitch envelopes, streaming very large
   instruments from the disk, previews in the library.
 
