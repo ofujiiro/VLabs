@@ -460,12 +460,25 @@ impl LibraryPanel {
         }
         match (row, look.file) {
             (Row::Folder(name), _) => {
+                let inside = if self.folder.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}/{name}", self.folder)
+                };
+                response.context_menu(|ui| {
+                    // A custom kit of every sound in it (decision 0025).
+                    if ui
+                        .button(text::MAKE_KIT)
+                        .on_hover_text(text::MAKE_KIT_HINT)
+                        .clicked()
+                    {
+                        let sounds = self.sounds_in(&inside);
+                        session.make_kit(name, sounds);
+                        ui.close();
+                    }
+                });
                 if response.clicked() {
-                    self.folder = if self.folder.is_empty() {
-                        name.clone()
-                    } else {
-                        format!("{}/{name}", self.folder)
-                    };
+                    self.folder = inside;
                 }
             }
             (Row::Item { .. }, Some((path, kind))) => {
@@ -512,6 +525,25 @@ impl LibraryPanel {
             }
             (Row::Item { .. }, None) => {}
         }
+    }
+
+    /// Every sound in a folder of the open library folder, however deep
+    /// (at most a full kit's worth).
+    fn sounds_in(&self, folder: &str) -> Vec<PathBuf> {
+        let Some(root) = self.roots.get(self.current) else {
+            return Vec::new();
+        };
+        let Some(listing) = &root.listing else {
+            return Vec::new();
+        };
+        let prefix = format!("{}/", folder.to_lowercase());
+        listing
+            .items
+            .iter()
+            .filter(|item| item.kind == ItemKind::Sound && item.lower.starts_with(&prefix))
+            .take(daw_model::KIT_MAX_PADS)
+            .map(|item| root.path.join(&item.relative))
+            .collect()
     }
 
     /// Shows the folder above the one shown.

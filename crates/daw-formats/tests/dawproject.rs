@@ -250,6 +250,26 @@ fn song(audio: &Path) -> Project {
     let chords = project.add_pattern_for(strings, "Chords", Ticks::WHOLE);
     project.add_note(chords, note(Ticks::ZERO, Ticks::QUARTER * 2, 60));
     project.add_clip(strings, Ticks::ZERO, Ticks::WHOLE, chords);
+    // A custom kit of a sound of its own (decision 0025).
+    write_tone(&audio.join("boom.wav"));
+    let boom = project.add_audio_file(AudioFile {
+        id: AudioId(0),
+        name: "Boom".to_owned(),
+        file: "boom.wav".to_owned(),
+        frames: 44_100,
+        sample_rate: 44_100,
+        channels: 1,
+    });
+    let kit = project.add_track("My kit", Instrument::Kit { pads: Vec::new() });
+    project.add_kit_pad(kit, "Boom", boom);
+    if let Some(track) = project.track_mut(kit) {
+        let mut pad = track.instrument.pad(36);
+        pad.tune = -3.0;
+        track.instrument.set_pad(pad);
+    }
+    let hits = project.add_pattern_for(kit, "Hits", Ticks::WHOLE);
+    project.add_note(hits, note(Ticks::ZERO, Ticks::note_value(1, 16), 36));
+    project.add_clip(kit, Ticks::ZERO, Ticks::WHOLE, hits);
     // The master: an EQ and the limiter.
     project.add_effect(
         ChainPlace::Master,
@@ -322,7 +342,24 @@ fn a_song_goes_to_another_program_and_comes_back_whole() {
     assert_eq!(back.tracks.len(), original.tracks.len());
     for (a, b) in original.tracks.iter().zip(&back.tracks) {
         assert_eq!(a.name, b.name);
-        assert_eq!(a.instrument, b.instrument, "{}", a.name);
+        if a.instrument.is_custom_kit() {
+            // Its sounds come back as the song's own (with new identities).
+            let pads =
+                |project: &Project, track: &daw_model::Track| -> Vec<(String, u8, f32, u64)> {
+                    track
+                        .instrument
+                        .kit_pads()
+                        .iter()
+                        .map(|p| {
+                            let sound = project.audio_file(p.audio).unwrap();
+                            (p.name.clone(), p.setting.key, p.setting.tune, sound.frames)
+                        })
+                        .collect()
+                };
+            assert_eq!(pads(&original, a), pads(&back, b), "{}", a.name);
+        } else {
+            assert_eq!(a.instrument, b.instrument, "{}", a.name);
+        }
         assert_eq!(a.strip, b.strip, "{}", a.name);
         let kinds = |t: &daw_model::Track| -> Vec<(EffectKind, bool)> {
             t.effects

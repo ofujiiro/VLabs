@@ -13,6 +13,7 @@ mod audio;
 mod audio_store;
 mod conductor;
 mod files;
+mod kits;
 mod library;
 mod mixing;
 mod plugins;

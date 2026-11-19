@@ -853,6 +853,62 @@ pub fn preset_number(bank: u16, program: u8) -> String {
     format!("{bank}:{program:03}")
 }
 
+// Custom kits (decision 0025).
+pub const ADD_KIT: &str = "Custom kit";
+pub const ADD_KIT_HINT: &str = "A drum kit of your own sounds";
+pub const KIT_TRACK: &str = "My kit";
+pub const SOUND_FILE_TYPE: &str = "Sound";
+pub const CHOOSE_KIT_SOUNDS_TITLE: &str = "Choose sounds for the kit";
+pub const ADD_SOUNDS: &str = "Add sounds…";
+pub const ADD_SOUNDS_HINT: &str =
+    "Add sounds to this kit (choose many at once): each goes on its own key";
+pub const EMPTY_KIT_HINT: &str = "Add your sounds: each becomes a row here, on its own key";
+pub const EMPTY_KIT_DETAIL: &str =
+    "Click Add sounds… above, drop sound files here, or drag them from the sound library";
+pub const DROP_ON_KIT: &str = "Let go to add these sounds to the kit";
+pub const REMOVE_PAD: &str = "Remove from the kit";
+pub const REMOVE_PAD_HINT: &str = "The sound leaves the kit, with the hits on its row";
+pub const MAKE_KIT: &str = "Make a kit of these sounds";
+pub const MAKE_KIT_HINT: &str = "A custom kit with every sound in this folder, each on its own key";
+pub const EDIT_ADD_KIT: &str = "add custom kit";
+pub const EDIT_ADD_PAD: &str = "add sound to kit";
+pub const EDIT_REMOVE_PAD: &str = "remove sound from kit";
+
+/// The second line of a custom kit's empty step grid: the computer key
+/// that plays its first sound.
+pub fn kit_keys_hint(key: &str, name: &str) -> String {
+    format!(
+        "Or play your sounds on the computer keyboard: {key} plays {name}, the keys after it the next sounds"
+    )
+}
+
+/// The status line while sounds are being added to a custom kit.
+pub fn adding_kit_sounds(count: usize, kit: &str) -> String {
+    match count {
+        1 => format!("Adding a sound to {kit}…"),
+        n => format!("Adding {n} sounds to {kit}…"),
+    }
+}
+
+/// A sound added to a custom kit.
+pub fn added_to_kit(file: &str, kit: &str) -> String {
+    format!("Added {file} to {kit}")
+}
+
+/// A custom kit that cannot take more sounds.
+pub fn kit_full(kit: &str) -> String {
+    format!("{kit} is full: a kit holds at most 128 sounds, one on each key")
+}
+
+/// What a custom kit's track plays, under its name.
+pub fn custom_kit_description(count: usize) -> String {
+    match count {
+        0 => "Custom kit · no sounds yet".to_owned(),
+        1 => "Custom kit · 1 sound".to_owned(),
+        n => format!("Custom kit · {n} sounds"),
+    }
+}
+
 // The synth (decision 0019).
 pub const ADD_SYNTH: &str = "Synth";
 pub const ADD_SYNTH_HINT: &str = "Add a synth track: shape your own sounds";

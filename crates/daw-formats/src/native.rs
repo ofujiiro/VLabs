@@ -332,8 +332,9 @@ fn migrate(value: Value, from: u32) -> Result<Value, FileError> {
     // glides (decision 0018); every new field has a default again.
     // Version 6 added the built-in synth instrument (decision 0019); older
     // files have none, so they need no rewriting.
-    // Version 7 added SFZ instruments (decision 0024); older files have
-    // none, so they need no rewriting either.
+    // Version 7 added SFZ instruments (decision 0024) and custom kits
+    // (decision 0025); older files have none, so they need no rewriting
+    // either.
     // Each future format change adds a step here: `8 => migrate_7_to_8(value)`.
     Ok(value)
 }
@@ -355,6 +356,27 @@ fn repair(project: &mut Project) {
             let repaired = settings.repaired();
             if repaired != *settings {
                 std::sync::Arc::make_mut(track).instrument = daw_model::Instrument::Synth(repaired);
+            }
+        }
+    }
+    // A custom kit's pads play sounds the song holds, one pad on each key.
+    let sounds: std::collections::HashSet<daw_model::AudioId> =
+        project.audio.iter().map(|f| f.id).collect();
+    for track in &mut project.tracks {
+        if let daw_model::Instrument::Kit { pads } = &track.instrument {
+            let mut keys = std::collections::HashSet::new();
+            let kept: Vec<daw_model::KitPad> = pads
+                .iter()
+                .filter(|pad| {
+                    pad.setting.key <= daw_model::MAX_KEY
+                        && sounds.contains(&pad.audio)
+                        && keys.insert(pad.setting.key)
+                })
+                .cloned()
+                .collect();
+            if kept.len() != pads.len() {
+                std::sync::Arc::make_mut(track).instrument =
+                    daw_model::Instrument::Kit { pads: kept };
             }
         }
     }

@@ -86,7 +86,8 @@ fn write_hum(folder: &std::path::Path) {
 /// track with a clip of a file kept in the container; version 5 a key with
 /// a change, a swung beat, a tempo glide and a time-signature change;
 /// version 6 a track of the built-in synth with a lane for its cutoff;
-/// version 7 a track playing an SFZ instrument).
+/// version 7 a track playing an SFZ instrument, and a custom kit whose pad
+/// plays the version 4 sample's sound).
 fn reference_project() -> Project {
     let mut project = Project::starter("Pattern 1", "Piano");
     let (_, pattern) = project.first_pattern().unwrap();
@@ -198,6 +199,9 @@ fn add_newer_instruments(project: &mut Project) {
             file: SAMPLE_SFZ.to_owned(),
         },
     );
+    let kit = project.add_track("My kit", Instrument::Kit { pads: Vec::new() });
+    let hum = project.audio[0].id;
+    project.add_kit_pad(kit, "Hum", hum);
 }
 
 #[test]
@@ -249,17 +253,7 @@ fn every_released_format_version_still_opens() {
                 AutomationTarget::Instrument { param: 0 }
             );
         }
-        let sfz = project.tracks.iter().find_map(|t| t.instrument.sfz_file());
-        if version >= 7 {
-            assert_eq!(
-                sfz,
-                Some(SAMPLE_SFZ),
-                "{} lost its SFZ track",
-                path.display()
-            );
-        } else {
-            assert_eq!(sfz, None, "no SFZ instruments before version 7");
-        }
+        check_newer_instruments(&project, version, &path);
         if version >= 5 {
             check_theory_and_rhythm(&project, &path);
         } else {
@@ -298,6 +292,32 @@ fn every_released_format_version_still_opens() {
         found >= FORMAT_VERSION as usize,
         "a sample file is missing for some format version (found {found})"
     );
+}
+
+/// The version 7 sample's SFZ track and custom kit came back (and older
+/// samples have neither).
+fn check_newer_instruments(project: &Project, version: u32, path: &std::path::Path) {
+    let sfz = project.tracks.iter().find_map(|t| t.instrument.sfz_file());
+    let kit = project.tracks.iter().find(|t| t.instrument.is_custom_kit());
+    if version >= 7 {
+        assert_eq!(
+            sfz,
+            Some(SAMPLE_SFZ),
+            "{} lost its SFZ track",
+            path.display()
+        );
+        let pads = kit
+            .unwrap_or_else(|| panic!("{} lost its custom kit", path.display()))
+            .instrument
+            .kit_pads();
+        assert_eq!(pads.len(), 1);
+        assert_eq!((pads[0].name.as_str(), pads[0].setting.key), ("Hum", 36));
+        let sound = project.audio_file(pads[0].audio).unwrap();
+        assert_eq!(sound.name, "Hum", "the pad plays the song's sound");
+    } else {
+        assert_eq!(sfz, None, "no SFZ instruments before version 7");
+        assert!(kit.is_none(), "no custom kits before version 7");
+    }
 }
 
 /// The version 2 sample's drums and effects, and the version 3 sample's

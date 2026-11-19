@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use daw_dsp::audio::AudioBuffer;
 use daw_dsp::drums::{DrumKit, DrumSampler, PadParams, PadTable};
-use daw_dsp::sampler::{Sampler, SamplerBank};
+use daw_dsp::sampler::{EnvelopeSpec, LoopMode, Region, Sample, Sampler, SamplerBank};
 use daw_dsp::synth::{EnvParams, FilterMode, OscParams, Synth, SynthParams, Wave};
 use daw_dsp::{Instrument, InstrumentSettings, SineSynth, SoundFontBank, SoundFontPlayer};
 use daw_model::{
@@ -385,9 +385,10 @@ impl SoundLibrary {
                     Some(Err(problem)) => (Box::new(SineSynth::new(sample_rate)), Some(problem)),
                 }
             }
-            // The engine loads plugins itself (they have a main-thread half);
-            // an audio track has no instrument (its clips are mixed in).
-            InstrumentSpec::Plugin(_) | InstrumentSpec::Audio => {
+            // The engine loads plugins itself (they have a main-thread half),
+            // and builds custom kits from the song's audio files; an audio
+            // track has no instrument (its clips are mixed in).
+            InstrumentSpec::Plugin(_) | InstrumentSpec::Audio | InstrumentSpec::Kit { .. } => {
                 (Box::new(crate::plugins::Silence), None)
             }
         }
@@ -470,8 +471,69 @@ pub(crate) fn instrument_settings(spec: &InstrumentSpec) -> Option<InstrumentSet
         InstrumentSpec::SoundFont { .. }
         | InstrumentSpec::Plugin(_)
         | InstrumentSpec::Audio
-        | InstrumentSpec::Sfz { .. } => None,
+        | InstrumentSpec::Sfz { .. }
+        | InstrumentSpec::Kit { .. } => None,
     }
+}
+
+/// A custom kit's sampler (decision 0025): each pad's sound (at the engine's
+/// rate) plays once on its key, with the pad's volume, position, pitch and
+/// length; a length below full fades the sound out by its end.
+pub(crate) fn kit_sampler(pads: &[(PadSetting, Arc<AudioBuffer>)], sample_rate: u32) -> Sampler {
+    let mut bank = SamplerBank::default();
+    for (setting, sound) in pads {
+        if setting.muted || sound.frames() < 2 {
+            continue;
+        }
+        let sample = Sample {
+            sample_rate: sound.sample_rate(),
+            left: sound.left().to_vec(),
+            right: if sound.channel_count() > 1 {
+                sound.right().to_vec()
+            } else {
+                Vec::new()
+            },
+            file_loop: None,
+        };
+        let length = setting.length.clamp(0.05, 1.0);
+        let mut ampeg = EnvelopeSpec::amp();
+        let mut end = None;
+        if length < 1.0 {
+            #[allow(clippy::cast_precision_loss, reason = "frame counts and rates")]
+            let (frames, rate) = (
+                sample.frames() as f32 * length,
+                sample.sample_rate.max(1) as f32,
+            );
+            let seconds = frames / rate;
+            ampeg.hold = seconds * 0.7;
+            ampeg.decay = seconds * 0.3;
+            ampeg.sustain = 0.0;
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "a positive frame count"
+            )]
+            let last = frames as u64;
+            end = Some(last.max(1));
+        }
+        let key = setting.key & 0x7F;
+        bank.regions.push(Region {
+            sample: Some(bank.samples.len()),
+            lokey: key,
+            hikey: key,
+            pitch_keycenter: key,
+            tune: setting.tune.clamp(-24.0, 24.0) * 100.0,
+            volume: setting.gain_db.clamp(-60.0, 24.0),
+            pan: setting.pan.clamp(-1.0, 1.0),
+            amp_veltrack: 0.5,
+            loop_mode: Some(LoopMode::OneShot),
+            ampeg,
+            end,
+            ..Region::default()
+        });
+        bank.samples.push(sample);
+    }
+    Sampler::new(Arc::new(bank), sample_rate)
 }
 
 /// Every pad's settings, indexed by the pad's key.

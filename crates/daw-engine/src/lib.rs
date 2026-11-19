@@ -387,6 +387,13 @@ impl Engine {
     /// are heard from the next [`Engine::sync`].
     pub fn register_audio(&mut self, name: &str, sound: Arc<daw_dsp::audio::AudioBuffer>) {
         self.library.register_audio(name, sound);
+        // Custom kits play the song's audio files (decision 0025): they are
+        // built again with the sound now ready.
+        for (track, spec) in self.slots.iter().flatten() {
+            if spec.is_custom_kit() {
+                self.rebuild.insert(*track);
+            }
+        }
         self.compiled = None;
     }
 
@@ -505,7 +512,7 @@ impl Engine {
                 self.problems.push(Problem::TooManyTracks(MAX_SLOTS));
                 continue;
             };
-            let instrument = self.build_instrument(track);
+            let instrument = self.build_instrument(track, project);
             self.slots[slot] = Some((track.id, track.instrument.clone()));
             self.send(Command::Instrument {
                 slot,
@@ -551,11 +558,26 @@ impl Engine {
 
     /// A track's instrument, built (or loaded) anew. Whatever played for the
     /// track before goes: a plugin is retired.
-    fn build_instrument(&mut self, track: &daw_model::Track) -> Box<dyn daw_dsp::Instrument> {
+    fn build_instrument(
+        &mut self,
+        track: &daw_model::Track,
+        project: &Project,
+    ) -> Box<dyn daw_dsp::Instrument> {
         let target = PluginTarget::Instrument(track.id);
         self.plugins.retire(target);
         self.missing.remove(&target);
         match &track.instrument {
+            // A custom kit plays the song's audio files (decision 0025).
+            InstrumentSpec::Kit { pads } => {
+                let sounds: Vec<(daw_model::PadSetting, Arc<daw_dsp::audio::AudioBuffer>)> = pads
+                    .iter()
+                    .filter_map(|pad| {
+                        let file = project.audio_file(pad.audio)?;
+                        Some((pad.setting, Arc::clone(self.library.audio(&file.file)?)))
+                    })
+                    .collect();
+                Box::new(library::kit_sampler(&sounds, self.config.sample_rate))
+            }
             InstrumentSpec::Plugin(setup) => match self.load_plugin(target, setup) {
                 Ok((instance, processor)) => Box::new(PluginInstrument::new(processor, instance)),
                 Err(problem) => {

@@ -41,6 +41,7 @@ struct FakeHost {
     folder: Arc<Mutex<Option<PathBuf>>>,
     shown_folders: Arc<Mutex<Vec<PathBuf>>>,
     soundfont: Arc<Mutex<Option<PathBuf>>>,
+    kit_sounds: Arc<Mutex<Vec<PathBuf>>>,
 }
 
 impl Host for FakeHost {
@@ -76,6 +77,11 @@ impl Host for FakeHost {
     fn choose_soundfont(&mut self) -> Option<PathBuf> {
         *self.asked.lock().unwrap() += 1;
         self.soundfont.lock().unwrap().clone()
+    }
+
+    fn choose_kit_sounds(&mut self) -> Vec<PathBuf> {
+        *self.asked.lock().unwrap() += 1;
+        self.kit_sounds.lock().unwrap().clone()
     }
 
     fn choose_folder(&mut self, _title: &str) -> Option<PathBuf> {
@@ -2626,4 +2632,140 @@ fn the_instrument_chooser_adds_an_sfz_track() {
             .sfz_file()
             .is_some_and(|f| f.ends_with("Strings.sfz"))
     );
+}
+
+/// Two short sounds for a custom kit, and a file that is not a sound.
+fn kit_sounds() -> Vec<PathBuf> {
+    let folder = std::env::temp_dir().join(format!(
+        "interface-kit-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    ));
+    std::fs::create_dir_all(&folder).unwrap();
+    for name in ["Boom.wav", "Clap.wav"] {
+        std::fs::copy(tone_file("kit.wav", 0.3), folder.join(name)).unwrap();
+    }
+    std::fs::write(folder.join("notes.txt"), b"not a sound").unwrap();
+    ["Boom.wav", "Clap.wav", "notes.txt"]
+        .iter()
+        .map(|n| folder.join(n))
+        .collect()
+}
+
+/// Draws frames until a track's custom kit has `count` pads (its sounds are
+/// read in the background).
+fn wait_for_pads(f: &mut Fixture, track: daw_model::TrackId, count: usize) {
+    let start = std::time::Instant::now();
+    while f.session().kit_pads(track).len() != count {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(20),
+            "the kit has {} pads, not {count}",
+            f.session().kit_pads(track).len()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        f.harness.run_steps(1);
+    }
+}
+
+#[test]
+fn a_custom_kit_is_made_of_chosen_sounds_and_played_from_the_step_grid() {
+    let mut f = new_song();
+    let sounds = kit_sounds();
+    *f.host.kit_sounds.lock().unwrap() = sounds.clone();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    f.harness
+        .get_by_label(&format!("+ {}", text::ADD_INSTRUMENT))
+        .click();
+    f.harness.run_steps(3);
+    f.harness.get_by_label_contains(text::ADD_KIT_HINT).click();
+    f.harness.run_steps(3);
+    let kit = f.session().focused_track();
+    assert!(f.session().is_custom_kit(kit), "the kit's beat is open");
+    wait_for_pads(&mut f, kit, 2);
+    let pads: Vec<(String, u8)> = f
+        .session()
+        .kit_pads(kit)
+        .iter()
+        .map(|p| (p.name.clone(), p.setting.key))
+        .collect();
+    assert_eq!(
+        pads,
+        [("Boom".to_owned(), 36), ("Clap".to_owned(), 37)],
+        "each sound on its own key; the text file is left out"
+    );
+    assert_eq!(
+        f.session().project().audio.len(),
+        2,
+        "the sounds are in the song"
+    );
+
+    // A row for each sound: a click on its first square puts a hit there.
+    f.harness.get_by_label("Boom, step 1").click();
+    f.harness.run_steps(2);
+    let keys: Vec<u8> = f.session().pattern().notes.iter().map(|n| n.key).collect();
+    assert_eq!(keys, [36]);
+    // The first key of the computer keyboard plays the first sound.
+    f.key(Key::Z, Key::Z, true, Modifiers::NONE);
+    let start = std::time::Instant::now();
+    while loudest(&mut f) < 0.05 {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(20),
+            "never heard"
+        );
+        f.harness.run_steps(1);
+    }
+    f.key(Key::Z, Key::Z, false, Modifiers::NONE);
+
+    // A sound leaves the kit from its settings, and comes back with undo.
+    f.harness
+        .get_by(|node| {
+            node.role() == egui::accesskit::Role::Button && node.label().as_deref() == Some("Clap")
+        })
+        .click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::REMOVE_PAD).click();
+    f.harness.run_steps(2);
+    assert_eq!(f.session().kit_pads(kit).len(), 1);
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_REMOVE_PAD)
+    );
+    f.workspace_mut().session_mut().undo();
+    f.harness.run_steps(2);
+    assert_eq!(f.session().kit_pads(kit).len(), 2);
+
+    // Sounds dropped on the kit's beat join it.
+    f.harness
+        .input_mut()
+        .dropped_files
+        .push(Arc::new(DroppedSound(sounds[0].clone())));
+    f.harness.step();
+    wait_for_pads(&mut f, kit, 3);
+    assert_eq!(f.session().kit_pads(kit)[2].setting.key, 38);
+}
+
+#[test]
+fn a_library_folder_becomes_a_custom_kit() {
+    let mut f = new_song();
+    let folder = sound_folder();
+    open_library(&mut f, &folder);
+    let row = f.harness.get_by_label("Drums").rect().center();
+    f.right_click(row);
+    f.harness.get_by_label(text::MAKE_KIT).click();
+    f.harness.run_steps(3);
+    let kit = f.session().focused_track();
+    assert!(f.session().is_custom_kit(kit));
+    wait_for_pads(&mut f, kit, 2);
+    let track = f.session().project().track(kit).unwrap();
+    assert_eq!(track.name, "Drums 2", "named after the folder");
+    let names: Vec<&str> = track
+        .instrument
+        .kit_pads()
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect();
+    assert_eq!(names, ["Kick", "Snare"]);
 }

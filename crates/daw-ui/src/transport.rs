@@ -587,14 +587,14 @@ pub fn location_bar(
                 return;
             }
             ui.add_space(12.0);
-            pattern_tools(ui, session);
+            pattern_tools(ui, session, intents);
         });
     });
 }
 
 /// The settings of the open pattern, laid out from the right (decision
 /// 0018 adds swing, chord stamps and the notes menu).
-fn pattern_tools(ui: &mut Ui, session: &mut Session) {
+fn pattern_tools(ui: &mut Ui, session: &mut Session, intents: &mut Vec<Intent>) {
     // Laid out from the right.
     if session.is_drum_track() {
         pattern_length(ui, session);
@@ -605,9 +605,20 @@ fn pattern_tools(ui: &mut Ui, session: &mut Session) {
         ui.label(RichText::new(text::STEPS).weak())
             .on_hover_text(text::STEPS_HINT);
         ui.add_space(12.0);
-        kit_menu(ui, session);
-        ui.label(RichText::new(text::KIT).weak())
-            .on_hover_text(text::KIT_HINT);
+        if session.is_custom_kit(session.track_id()) {
+            // A custom kit takes more sounds (decision 0025).
+            if ui
+                .button(text::ADD_SOUNDS)
+                .on_hover_text(text::ADD_SOUNDS_HINT)
+                .clicked()
+            {
+                intents.push(Intent::AddKitSounds(session.track_id()));
+            }
+        } else {
+            kit_menu(ui, session);
+            ui.label(RichText::new(text::KIT).weak())
+                .on_hover_text(text::KIT_HINT);
+        }
     } else {
         notes_menu(ui, session);
         ui.add_space(12.0);

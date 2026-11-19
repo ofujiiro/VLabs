@@ -15,6 +15,10 @@
 //!
 //! Each square is also in the accessibility tree ("Kick, step 1"), so
 //! screen readers and the interface tests can find it.
+//!
+//! The rows are a bundled kit's fifteen sounds, or a custom kit's pads
+//! (decision 0025), as many as it has: the wheel over the names scrolls
+//! them.
 
 use daw_dsp::drums::PadSound;
 use daw_model::{NoteId, PadSetting, Ticks};
@@ -24,6 +28,7 @@ use egui::{
 };
 
 use crate::keys::{KeyLabels, NOTE_KEYS};
+use crate::library_panel::LibraryDrag;
 use crate::session::Session;
 use crate::text;
 use crate::theme::{Palette, size};
@@ -75,13 +80,16 @@ enum Drag {
 /// The step sequencer's state between frames.
 #[derive(Debug)]
 pub struct StepGrid {
-    /// The sound whose loudness the strip shows.
-    chosen: PadSound,
+    /// The sound whose loudness the strip shows (its row's key).
+    chosen: u8,
     drag: Drag,
-    /// The sound whose settings are open, and where its name is.
-    settings: Option<(PadSound, Pos2)>,
+    /// The sound whose settings are open (its row's key), and where its
+    /// name is.
+    settings: Option<(u8, Pos2)>,
     /// How far the steps are scrolled to the left, in points.
     scroll: f32,
+    /// How far the rows are scrolled up, in points.
+    row_scroll: f32,
     /// The width of a step while the end of the pattern is dragged, so the
     /// squares keep their size under the pointer.
     frozen_width: Option<f32>,
@@ -90,10 +98,11 @@ pub struct StepGrid {
 impl Default for StepGrid {
     fn default() -> Self {
         Self {
-            chosen: PadSound::Kick,
+            chosen: PadSound::Kick.key(),
             drag: Drag::None,
             settings: None,
             scroll: 0.0,
+            row_scroll: 0.0,
             frozen_width: None,
         }
     }
@@ -117,10 +126,65 @@ struct Layout {
     steps: usize,
     step: Ticks,
     scroll: f32,
+    rows: usize,
+    row_scroll: f32,
+}
+
+/// One row of the grid: the key its sound plays on, and its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Row {
+    key: u8,
+    name: String,
+}
+
+/// The rows the track in focus shows: a bundled kit's fifteen sounds, or a
+/// custom kit's pads.
+fn rows(session: &Session) -> Vec<Row> {
+    let pads = session.kit_pads(session.track_id());
+    if session.is_custom_kit(session.track_id()) {
+        pads.iter()
+            .map(|pad| Row {
+                key: pad.setting.key,
+                name: pad.name.clone(),
+            })
+            .collect()
+    } else {
+        PAD_ORDER
+            .iter()
+            .map(|&sound| Row {
+                key: sound.key(),
+                name: text::pad_name(sound).to_owned(),
+            })
+            .collect()
+    }
+}
+
+/// What the grid shows this frame: its rows, whether they are a custom
+/// kit's, and where everything is.
+struct Grid<'a> {
+    rows: &'a [Row],
+    custom: bool,
+    layout: &'a Layout,
+}
+
+/// The row a note's key plays in: for a bundled kit, a sound's other keys
+/// play in its row (35 is a kick too).
+fn row_key(custom: bool, key: u8) -> Option<u8> {
+    if custom {
+        Some(key)
+    } else {
+        PadSound::from_key(key).map(PadSound::key)
+    }
 }
 
 impl Layout {
-    fn new(whole: Rect, session: &Session, scroll: f32, frozen_width: Option<f32>) -> Self {
+    fn new(
+        whole: Rect,
+        session: &Session,
+        (scroll, row_scroll): (f32, f32),
+        frozen_width: Option<f32>,
+        rows: usize,
+    ) -> Self {
         let step = session.step();
         let length = session.pattern().length.max(step);
         let steps = usize::try_from((length.0 + step.0 - 1) / step.0.max(1))
@@ -131,13 +195,15 @@ impl Layout {
         let grid_bottom = strip_top - STRIP_GAP;
         let room = (grid_bottom - whole.top() - RULER_HEIGHT).max(1.0);
         #[allow(clippy::cast_precision_loss, reason = "small counts")]
-        let row_height = (room / PAD_ORDER.len() as f32).clamp(MIN_ROW_HEIGHT, MAX_ROW_HEIGHT);
+        let row_height = (room / rows.max(1) as f32).clamp(MIN_ROW_HEIGHT, MAX_ROW_HEIGHT);
         #[allow(clippy::cast_precision_loss, reason = "small counts")]
         let step_width = frozen_width.unwrap_or_else(|| {
             ((whole.right() - left - 8.0) / steps as f32).clamp(MIN_STEP_WIDTH, MAX_STEP_WIDTH)
         });
         #[allow(clippy::cast_precision_loss, reason = "small counts")]
-        let rows_bottom = whole.top() + RULER_HEIGHT + row_height * PAD_ORDER.len() as f32;
+        let rows_bottom = whole.top() + RULER_HEIGHT + row_height * rows.max(1) as f32;
+        #[allow(clippy::cast_precision_loss, reason = "small counts")]
+        let row_scroll = row_scroll.clamp(0.0, (row_height * rows as f32 - room).max(0.0));
         #[allow(clippy::cast_precision_loss, reason = "small counts")]
         let content = step_width * steps as f32;
         let visible = whole.right() - left;
@@ -166,6 +232,8 @@ impl Layout {
             steps,
             step,
             scroll,
+            rows,
+            row_scroll,
         }
     }
 
@@ -176,7 +244,13 @@ impl Layout {
 
     #[allow(clippy::cast_precision_loss, reason = "small counts")]
     fn row_y(&self, row: usize) -> f32 {
-        self.grid.top() + row as f32 * self.row_height
+        self.grid.top() + row as f32 * self.row_height - self.row_scroll
+    }
+
+    /// Whether a row is (at least partly) in view.
+    fn row_visible(&self, row: usize) -> bool {
+        let y = self.row_y(row);
+        y + self.row_height > self.grid.top() && y < self.grid.bottom()
     }
 
     fn cell(&self, row: usize, step: usize) -> Rect {
@@ -205,8 +279,8 @@ impl Layout {
         reason = "clamped before converting"
     )]
     fn row_at(&self, y: f32) -> Option<usize> {
-        let at = ((y - self.grid.top()) / self.row_height).floor();
-        (at >= 0.0 && (at as usize) < PAD_ORDER.len()).then_some(at as usize)
+        let at = ((y - self.grid.top() + self.row_scroll) / self.row_height).floor();
+        (at >= 0.0 && (at as usize) < self.rows && y < self.grid.bottom()).then_some(at as usize)
     }
 
     fn step_start(&self, step: usize) -> Ticks {
@@ -226,22 +300,77 @@ impl StepGrid {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         response
             .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Canvas, true, text::STEP_GRID));
-        let layout = Layout::new(rect, session, self.scroll, self.frozen_width);
+        let rows = rows(session);
+        let custom = session.is_custom_kit(session.track_id());
+        if !rows.iter().any(|r| r.key == self.chosen)
+            && let Some(first) = rows.first()
+        {
+            self.chosen = first.key;
+        }
+        let layout = Layout::new(
+            rect,
+            session,
+            (self.scroll, self.row_scroll),
+            self.frozen_width,
+            rows.len(),
+        );
         self.scroll = layout.scroll;
+        self.row_scroll = layout.row_scroll;
         self.handle_scroll(ui, &layout);
-        self.pad_names(ui, session, &layout);
-        self.handle_pointer(ui, &response, &layout, session);
-        Self::describe_cells(ui, session, &layout, response.id);
+        let grid = Grid {
+            rows: &rows,
+            custom,
+            layout: &layout,
+        };
+        self.pad_names(ui, session, &grid);
+        self.handle_pointer(ui, &response, &grid, session);
+        Self::describe_cells(ui, session, &grid, response.id);
 
         let p = Palette::of(ui.ctx());
         ui.painter_at(rect)
             .rect_filled(rect, CornerRadius::ZERO, p.grid);
-        self.paint_cells(ui, session, &layout);
+        self.paint_cells(ui, session, &grid);
         self.paint_ruler(ui, session, &layout);
-        self.paint_names(ui, session, labels, &layout);
-        self.paint_strip(ui, session, &layout);
-        self.paint_hint(ui, session, labels, &layout);
-        self.pad_settings(ui, session);
+        self.paint_names(ui, session, labels, &grid);
+        self.paint_strip(ui, session, &grid);
+        self.paint_hint(ui, session, labels, &grid);
+        self.pad_settings(ui, session, &grid);
+        if custom {
+            Self::take_library_drop(ui, session, rect);
+        }
+    }
+
+    /// Sounds dragged from the sound library and let go over a custom kit's
+    /// grid join the kit (decision 0025); while they are dragged (or files
+    /// from the desktop), the grid says so.
+    fn take_library_drop(ui: &Ui, session: &mut Session, rect: Rect) {
+        let library = egui::DragAndDrop::has_payload_of_type::<LibraryDrag>(ui.ctx());
+        let files = ui.input(|i| !i.raw.hovered_files.is_empty());
+        if !library && !files {
+            return;
+        }
+        let over = ui
+            .input(|i| i.pointer.latest_pos())
+            .is_some_and(|pos| rect.contains(pos));
+        if library
+            && over
+            && ui.input(|i| i.pointer.any_released())
+            && let Some(dragged) = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
+        {
+            egui::DragAndDrop::clear_payload(ui.ctx());
+            session.add_kit_sounds(session.track_id(), dragged.0.clone());
+            return;
+        }
+        let p = Palette::of(ui.ctx());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, CornerRadius::ZERO, p.accent.gamma_multiply(0.12));
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            text::DROP_ON_KIT,
+            FontId::proportional(size::HEADING),
+            p.text,
+        );
     }
 
     /// Whether a drag is in progress.
@@ -262,43 +391,47 @@ impl StepGrid {
         true
     }
 
+    /// The wheel: over the names it scrolls the rows (a custom kit may
+    /// have many), elsewhere the steps.
     fn handle_scroll(&mut self, ui: &Ui, layout: &Layout) {
         if !ui.rect_contains_pointer(layout.whole) {
             return;
         }
         let delta = ui.input(|i| i.smooth_scroll_delta);
-        self.scroll = (self.scroll - delta.x - delta.y).max(0.0);
+        let over_names = ui
+            .input(|i| i.pointer.hover_pos())
+            .is_some_and(|pos| pos.x < layout.names.right());
+        if over_names {
+            self.row_scroll = (self.row_scroll - delta.y).max(0.0);
+        } else {
+            self.scroll = (self.scroll - delta.x - delta.y).max(0.0);
+        }
     }
 
-    /// The hits of a sound in a step.
-    fn hits(session: &Session, sound: PadSound, layout: &Layout, step: usize) -> Vec<NoteId> {
-        let from = layout.step_start(step);
-        let to = from + layout.step;
+    /// The hits of a row's sound in a step.
+    fn hits(session: &Session, grid: &Grid<'_>, key: u8, step: usize) -> Vec<NoteId> {
+        let from = grid.layout.step_start(step);
+        let to = from + grid.layout.step;
         session
             .pattern()
             .notes
             .iter()
             .filter(|n| n.start >= from && n.start < to)
-            .filter(|n| PadSound::from_key(n.key) == Some(sound))
+            .filter(|n| row_key(grid.custom, n.key) == Some(key))
             .map(|n| n.id)
             .collect()
     }
 
     /// How hard the hit in a step plays, if there is one.
-    fn hit_velocity(
-        session: &Session,
-        sound: PadSound,
-        layout: &Layout,
-        step: usize,
-    ) -> Option<f32> {
-        let from = layout.step_start(step);
-        let to = from + layout.step;
+    fn hit_velocity(session: &Session, grid: &Grid<'_>, key: u8, step: usize) -> Option<f32> {
+        let from = grid.layout.step_start(step);
+        let to = from + grid.layout.step;
         session
             .pattern()
             .notes
             .iter()
             .filter(|n| n.start >= from && n.start < to)
-            .filter(|n| PadSound::from_key(n.key) == Some(sound))
+            .filter(|n| row_key(grid.custom, n.key) == Some(key))
             .map(|n| n.velocity)
             .reduce(f32::max)
     }
@@ -311,9 +444,10 @@ impl StepGrid {
         &mut self,
         ui: &Ui,
         response: &Response,
-        layout: &Layout,
+        grid: &Grid<'_>,
         session: &mut Session,
     ) {
+        let layout = grid.layout;
         let (pos, primary_pressed, secondary_pressed, primary_down) = ui.input(|i| {
             (
                 i.pointer.interact_pos(),
@@ -335,8 +469,8 @@ impl StepGrid {
             } else if let (Some(row), Some(step)) = (layout.row_at(pos.y), layout.step_at(pos.x))
                 && layout.grid.contains(pos)
             {
-                let sound = PAD_ORDER[row];
-                let existing = Self::hits(session, sound, layout, step);
+                let key = grid.rows[row].key;
+                let existing = Self::hits(session, grid, key, step);
                 let on = existing.is_empty();
                 session.begin_gesture(if on {
                     text::EDIT_PAINT_HITS
@@ -344,16 +478,12 @@ impl StepGrid {
                     text::EDIT_REMOVE_HIT
                 });
                 if on {
-                    session.add_hit(
-                        sound.key(),
-                        layout.step_start(step),
-                        session.keyboard_velocity(),
-                    );
-                    session.pointer_on(sound.key(), session.keyboard_velocity());
+                    session.add_hit(key, layout.step_start(step), session.keyboard_velocity());
+                    session.pointer_on(key, session.keyboard_velocity());
                 } else {
                     session.remove_notes(&existing);
                 }
-                self.chosen = sound;
+                self.chosen = key;
                 self.drag = Drag::Paint {
                     row,
                     on,
@@ -370,7 +500,7 @@ impl StepGrid {
             && let (Some(row), Some(step)) = (layout.row_at(pos.y), layout.step_at(pos.x))
             && layout.grid.contains(pos)
         {
-            let existing = Self::hits(session, PAD_ORDER[row], layout, step);
+            let existing = Self::hits(session, grid, grid.rows[row].key, step);
             session.remove_notes(&existing);
         }
         match self.drag {
@@ -378,17 +508,17 @@ impl StepGrid {
                 if let Some(step) = pos.and_then(|p| layout.step_at(p.x))
                     && step != last
                 {
-                    let sound = PAD_ORDER[row];
+                    let key = grid.rows[row].key;
                     let (low, high) = if step > last {
                         (last + 1, step)
                     } else {
                         (step, last - 1)
                     };
                     for step in low..=high {
-                        let existing = Self::hits(session, sound, layout, step);
+                        let existing = Self::hits(session, grid, key, step);
                         if on && existing.is_empty() {
                             session.add_hit(
-                                sound.key(),
+                                key,
                                 layout.step_start(step),
                                 session.keyboard_velocity(),
                             );
@@ -407,7 +537,7 @@ impl StepGrid {
                 if let Some(pos) = pos
                     && let Some(step) = layout.step_at(pos.x)
                 {
-                    let ids = Self::hits(session, self.chosen, layout, step);
+                    let ids = Self::hits(session, grid, self.chosen, step);
                     let usable = layout.strip.height() - 12.0;
                     let velocity =
                         ((layout.strip.bottom() - 6.0 - pos.y) / usable).clamp(0.01, 1.0);
@@ -451,23 +581,25 @@ impl StepGrid {
     }
 
     /// The sounds' names: click to hear and adjust.
-    fn pad_names(&mut self, ui: &Ui, session: &mut Session, layout: &Layout) {
-        for (row, &sound) in PAD_ORDER.iter().enumerate() {
+    fn pad_names(&mut self, ui: &Ui, session: &mut Session, grid: &Grid<'_>) {
+        let layout = grid.layout;
+        for (row, pad) in grid.rows.iter().enumerate() {
+            if !layout.row_visible(row) {
+                continue;
+            }
             let rect = Rect::from_min_max(
                 pos2(layout.names.left(), layout.row_y(row)),
                 pos2(layout.names.right(), layout.row_y(row) + layout.row_height),
-            );
-            if rect.bottom() > layout.names.bottom() + 0.5 {
-                break;
-            }
+            )
+            .intersect(layout.names);
             let id = ui.scope_id().with(("pad", row));
             let response = ui.interact(rect, id, Sense::click());
             response.widget_info(|| {
                 egui::WidgetInfo::selected(
                     egui::Role::Button,
                     true,
-                    self.chosen == sound,
-                    text::pad_name(sound),
+                    self.chosen == pad.key,
+                    &pad.name,
                 )
             });
             // The sound plays on the press itself, once per click (also a
@@ -475,14 +607,14 @@ impl StepGrid {
             let pressed = response.hovered()
                 && ui.input(|i| i.pointer.button_pressed(PointerButton::Primary));
             if pressed && self.drag == Drag::None {
-                session.pointer_on(sound.key(), session.keyboard_velocity());
+                session.pointer_on(pad.key, session.keyboard_velocity());
                 self.drag = Drag::Pad;
             }
             if response.clicked() {
-                self.chosen = sound;
+                self.chosen = pad.key;
                 self.settings = match self.settings {
-                    Some((open, _)) if open == sound => None,
-                    _ => Some((sound, rect.right_top())),
+                    Some((open, _)) if open == pad.key => None,
+                    _ => Some((pad.key, rect.right_top())),
                 };
             }
             response.on_hover_text(text::PAD_HINT);
@@ -490,33 +622,35 @@ impl StepGrid {
     }
 
     /// Gives every square a place in the accessibility tree.
-    fn describe_cells(ui: &Ui, session: &Session, layout: &Layout, canvas: egui::Id) {
+    fn describe_cells(ui: &Ui, session: &Session, grid: &Grid<'_>, canvas: egui::Id) {
         // Only when something reads the accessibility tree.
         if ui.ctx().accesskit_node_builder(canvas, |_| ()).is_none() {
             return;
         }
-        for (row, &sound) in PAD_ORDER.iter().enumerate() {
+        let layout = grid.layout;
+        for (row, pad) in grid.rows.iter().enumerate() {
             for step in 0..layout.steps {
                 let rect = layout.cell(row, step);
                 if !layout.grid.intersects(rect) {
                     continue;
                 }
                 let id = ui.scope_id().with(("cell", row, step));
-                let on = Self::hit_velocity(session, sound, layout, step).is_some();
+                let on = Self::hit_velocity(session, grid, pad.key, step).is_some();
                 let response = ui.interact(rect.intersect(layout.grid), id, Sense::hover());
                 response.widget_info(|| {
                     egui::WidgetInfo::selected(
                         egui::Role::CheckBox,
                         true,
                         on,
-                        text::step_cell(text::pad_name(sound), step + 1),
+                        text::step_cell(&pad.name, step + 1),
                     )
                 });
             }
         }
     }
 
-    fn paint_cells(&self, ui: &Ui, session: &Session, layout: &Layout) {
+    fn paint_cells(&self, ui: &Ui, session: &Session, grid: &Grid<'_>) {
+        let layout = grid.layout;
         let p = Palette::of(ui.ctx());
         let painter = ui.painter_at(layout.grid);
         let meter = session.pattern_meter();
@@ -526,8 +660,11 @@ impl StepGrid {
             .then(|| usize::try_from(session.position().0 / layout.step.0.max(1)).ok())
             .flatten();
         let hover = ui.input(|i| i.pointer.hover_pos());
-        for (row, &sound) in PAD_ORDER.iter().enumerate() {
-            let muted = session.pad(session.track_id(), sound.key()).muted;
+        for (row, pad) in grid.rows.iter().enumerate() {
+            if !layout.row_visible(row) {
+                continue;
+            }
+            let muted = session.pad(session.track_id(), pad.key).muted;
             for step in 0..layout.steps {
                 let cell = layout.cell(row, step);
                 if !layout.grid.intersects(cell) {
@@ -541,7 +678,7 @@ impl StepGrid {
                     p.raised_hover
                 };
                 let inner = cell.shrink2(vec2(2.0, 2.0));
-                let velocity = Self::hit_velocity(session, sound, layout, step);
+                let velocity = Self::hit_velocity(session, grid, pad.key, step);
                 match velocity {
                     Some(v) => {
                         let color = if muted { p.text_weak } else { p.accent };
@@ -593,7 +730,7 @@ impl StepGrid {
             }
         }
         // The rows of the chosen sound and of the open settings.
-        let chosen_row = PAD_ORDER.iter().position(|&s| s == self.chosen);
+        let chosen_row = grid.rows.iter().position(|r| r.key == self.chosen);
         if let Some(row) = chosen_row {
             let y = layout.row_y(row);
             let band = Rect::from_min_max(
@@ -680,7 +817,8 @@ impl StepGrid {
         );
     }
 
-    fn paint_names(&self, ui: &Ui, session: &Session, labels: &KeyLabels, layout: &Layout) {
+    fn paint_names(&self, ui: &Ui, session: &Session, labels: &KeyLabels, grid: &Grid<'_>) {
+        let layout = grid.layout;
         let p = Palette::of(ui.ctx());
         let painter = ui.painter_at(layout.names);
         painter.rect_filled(layout.names, CornerRadius::ZERO, p.surface);
@@ -690,17 +828,20 @@ impl StepGrid {
             size::BODY
         });
         let lit_color = p.accent;
-        for (row, &sound) in PAD_ORDER.iter().enumerate() {
+        for (row, pad) in grid.rows.iter().enumerate() {
+            if !layout.row_visible(row) {
+                continue;
+            }
             let y = layout.row_y(row);
             let rect = Rect::from_min_max(
                 pos2(layout.names.left(), y),
                 pos2(layout.names.right(), y + layout.row_height),
             )
             .shrink2(vec2(6.0, 1.0));
-            let setting = session.pad(session.track_id(), sound.key());
-            let lit = session.is_key_lit(sound.key());
-            let open = self.settings.is_some_and(|(s, _)| s == sound);
-            if self.chosen == sound || open {
+            let setting = session.pad(session.track_id(), pad.key);
+            let lit = session.is_key_lit(pad.key);
+            let open = self.settings.is_some_and(|(key, _)| key == pad.key);
+            if self.chosen == pad.key || open {
                 painter.rect_filled(rect, CornerRadius::same(4), p.raised);
             }
             // The computer key that plays it, in a small key cap.
@@ -708,7 +849,7 @@ impl StepGrid {
                 pos2(rect.left() + 2.0, rect.center().y - 9.0),
                 vec2(22.0, 18.0),
             );
-            if let Some(key) = computer_key(session, labels, sound.key()) {
+            if let Some(key) = computer_key(session, labels, pad.key) {
                 let fill = if lit { lit_color } else { p.background };
                 painter.rect_filled(cap, CornerRadius::same(3), fill);
                 painter.text(
@@ -723,18 +864,19 @@ impl StepGrid {
             painter.text(
                 pos2(cap.right() + 8.0, rect.center().y),
                 Align2::LEFT_CENTER,
-                text::pad_name(sound),
+                &pad.name,
                 font.clone(),
                 name_color,
             );
-            if setting != PadSetting::new(sound.key()) {
+            if setting != PadSetting::new(pad.key) {
                 // A dot: this sound was adjusted.
                 painter.circle_filled(pos2(rect.right() - 8.0, rect.center().y), 3.0, p.accent);
             }
         }
     }
 
-    fn paint_strip(&self, ui: &Ui, session: &Session, layout: &Layout) {
+    fn paint_strip(&self, ui: &Ui, session: &Session, grid: &Grid<'_>) {
+        let layout = grid.layout;
         let p = Palette::of(ui.ctx());
         let whole = Rect::from_min_max(
             pos2(layout.whole.left(), layout.strip.top() - STRIP_GAP),
@@ -758,7 +900,10 @@ impl StepGrid {
         ui.painter().text(
             pos2(label.left() + 10.0, label.center().y + 9.0),
             Align2::LEFT_CENTER,
-            text::pad_name(self.chosen),
+            grid.rows
+                .iter()
+                .find(|r| r.key == self.chosen)
+                .map_or("", |r| r.name.as_str()),
             FontId::proportional(size::BODY),
             p.text,
         );
@@ -767,7 +912,7 @@ impl StepGrid {
         painter.rect_filled(strip.shrink2(vec2(0.0, 2.0)), CornerRadius::ZERO, p.grid);
         let usable = strip.height() - 12.0;
         for step in 0..layout.steps {
-            let Some(velocity) = Self::hit_velocity(session, self.chosen, layout, step) else {
+            let Some(velocity) = Self::hit_velocity(session, grid, self.chosen, step) else {
                 continue;
             };
             let x0 = layout.step_x(step) + 4.0;
@@ -780,11 +925,32 @@ impl StepGrid {
         response.on_hover_text(text::LOUDNESS_HINT);
     }
 
-    fn paint_hint(&self, ui: &Ui, session: &Session, labels: &KeyLabels, layout: &Layout) {
+    fn paint_hint(&self, ui: &Ui, session: &Session, labels: &KeyLabels, grid: &Grid<'_>) {
+        let layout = grid.layout;
+        let p = Palette::of(ui.ctx());
+        // A custom kit with no sounds yet says how to add some.
+        if grid.custom && grid.rows.is_empty() {
+            let painter = ui.painter_at(layout.whole);
+            let middle = layout.whole.center();
+            painter.text(
+                middle - vec2(0.0, 12.0),
+                Align2::CENTER_CENTER,
+                text::EMPTY_KIT_HINT,
+                FontId::proportional(size::BODY),
+                p.text_weak,
+            );
+            painter.text(
+                middle + vec2(0.0, 12.0),
+                Align2::CENTER_CENTER,
+                text::EMPTY_KIT_DETAIL,
+                FontId::proportional(size::SMALL),
+                p.text_weak.gamma_multiply(0.8),
+            );
+            return;
+        }
         if !session.pattern().notes.is_empty() || self.is_dragging() || session.is_recording() {
             return;
         }
-        let p = Palette::of(ui.ctx());
         // In the loudness strip, which is empty until there are hits.
         let below = layout.strip.center();
         let painter = ui.painter_at(layout.strip);
@@ -796,28 +962,45 @@ impl StepGrid {
             FontId::proportional(size::BODY),
             p.text_weak,
         );
-        painter.text(
-            below + vec2(0.0, 10.0),
-            Align2::CENTER_CENTER,
-            text::beat_keys_hint(
+        let keys = match grid.rows.first() {
+            Some(first) if grid.custom => text::kit_keys_hint(
+                &computer_key(session, labels, first.key).unwrap_or_default(),
+                &first.name,
+            ),
+            _ => text::beat_keys_hint(
                 &name(PadSound::Kick),
                 &name(PadSound::Snare),
                 &name(PadSound::ClosedHat),
             ),
+        };
+        painter.text(
+            below + vec2(0.0, 10.0),
+            Align2::CENTER_CENTER,
+            keys,
             FontId::proportional(size::SMALL),
             p.text_weak.gamma_multiply(0.8),
         );
     }
 
     /// The settings of the sound whose name was clicked, in a small panel.
-    fn pad_settings(&mut self, ui: &Ui, session: &mut Session) {
-        let Some((sound, anchor)) = self.settings else {
+    fn pad_settings(&mut self, ui: &Ui, session: &mut Session, grid: &Grid<'_>) {
+        let Some((key, anchor)) = self.settings else {
+            return;
+        };
+        let Some(name) = grid
+            .rows
+            .iter()
+            .find(|r| r.key == key)
+            .map(|r| r.name.clone())
+        else {
+            self.settings = None; // Its pad was removed.
             return;
         };
         let track = session.track_id();
-        let mut setting = session.pad(track, sound.key());
+        let mut setting = session.pad(track, key);
         let before = setting;
         let mut close = false;
+        let mut remove = false;
         let mut gesture = Gesture::default();
         let area = egui::Area::new(ui.scope_id().with("pad-settings"))
             .order(egui::Order::Foreground)
@@ -828,7 +1011,7 @@ impl StepGrid {
                     .show(ui, |ui| {
                         ui.set_width(260.0);
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(text::pad_name(sound)).strong());
+                            ui.label(RichText::new(&name).strong());
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
@@ -839,35 +1022,7 @@ impl StepGrid {
                             );
                         });
                         ui.add_space(4.0);
-                        egui::Grid::new("pad-sliders")
-                            .num_columns(2)
-                            .spacing([10.0, 6.0])
-                            .show(ui, |ui| {
-                                let sliders: [Slider<'_>; 4] = [
-                                    (
-                                        text::PAD_VOLUME,
-                                        &mut setting.gain_db,
-                                        -30.0..=12.0,
-                                        text::db,
-                                    ),
-                                    (text::PAD_PAN, &mut setting.pan, -1.0..=1.0, text::pan),
-                                    (
-                                        text::PAD_TUNE,
-                                        &mut setting.tune,
-                                        -12.0..=12.0,
-                                        text::semitones,
-                                    ),
-                                    (
-                                        text::PAD_LENGTH,
-                                        &mut setting.length,
-                                        0.05..=1.0,
-                                        text::percent,
-                                    ),
-                                ];
-                                for (label, value, range, format) in sliders {
-                                    gesture.add(&pad_slider(ui, label, value, range, format));
-                                }
-                            });
+                        pad_sliders(ui, &mut setting, &mut gesture);
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.checkbox(&mut setting.muted, text::PAD_MUTED);
@@ -875,11 +1030,21 @@ impl StepGrid {
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     if ui.small_button(text::RESET_SOUND).clicked() {
-                                        setting = PadSetting::new(sound.key());
+                                        setting = PadSetting::new(key);
                                     }
                                 },
                             );
                         });
+                        if grid.custom {
+                            ui.add_space(6.0);
+                            if ui
+                                .button(text::REMOVE_PAD)
+                                .on_hover_text(text::REMOVE_PAD_HINT)
+                                .clicked()
+                            {
+                                remove = true;
+                            }
+                        }
                     });
             });
         if gesture.started {
@@ -891,6 +1056,11 @@ impl StepGrid {
         if gesture.stopped {
             session.end_gesture();
         }
+        if remove {
+            session.remove_kit_pad(track, key);
+            self.settings = None;
+            return;
+        }
         let clicked_elsewhere = ui.input(|i| i.pointer.any_pressed())
             && !area.response.contains_pointer()
             && ui
@@ -900,6 +1070,39 @@ impl StepGrid {
             self.settings = None;
         }
     }
+}
+
+/// A pad's volume, position, pitch and length sliders.
+fn pad_sliders(ui: &mut Ui, setting: &mut PadSetting, gesture: &mut Gesture) {
+    egui::Grid::new("pad-sliders")
+        .num_columns(2)
+        .spacing([10.0, 6.0])
+        .show(ui, |ui| {
+            let sliders: [Slider<'_>; 4] = [
+                (
+                    text::PAD_VOLUME,
+                    &mut setting.gain_db,
+                    -30.0..=12.0,
+                    text::db,
+                ),
+                (text::PAD_PAN, &mut setting.pan, -1.0..=1.0, text::pan),
+                (
+                    text::PAD_TUNE,
+                    &mut setting.tune,
+                    -12.0..=12.0,
+                    text::semitones,
+                ),
+                (
+                    text::PAD_LENGTH,
+                    &mut setting.length,
+                    0.05..=1.0,
+                    text::percent,
+                ),
+            ];
+            for (label, value, range, format) in sliders {
+                gesture.add(&pad_slider(ui, label, value, range, format));
+            }
+        });
 }
 
 /// A pad setting's slider: label, value, range and how the value reads.

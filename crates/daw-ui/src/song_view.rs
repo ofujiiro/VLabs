@@ -1813,6 +1813,7 @@ impl SongView {
             Instrument::Plugin(setup) => text::plugin_track(&setup.plugin.name, missing),
             Instrument::Audio => text::AUDIO_TRACK_KIND.to_owned(),
             Instrument::Synth(settings) => text::synth_description(settings),
+            Instrument::Kit { pads } => text::custom_kit_description(pads.len()),
             Instrument::Sfz { file } => text::sfz_track(
                 &std::path::Path::new(file)
                     .file_name()

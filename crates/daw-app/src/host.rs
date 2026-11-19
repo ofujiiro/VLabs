@@ -122,6 +122,25 @@ impl Host for DialogHost {
         files
     }
 
+    fn choose_kit_sounds(&mut self) -> Vec<PathBuf> {
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter(
+                text::SOUND_FILE_TYPE,
+                &[
+                    "wav", "wave", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "oga",
+                ],
+            )
+            .set_title(text::CHOOSE_KIT_SOUNDS_TITLE);
+        if let Some(folder) = self.sounds.as_ref().or(self.folder.as_ref()) {
+            dialog = dialog.set_directory(folder);
+        }
+        let files = dialog.pick_files().unwrap_or_default();
+        if let Some(folder) = files.first().and_then(|f| f.parent()) {
+            self.sounds = Some(folder.to_path_buf());
+        }
+        files
+    }
+
     fn choose_plugin_files(&mut self) -> Vec<PathBuf> {
         let mut dialog = rfd::FileDialog::new()
             .add_filter(
