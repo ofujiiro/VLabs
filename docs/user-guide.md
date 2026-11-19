@@ -208,6 +208,36 @@ it while you play the computer keyboard:
 Any of the synth's knobs can change over the song with an automation lane
 (below): a filter that opens over eight bars is the classic one.
 
+## Singing
+
+A voice track sings its notes' lyrics with a voicebank you add: a classic
+UTAU voicebank (a folder of recordings with an `oto.ini`, often shared as a
+`.zip`).
+
+1. Open the menu and choose **Voicebanks…**, then **Add a folder…** or
+   **Add a .zip…**. The voicebank is copied into the program's own folder;
+   its creator's terms are shown: read them, as they say what you may do
+   with the voice. **Remove this voicebank** takes it out again.
+2. **+ Instrument…** now lists your voicebanks under **Voices**: choose one
+   to add a voice track.
+3. Write a melody in its piano roll. Each note shows its lyric (a new note
+   sings "a"). Select a note and press <kbd>Enter</kbd> (or double-click
+   it) to type its lyric; words after a space go to the next notes, so
+   "ka sa ne" fills three notes at once. <kbd>Enter</kbd> keeps what you
+   typed, <kbd>Tab</kbd> keeps it and moves to the next note,
+   <kbd>Escape</kbd> leaves the lyric as it was. A lyric the voicebank has
+   no recording for is marked with a **?** and sung as "a". The lyric `R`
+   is a rest.
+4. Play: the voice is rendered in the background (the status line says
+   "Rendering the voice…" meanwhile; a part not ready yet is silent), then
+   sings with the song, through the mixer and its effects, and into exports.
+
+Japanese lyrics can be typed in romaji (`ka`, `shi`, `kyo`) or in kana.
+Kana show in the piano roll when your computer has a Japanese font
+(Windows has one; on Linux, install the Noto CJK fonts); otherwise they are
+shown in romaji. VCV voicebanks get the syllable sung after the previous
+note's vowel ("a か") automatically, CV voicebanks the syllable alone.
+
 ## Recording
 
 **Notes**: press <kbd>Ctrl+R</kbd> (or the red button) with a piano or synth

@@ -179,6 +179,19 @@ These come from the brief; tests and CI enforce most of them.
   releases in one frame; the fixture's `click` and `drag` take several
   frames, as a person does. Test panels and menus with both: a press that
   closes a panel before the release only shows up the slow way.
+- **Dialogs that change size settle for a few frames** (they re-centre):
+  a click sent while one settles is lost, whether through the
+  accessibility tree or the pointer. After a dialog grows (more rows, a
+  panel of terms appearing), run several frames (`run_steps(8)`) before
+  clicking inside it.
+- **Singing (decision 0027):** tests make their own voicebanks (WAV files
+  written by the test and an `oto.ini`); give them plain-letter aliases
+  when the interface draws them (our fonts have no kana). Synthetic voices
+  must be rich in harmonics (a vowel of many harmonics under formants):
+  a near-pure sine is shifted badly by pitch-synchronous overlap-add and
+  measures wrong. The project file extension is a word the identity rule
+  refuses anywhere in Rust code, and it is also Kasane Teto's name: use
+  other names in code and tests.
 - **Panels and popups:** give an `egui::Area` panel fixed column widths and
   no separators that stretch across it. A widget that takes "all the room
   there is" grows the panel to the window's edge, the window nudges it

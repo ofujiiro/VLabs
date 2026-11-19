@@ -134,6 +134,14 @@ from the note before over about 80 ms; pitch curves come in 7b.
   resampler, joining notes), lyric lookup in `daw-model` (kana and
   romaji), a voice renderer in `daw-engine` beside the SFZ loader, the
   Voicebanks window and lyric typing in `daw-ui`.
+- Japanese text (kana lyrics, voicebank names, terms) needs a font our
+  bundled Go fonts lack, and the fonts that have it are under licences the
+  policy refuses (decision 0005: the OFL among them). So none is bundled:
+  the program uses a Japanese font the computer already has (Yu Gothic,
+  Meiryo or MS Gothic on Windows; Noto CJK, IPA or Droid fonts on Linux)
+  as a fallback after its own, and without one shows lyrics in romaji.
+- In the instrument chooser, Voices are listed once a voicebank is
+  installed; until then "Voicebanks…" beside "Plugins…" is the way in.
 - Tested without ears: synthetic voicebanks made by the tests (vowels at
   known pitches), rendered offline: the sung pitch, where each syllable
   lands, the crossfades, no clicks between notes.

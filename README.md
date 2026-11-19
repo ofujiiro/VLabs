@@ -12,10 +12,11 @@ It works on a plain computer: built-in speakers or headphones, a mouse or
 trackpad and a typing keyboard. A MIDI keyboard or an audio interface is used
 automatically when you plug one in, but nothing extra is ever required.
 
-Later, after the first full version: singing voices, in the spirit of
-OpenUtau. Notes with lyrics sung by open voicebanks you install (classic
-UTAU voicebanks such as Kasane Teto's, and DiffSinger and ENUNU voices),
-managed and tuned inside VLabs (see [ROADMAP.md](ROADMAP.md)).
+After the first full version: singing voices, in the spirit of OpenUtau.
+The first part is built: notes with lyrics sung by classic UTAU voicebanks
+you install (such as Kasane Teto's), managed inside VLabs. Expression
+(pitch curves, vibrato), UST and USTX projects, and DiffSinger voices come
+next (see [ROADMAP.md](ROADMAP.md)).
 
 ## Status
 
@@ -36,7 +37,8 @@ keyboard or a MIDI keyboard, record notes with a metronome and count-in,
 undo anything, save and open songs (their sound inside the song file).
 Give the song a key and the piano roll shows its notes, keeps new notes in
 it and places whole chords with one click; transpose by intervals; change
-the tempo (suddenly or gradually) and the time signature anywhere; write
+the tempo (suddenly, or gradually with the shape of the change you want)
+and the time signature anywhere; write
 triplets, quintuplets and septuplets; swing a pattern. Your work is saved
 automatically, even a recording in progress, and offered back after a
 crash. Add plugins by dropping a downloaded `.vst3`, `.clap` or `.zip` on
@@ -45,7 +47,8 @@ set up through Wine and yabridge), browse and hear folders of samples in
 the sound library and drag them into the song, and play SoundFont (`.sf2`)
 and SFZ (`.sfz`) instruments, however large (SFZ instruments are read in
 the background). Make a drum kit of your own sounds (a custom kit) and build
-beats with it on the step grid. A Windows installer and a Linux AppImage are built for each
+beats with it on the step grid. Add classic UTAU voicebanks and give notes
+lyrics: a voice track sings them. A Windows installer and a Linux AppImage are built for each
 milestone, with a user guide (F1 in the program, or
 [docs/user-guide.md](docs/user-guide.md)). See [ROADMAP.md](ROADMAP.md) for
 what to try and what comes next.

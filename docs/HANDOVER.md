@@ -131,11 +131,31 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   interface tests; and the program on the virtual screen (the song view's
   bent glide, the piano roll's tempo lane, the glide's panel).
 
+- Singing voices, milestone 7a (decision 0027), on branch `singing-voices`
+  (stacked on `expressive-tempo`, not merged): `daw_model::lyrics` (kana,
+  romaji, VCV/CV alias candidates), `Pattern::lyrics` and
+  `Instrument::Voice` (file format 9), `daw_formats::utau` (reading and
+  installing voicebanks, Shift-JIS via `encoding_rs`), `daw_dsp::voice`
+  (YIN pitch, pitch marks, TD-PSOLA resampler, UTAU-style joins),
+  `daw_engine::voices` (background reading and phrase rendering, played as
+  audio spans; a live "a" preview sampler), `daw-ui::voicebanks` (the
+  Voicebanks window), lyric typing and marks in the piano roll, Voices in
+  the instrument chooser, a system Japanese font as fallback
+  (`theme::use_fallback_font`). Checked: `cargo xtask ci`; DSP tests
+  (pitch found, shifts up and down an octave within 1.5 %, levels, no
+  clicks, notes on their beats), voicebank tests (folder and Shift-JIS zip,
+  terms, aliases, sung pitches), an offline engine render, interface tests
+  (lyrics typed across notes, the Voicebanks window); and the real program:
+  the piano roll with lyrics and a "?" mark, and the song played through a
+  virtual sound card, each note measured at its pitch (329, 393, 440 and
+  390 Hz against 330, 392, 440 and 392).
+
 ## Next
 
-- Open the pull request for `expressive-tempo`, and its hands-on check
-  (ROADMAP.md, "Expressive tempo", "Things to try").
-- The singing voices (ROADMAP.md).
+- Open the pull requests for `expressive-tempo`, then `singing-voices`,
+  and their hands-on checks (ROADMAP.md, "Expressive tempo" and "7a").
+- Singing voices 7b: pitch curves and vibrato over the notes, envelopes,
+  flags, perhaps a WORLD-style vocoder (decision 0027).
   Possible SFZ follow-ups: LFOs and pitch envelopes, streaming very large
   instruments from the disk, previews in the library.
 

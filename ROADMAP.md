@@ -11,8 +11,10 @@ merged in pull request 7. The owner has tried every milestone build and
 the plugins round (November 2026): everything works, which closes v1.
 A new or opened song now starts on the whole song, not an instrument
 (the owner's request). Glides now have shapes, and the tempo shows under
-the piano roll too (decision 0026, on branch `expressive-tempo`). Next:
-the singing voices. The repository has been public since November 2026
+the piano roll too (decision 0026, on branch `expressive-tempo`). Singing
+voices have begun: milestone 7a, a first voice sung from classic UTAU
+voicebanks, is built (decision 0027, on branch `singing-voices`). Next:
+7b, expression (pitch curves, vibrato). The repository has been public since November 2026
 (the owner's decision).
 
 ## Phase 0 — Foundations and risk spikes
@@ -673,8 +675,66 @@ them and brings the tempo to the piano roll.
 
 Sing from the piano roll: give notes lyrics and have a voicebank sing
 them, with the voice managed and tuned inside VLabs, in the spirit of
-OpenUtau (MIT-licensed, the open successor of UTAU). Not started; planned
-for after v1.
+OpenUtau (MIT-licensed, the open successor of UTAU). Designed in decision
+0027 as four milestones; **7a, a first voice, is built** (branch
+`singing-voices`, on top of `expressive-tempo`).
+
+### 7a. A first voice (built)
+
+- [x] Classic UTAU voicebanks added from a folder or a `.zip` (Japanese
+      file names in Shift-JIS handled) into the program's own folder, in a
+      **Voicebanks** window that shows each one's name, author and its
+      creator's terms, and removes it
+- [x] `oto.ini` (in the voicebank's folder and its subfolders),
+      `prefix.map`, `character.txt` and the readme, in UTF-8 or Shift-JIS
+- [x] Voice tracks from **+ Instrument…** › **Voices**; file format
+      version 9 (a voice instrument, lyrics kept beside the notes)
+- [x] Lyrics on notes in the piano roll: Enter or a double-click types
+      one, words after a space go to the next notes, Tab moves on; a lyric
+      the voicebank lacks is marked "?" and sung as "a"; `R` is a rest
+- [x] Japanese lyrics in romaji or kana; VCV ("a か", "- か" at a phrase
+      start), then CV, then romaji names, with `prefix.map` affixes
+- [x] Our own renderer: each syllable shifted and stretched by
+      pitch-synchronous overlap-add (formants kept), joined with UTAU's
+      preutterance and overlap, a glide of 80 ms between notes; rendered
+      phrase by phrase in the background, only what changed rendered
+      again, played like an audio clip (mixer, effects, export)
+- [x] Played live, a voice sounds its "a" at the key's pitch at once
+- [x] Japanese text drawn with a Japanese font of the computer when it
+      has one (none is bundled), otherwise lyrics in romaji
+
+### 7a: things to try
+
+1. Download a classic UTAU voicebank (a Kasane Teto voicebank, say, from
+   its official site; read its terms). Open the menu, **Voicebanks…**,
+   **Add a .zip…** (or **Add a folder…** for one already unpacked): it is
+   listed with its terms.
+2. **+ Instrument…**: the voicebank is under **Voices**. Choose it.
+3. Open the voice track's pattern and click a short melody of four notes.
+   Select the first, press Enter, type `ka sa ne te` and press Enter: the
+   notes show their lyrics.
+4. Play. The first time, the status line says the voice is being rendered
+   for a moment; then it sings. Change a note's pitch or lyric and play
+   again: only that phrase is rendered again.
+5. Save, close and open the song: the voice and its lyrics come back.
+
+### 7a: known gaps
+
+- No pitch curves, vibrato, envelopes or flags yet (7b); the glide
+  between notes is fixed. The sound is UTAU-like, without its resampler
+  flags; large shifts (an octave or more from where a syllable was
+  recorded) sound buzzier.
+- No UST or USTX import or export yet (7c); DAWproject keeps the voice
+  track (without lyrics), MIDI files keep the notes.
+- No DiffSinger or ENUNU voices yet (7d); no English or other languages'
+  phonemizers yet.
+- Copying and pasting notes does not carry their lyrics yet.
+- Not heard by ear: the singing was measured (pitch, timing, no clicks)
+  with synthetic voices made by the tests, not listened to, and not tried
+  with a real voicebank here (none can be downloaded in the development
+  container).
+
+### Later milestones (decision 0027)
 
 - **Voicebanks the person installs**, in the open formats that matter
   most: classic UTAU voicebanks (WAV recordings with `oto.ini` timing, in
