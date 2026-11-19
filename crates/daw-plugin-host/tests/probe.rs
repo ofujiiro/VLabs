@@ -162,9 +162,22 @@ fn reported_plugins_are_loaded_and_played() {
             listen(&mut plugin, &mut clock, "at once");
             wait(&mut plugin, 4.0, &mut clock);
             listen(&mut plugin, &mut clock, "after 4 s");
-            if plugin.handle.has_editor() {
+            // Asking a VST3 plugin whether it has an editor makes one: how
+            // long that takes shows how costly it would be to ask often.
+            let asked = Instant::now();
+            let has_editor = plugin.handle.has_editor();
+            eprintln!(
+                "  has an editor: {has_editor} (asked in {:.0} ms)",
+                asked.elapsed().as_secs_f64() * 1000.0
+            );
+            if has_editor {
+                let opening = Instant::now();
                 match plugin.handle.open_editor(&info.name) {
                     Ok(()) => {
+                        eprintln!(
+                            "  window opened in {:.0} ms",
+                            opening.elapsed().as_secs_f64() * 1000.0
+                        );
                         // Time to click through what the window asks first
                         // (VLABS_PROBE_HOLD seconds), as a person does.
                         let hold = std::env::var("VLABS_PROBE_HOLD")
