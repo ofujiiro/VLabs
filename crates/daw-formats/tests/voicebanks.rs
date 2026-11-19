@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use daw_dsp::voice::{SungNote, VoiceSample, key_hz, sing_phrase};
 use daw_formats::utau;
+use daw_model::expression::{CurveNote, PhrasePitch};
 use daw_model::lyrics::alias_candidates;
 
 const RATE: u32 = 22_050;
@@ -190,10 +191,25 @@ fn a_voicebank_is_added_read_and_sings() {
     // It sings them at the notes' pitches.
     let sample: Arc<VoiceSample> = bank.sample(&first.file).unwrap();
     let notes = [
-        SungNote::new(Arc::clone(&sample), first, 1.0, 0.5, 60.0),
-        SungNote::new(bank.sample(&second.file).unwrap(), second, 1.5, 0.5, 64.0),
+        SungNote::new(Arc::clone(&sample), first, 1.0, 0.5),
+        SungNote::new(bank.sample(&second.file).unwrap(), second, 1.5, 0.5),
     ];
-    let phrase = sing_phrase(&notes, 48_000);
+    // At the pitch the model works out for those notes (decision 0028).
+    let curve = PhrasePitch::new(&[
+        CurveNote {
+            start: 1.0,
+            end: 1.5,
+            key: 60,
+            expression: None,
+        },
+        CurveNote {
+            start: 1.5,
+            end: 2.0,
+            key: 64,
+            expression: None,
+        },
+    ]);
+    let phrase = sing_phrase(&notes, |t| curve.at(t), 48_000);
     let sung = VoiceSample::new(48_000, phrase.samples.clone());
     for (start, key) in [(1.0, 60.0), (1.5, 64.0)] {
         let from = start + 0.15 - phrase.start;

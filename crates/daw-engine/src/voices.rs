@@ -9,6 +9,11 @@
 //!
 //! Voicebanks are read in the background the first time a track needs
 //! one; until then (and while its phrases render) the track is silent.
+//!
+//! Each note is sung as its expression says (decision 0028): the phrase's
+//! pitch comes from `daw_model::expression`, the same arithmetic the piano
+//! roll draws with; velocity sets its loudness, colour and breath its
+//! sound.
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -18,7 +23,8 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use daw_dsp::audio::AudioBuffer;
-use daw_dsp::voice::{OtoEntry, SungNote, VoiceBank, sing_phrase};
+use daw_dsp::voice::{Colour, OtoEntry, SungNote, VoiceBank, sing_phrase};
+use daw_model::expression::{CurveNote, NoteExpression, PhrasePitch, Timed, sung_gain};
 use daw_model::lyrics::{DEFAULT_LYRIC, alias_candidates, is_rest};
 use daw_model::{Project, Track};
 
@@ -26,9 +32,6 @@ use crate::program::AudioSpan;
 
 /// Reads a voicebank, by the name of its folder among the installed ones.
 pub type VoiceReader = Arc<dyn Fn(&str) -> Result<VoiceBank, String> + Send + Sync>;
-
-/// A rest at least this long (seconds) starts a new phrase.
-const PHRASE_GAP: f64 = 0.05;
 
 type BankLoad = Arc<OnceLock<Result<Arc<VoiceBank>, String>>>;
 
@@ -50,6 +53,8 @@ struct JobNote {
     start: f64,
     length: f64,
     key: u8,
+    velocity: f32,
+    expression: NoteExpression,
 }
 
 /// A phrase to render.
@@ -293,76 +298,62 @@ fn span(start: i64, sound: Arc<AudioBuffer>) -> AudioSpan {
     }
 }
 
-/// A note as the voice sings it: in seconds of the song, with its lyric.
+/// What a sung note brings besides its time and key.
 #[derive(Clone, Debug, PartialEq)]
 struct Sung {
-    start: f64,
-    end: f64,
-    key: u8,
     lyric: String,
+    velocity: f32,
+    expression: NoteExpression,
 }
 
-/// The notes a voice track sings, one at a time (a note starting before
-/// the one before ends cuts it short), in phrases.
-fn phrases(project: &Project, track: &Track) -> Vec<Vec<Sung>> {
-    let mut sung: Vec<Sung> = track
+/// The notes a voice track sings, one at a time, in phrases (the model's
+/// rule, which the piano roll follows too).
+fn phrases(project: &Project, track: &Track) -> Vec<Vec<Timed<Sung>>> {
+    let sung: Vec<Timed<Sung>> = track
         .clips
         .iter()
         .filter_map(|clip| Some((clip, project.pattern(clip.pattern()?)?)))
         .flat_map(|(clip, pattern)| {
             pattern.played_in(clip).into_iter().map(move |note| {
                 let lyric = pattern.lyric(note.note).unwrap_or(DEFAULT_LYRIC);
-                (note, lyric.to_owned())
+                let expression = pattern.expression(note.note).cloned();
+                (note, lyric.to_owned(), expression.unwrap_or_default())
             })
         })
-        .filter(|(_, lyric)| !is_rest(lyric))
-        .map(|(note, lyric)| Sung {
+        .filter(|(_, lyric, _)| !is_rest(lyric))
+        .map(|(note, lyric, expression)| Timed {
             start: project.tempo.seconds_at(note.start),
             end: project.tempo.seconds_at(note.end),
             key: note.key,
-            lyric,
+            data: Sung {
+                lyric,
+                velocity: note.velocity,
+                expression,
+            },
         })
         .collect();
-    sung.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.key.cmp(&b.key)));
-    for i in 1..sung.len() {
-        if sung[i].start < sung[i - 1].end {
-            sung[i - 1].end = sung[i].start;
-        }
-    }
-    sung.retain(|n| n.end > n.start);
-    let mut phrases: Vec<Vec<Sung>> = Vec::new();
-    for note in sung {
-        match phrases.last_mut() {
-            Some(phrase)
-                if phrase
-                    .last()
-                    .is_some_and(|last| note.start - last.end < PHRASE_GAP) =>
-            {
-                phrase.push(note);
-            }
-            _ => phrases.push(vec![note]),
-        }
-    }
-    phrases
+    daw_model::expression::phrases(sung)
 }
 
 /// The recordings a phrase's notes sing: each lyric looked up after the
 /// one before (VCV, then CV); a lyric the voicebank lacks sings "a", and a
 /// note neither can be found for is left out.
-fn sung_notes(bank: &VoiceBank, phrase: &[Sung]) -> Vec<JobNote> {
+fn sung_notes(bank: &VoiceBank, phrase: &[Timed<Sung>]) -> Vec<JobNote> {
     phrase
         .iter()
         .enumerate()
         .filter_map(|(i, note)| {
-            let previous = i.checked_sub(1).map(|j| phrase[j].lyric.as_str());
+            let previous = i.checked_sub(1).map(|j| phrase[j].data.lyric.as_str());
             let entry = bank
-                .find(&alias_candidates(&note.lyric, previous), note.key)
+                .find(&alias_candidates(&note.data.lyric, previous), note.key)
                 .or_else(|| bank.find(&alias_candidates(DEFAULT_LYRIC, previous), note.key))?;
             Some(JobNote {
                 entry: entry.clone(),
                 start: note.start,
                 length: note.end - note.start,
                 key: note.key,
+                velocity: note.data.velocity,
+                expression: note.data.expression.clone(),
             })
         })
         .collect()
@@ -388,31 +379,65 @@ fn phrase_key(voicebank: &str, rate: u32, notes: &[JobNote]) -> u64 {
             value.to_bits().hash(&mut hasher);
         }
         note.key.hash(&mut hasher);
+        note.velocity.to_bits().hash(&mut hasher);
+        hash_expression(&note.expression, &mut hasher);
     }
     hasher.finish()
+}
+
+/// Everything in a note's expression that shapes its sound (decision 0028).
+fn hash_expression(expression: &NoteExpression, hasher: &mut DefaultHasher) {
+    expression.pitch.len().hash(hasher);
+    for point in &expression.pitch {
+        point.ms.to_bits().hash(hasher);
+        point.cents.to_bits().hash(hasher);
+        point.shape.hash(hasher);
+    }
+    if let Some(vibrato) = expression.vibrato {
+        for value in [vibrato.depth, vibrato.rate, vibrato.start, vibrato.fade_in] {
+            value.to_bits().hash(hasher);
+        }
+    } else {
+        0_u8.hash(hasher);
+    }
+    expression.colour.to_bits().hash(hasher);
+    expression.breath.to_bits().hash(hasher);
 }
 
 /// Renders a phrase (on the worker thread, or at once offline).
 fn render(job: &Job) -> Phrase {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // The phrase's pitch, from every note of it (decision 0028).
+        let curve: Vec<CurveNote<'_>> = job
+            .notes
+            .iter()
+            .map(|note| CurveNote {
+                start: note.start,
+                end: note.start + note.length,
+                key: note.key,
+                expression: Some(&note.expression),
+            })
+            .collect();
+        let pitch = PhrasePitch::new(&curve);
         let notes: Vec<SungNote> = job
             .notes
             .iter()
             .filter_map(|note| {
                 let sample = job.bank.sample(&note.entry.file).ok()?;
-                Some(SungNote::new(
-                    sample,
-                    &note.entry,
-                    note.start,
-                    note.length,
-                    f64::from(note.key),
-                ))
+                let mut sung = SungNote::new(sample, &note.entry, note.start, note.length);
+                sung.gain = sung_gain(note.velocity);
+                sung.colour = Colour {
+                    formant: note.expression.formant_ratio(),
+                    breath: note.expression.breath,
+                    seed: note.start.to_bits() ^ u64::from(note.key),
+                };
+                Some(sung)
             })
             .collect();
         if notes.is_empty() {
             return Phrase::Silent;
         }
-        let phrase = sing_phrase(&notes, job.rate);
+        let phrase = sing_phrase(&notes, |t| pitch.at(t), job.rate);
         #[allow(
             clippy::cast_possible_truncation,
             reason = "song positions in frames are far below 2^63"

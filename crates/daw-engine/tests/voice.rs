@@ -5,7 +5,8 @@
 //! "- あ", "あ", "a か" and "か". The song is rendered offline (the
 //! renderer works at once there) and each sung note is measured: present,
 //! on its beat, at its pitch. A song naming a voicebank that is not
-//! installed stays silent and says so.
+//! installed stays silent and says so. Expression (decision 0028): a
+//! vibrato swings, a soft note is quieter, and an edit renders again.
 
 #![allow(
     clippy::unwrap_used,
@@ -20,6 +21,7 @@ use std::sync::Arc;
 
 use daw_dsp::voice::{OtoEntry, VoiceBank, VoiceSample, key_hz};
 use daw_engine::{EngineConfig, SoundLibrary, render_offline};
+use daw_model::expression::{NoteExpression, Vibrato};
 use daw_model::{DEFAULT_VELOCITY, Instrument, Note, NoteId, Project, Ticks};
 
 const RATE: u32 = 48_000;
@@ -150,4 +152,77 @@ fn a_voice_track_sings_its_notes_on_their_beats_at_their_pitches() {
 fn a_voicebank_that_is_not_installed_leaves_its_track_silent() {
     let (left, _) = render_offline(&song("Somebody else's"), library(), config(), 2.0);
     assert!(rms(&left) < 1e-6);
+}
+
+/// The pitch every 10 ms between two times of a rendering, in cents from
+/// `key`.
+fn cents_from(samples: &[f32], key: f64, from: f64, to: f64) -> Vec<f64> {
+    let analysed = VoiceSample::new(RATE, samples.to_vec());
+    let mut trace = Vec::new();
+    let mut t = from;
+    while t < to {
+        if let Some(hz) = analysed.pitch_between(t - 0.01, t + 0.01) {
+            trace.push(1200.0 * (hz / key_hz(key)).log2());
+        }
+        t += 0.01;
+    }
+    trace
+}
+
+#[test]
+fn a_voice_track_sings_as_each_note_s_expression_says() {
+    // One library for both renders: its phrases are kept between them.
+    let library = library();
+    let plain = song("Test voice");
+    let (before, _) = render_offline(&plain, library.clone(), config(), 2.5);
+    // The second note (E4, from 1 s) swings; the third (G4) is sung soft.
+    let mut shaped = plain.clone();
+    let voice = shaped
+        .tracks
+        .iter()
+        .find(|t| t.instrument.voicebank().is_some())
+        .unwrap();
+    let pattern = voice.clips[0].pattern().unwrap();
+    let ids: Vec<NoteId> = shaped
+        .pattern(pattern)
+        .unwrap()
+        .notes
+        .iter()
+        .map(|n| n.id)
+        .collect();
+    shaped.set_expressions(
+        pattern,
+        &[(
+            ids[1],
+            NoteExpression {
+                vibrato: Some(Vibrato {
+                    depth: 60.0,
+                    rate: 6.0,
+                    start: 0.05,
+                    fade_in: 0.0,
+                }),
+                ..NoteExpression::default()
+            },
+        )],
+    );
+    shaped.update_notes(pattern, &[ids[2]], |n| n.velocity = DEFAULT_VELOCITY / 2.0);
+    let (after, _) = render_offline(&shaped, library.clone(), config(), 2.5);
+    // The first note is sung as before.
+    assert_eq!(
+        before[frames(0.62)..frames(0.92)],
+        after[frames(0.62)..frames(0.92)]
+    );
+    // The second swings: before, it held its pitch.
+    let still = cents_from(&before, 64.0, 1.12, 1.36);
+    let swinging = cents_from(&after, 64.0, 1.12, 1.36);
+    let widest = |trace: &[f64]| trace.iter().map(|c| c.abs()).fold(0.0, f64::max);
+    assert!(widest(&still) < 15.0, "held: {still:?}");
+    assert!(widest(&swinging) > 35.0, "swings: {swinging:?}");
+    assert!(
+        swinging.iter().any(|&c| c > 25.0) && swinging.iter().any(|&c| c < -25.0),
+        "both ways: {swinging:?}"
+    );
+    // The third, at half the velocity, sings at a quarter of the level.
+    let level = rms(&after[frames(1.62)..frames(1.92)]) / rms(&before[frames(1.62)..frames(1.92)]);
+    assert!((level - 0.25).abs() < 0.03, "{level}");
 }

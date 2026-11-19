@@ -7,6 +7,12 @@
 //! wavtool joins them: each syllable starts its *preutterance* before its
 //! note and fades in over the note before for its *overlap*.
 //!
+//! Decision 0028 adds expression: the pitch a phrase is sung at comes from
+//! outside as a function of time (the model works it out from the notes'
+//! pitch points and vibrato), and each note has a loudness, a colour (its
+//! formants moved by reading the recording faster or slower inside each
+//! grain) and a breath (a whisper of the same syllable mixed in).
+//!
 //! Nothing here runs on the audio thread: phrases are rendered in the
 //! background and played as sound (decision 0017's audio clips).
 
@@ -17,9 +23,6 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 pub use analysis::VoiceSample;
 
-/// How long the pitch takes to glide from one note into the next, centred
-/// on the note's start (seconds).
-const PORTAMENTO_SECONDS: f64 = 0.08;
 /// The fade-in at the start of a phrase and the fade-out at its end.
 const PHRASE_FADE_IN: f64 = 0.005;
 const PHRASE_FADE_OUT: f64 = 0.03;
@@ -29,6 +32,18 @@ const MIN_CROSSFADE: f64 = 0.002;
 /// before its note (UTAU shortens preutterance and overlap together when a
 /// note is too short for the next one's).
 const MAX_LEAD_SHARE: f64 = 0.5;
+/// Breath is noise above this frequency (Hz).
+const BREATH_FROM_HZ: f64 = 1000.0;
+/// How much quieter the voice is at full breath.
+const BREATH_TAKES: f32 = 0.3;
+/// How much of the voice's own part above [`BREATH_FROM_HZ`] gives way at
+/// full breath (a breathy voice has weaker high harmonics).
+const BREATH_SOFTENS: f32 = 0.5;
+/// How loud the breath is at full breath, against the voice (its highs
+/// are then mostly breath); at half breath, half that.
+const BREATH_LEVEL: f64 = 0.7;
+/// How far colour may move the formants, as a ratio either way.
+const MAX_FORMANT_RATIO: f64 = 1.5;
 
 /// One line of a voicebank's `oto.ini`: where a syllable is in which
 /// recording. Times are in milliseconds, as UTAU writes them.
@@ -181,6 +196,53 @@ pub fn key_hz(key: f64) -> f64 {
     440.0 * ((key - 69.0) / 12.0).exp2()
 }
 
+/// How a syllable sounds beyond its pitch (decision 0028).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Colour {
+    /// How much faster the recording is read inside each grain: the
+    /// formants move up by this ratio (1 leaves them; below 1 is deeper).
+    pub formant: f64,
+    /// How much of a whisper of the syllable is mixed in, from 0 to 1.
+    pub breath: f32,
+    /// Where the whisper's randomness starts (the same seed, the same
+    /// whisper).
+    pub seed: u64,
+}
+
+impl Default for Colour {
+    fn default() -> Self {
+        Self {
+            formant: 1.0,
+            breath: 0.0,
+            seed: 1,
+        }
+    }
+}
+
+/// Where the syllable is in its recording at each moment of the sung note
+/// (seconds in, seconds out): its consonant as recorded, its vowel slowed
+/// down to fill a longer note (or cut short).
+fn source_clock(region: Stretch, length: f64) -> impl Fn(f64) -> f64 {
+    let fixed = region
+        .fixed
+        .clamp(0.0, (region.end - region.start).max(0.0));
+    let stretch_in = (region.end - region.start - fixed).max(1e-3);
+    let stretch_out = (length - fixed).max(0.0);
+    let speed = if stretch_out > stretch_in {
+        stretch_in / stretch_out
+    } else {
+        1.0
+    };
+    move |t: f64| {
+        let s = if t < fixed {
+            region.start + t
+        } else {
+            region.start + fixed + (t - fixed) * speed
+        };
+        s.min(region.end)
+    }
+}
+
 /// Shifts a syllable to the pitch `hz` gives at each moment and stretches
 /// it to `length` seconds (decision 0027): its consonant plays as recorded,
 /// its vowel is stretched to fill the rest (or cut short). The result is at
@@ -189,6 +251,8 @@ pub fn key_hz(key: f64) -> f64 {
 /// Time-domain pitch-synchronous overlap-add: a two-period grain is taken
 /// around the mark nearest each moment of the recording and laid down one
 /// target period after the last, so the pitch moves and the formants stay.
+/// `colour` (decision 0028) reads each grain faster or slower, which moves
+/// the formants and leaves the pitch, and mixes in a whisper for breath.
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -201,6 +265,7 @@ pub fn resample(
     length: f64,
     rate: u32,
     hz: impl Fn(f64) -> f64,
+    colour: Colour,
 ) -> Vec<f32> {
     let rate_f = f64::from(rate.max(1));
     let source_rate = f64::from(sample.rate());
@@ -209,29 +274,15 @@ pub fn resample(
     if frames == 0 {
         return out;
     }
-    let fixed = region
-        .fixed
-        .clamp(0.0, (region.end - region.start).max(0.0));
-    let stretch_in = (region.end - region.start - fixed).max(1e-3);
-    let stretch_out = (length - fixed).max(0.0);
-    // Longer than the recording: the vowel slows down; shorter: cut.
-    let speed = if stretch_out > stretch_in {
-        stretch_in / stretch_out
-    } else {
-        1.0
-    };
-    let source_at = |t: f64| {
-        let s = if t < fixed {
-            region.start + t
-        } else {
-            region.start + fixed + (t - fixed) * speed
-        };
-        s.min(region.end)
-    };
+    let formant = colour
+        .formant
+        .clamp(1.0 / MAX_FORMANT_RATIO, MAX_FORMANT_RATIO);
+    let source_at = source_clock(region, length);
     let mut t = 0.0;
     while t < length {
         let mark = sample.mark_near(source_at(t) * source_rate);
-        let half = mark.period / source_rate;
+        // Half the grain's width, as laid down: read faster, it is shorter.
+        let half = mark.period / source_rate / formant;
         let step = if mark.voiced {
             1.0 / hz(t).clamp(20.0, 4000.0)
         } else {
@@ -245,12 +296,118 @@ pub fn resample(
         for (j, value) in out.iter_mut().enumerate().take(last + 1).skip(first) {
             let dt = j as f64 / rate_f - t;
             let window = f64::midpoint(1.0, (std::f64::consts::PI * dt / half).cos());
-            let source = mark.at as f64 + dt * source_rate;
+            let source = mark.at as f64 + dt * source_rate * formant;
             *value += gain * window as f32 * sample.at(source);
         }
         t += step.max(1.0 / rate_f);
     }
+    if colour.breath > 0.0 {
+        let breath = colour.breath.min(1.0);
+        let air = high_passed(
+            whisper(sample, &source_at, frames, rate, formant, colour.seed),
+            rate,
+        );
+        let air_level = rms(&air);
+        if air_level > 0.0 {
+            let scale = (rms(&out) / air_level * BREATH_LEVEL) as f32;
+            let highs = high_passed(out.clone(), rate);
+            let voice = 1.0 - BREATH_TAKES * breath;
+            for ((value, air), high) in out.iter_mut().zip(air).zip(highs) {
+                *value = voice * (*value - BREATH_SOFTENS * breath * high) + air * scale * breath;
+            }
+        }
+    }
     out
+}
+
+#[allow(clippy::cast_precision_loss, reason = "sample counts fit easily")]
+fn rms(x: &[f32]) -> f64 {
+    let sum: f64 = x.iter().map(|&v| f64::from(v) * f64::from(v)).sum();
+    (sum / x.len().max(1) as f64).sqrt()
+}
+
+/// A small, fast source of randomness (xorshift), the same for the same
+/// seed.
+struct Noise(u64);
+
+impl Noise {
+    fn new(seed: u64) -> Self {
+        Self(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
+    }
+
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    /// A number from 0 to 1.
+    #[allow(clippy::cast_precision_loss, reason = "53 bits of randomness")]
+    fn unit(&mut self) -> f64 {
+        (self.next() >> 11) as f64 / (1_u64 << 53) as f64
+    }
+}
+
+/// A whisper of the syllable (decision 0028): grains one period of the
+/// recording wide, taken around where the syllable is but at random places
+/// within a period, with random signs, laid down at random spacings. Each
+/// grain's spectrum is the recording's, so the vowel's formants stay; the
+/// randomness takes away its pitch.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "frame counts are small and never negative"
+)]
+fn whisper(
+    sample: &VoiceSample,
+    source_at: &impl Fn(f64) -> f64,
+    frames: usize,
+    rate: u32,
+    formant: f64,
+    seed: u64,
+) -> Vec<f32> {
+    let rate_f = f64::from(rate.max(1));
+    let source_rate = f64::from(sample.rate());
+    let length = frames as f64 / rate_f;
+    let mut out = vec![0.0_f32; frames];
+    let mut noise = Noise::new(seed);
+    let mut t = 0.0;
+    while t < length && frames > 0 {
+        let centre = source_at(t) * source_rate;
+        let mark = sample.mark_near(centre);
+        let period = mark.period / source_rate;
+        let half = 0.5 * period / formant;
+        let from = centre + (noise.unit() - 0.5) * mark.period;
+        let sign = if noise.next() & 1 == 0 { 1.0 } else { -1.0 };
+        let first = ((t - half) * rate_f).ceil().max(0.0) as usize;
+        let last = (((t + half) * rate_f).floor().max(0.0) as usize).min(frames - 1);
+        for (j, value) in out.iter_mut().enumerate().take(last + 1).skip(first) {
+            let dt = j as f64 / rate_f - t;
+            let window = f64::midpoint(1.0, (std::f64::consts::PI * dt / half).cos());
+            *value += (sign * window) as f32 * sample.at(from + dt * source_rate * formant);
+        }
+        t += (period * (0.25 + 0.5 * noise.unit())).max(1.0 / rate_f);
+    }
+    out
+}
+
+/// Only the part of `x` above [`BREATH_FROM_HZ`] (two one-pole high-pass
+/// filters in a row, 12 dB an octave).
+#[allow(clippy::cast_possible_truncation, reason = "a filter coefficient")]
+fn high_passed(mut x: Vec<f32>, rate: u32) -> Vec<f32> {
+    let k = (-std::f64::consts::TAU * BREATH_FROM_HZ / f64::from(rate.max(1))).exp() as f32;
+    for _ in 0..2 {
+        let (mut last_in, mut last_out) = (0.0_f32, 0.0_f32);
+        for value in &mut x {
+            let output = k * (last_out + *value - last_in);
+            last_in = *value;
+            last_out = output;
+            *value = output;
+        }
+    }
+    x
 }
 
 /// One note of a phrase, ready to sing.
@@ -268,19 +425,16 @@ pub struct SungNote {
     pub start: f64,
     /// How long it lasts.
     pub length: f64,
-    /// Its key (MIDI number).
-    pub key: f64,
+    /// How loud it is sung (1 leaves the recording's level).
+    pub gain: f32,
+    /// Its colour and breath (decision 0028).
+    pub colour: Colour,
 }
 
 impl SungNote {
-    /// A note singing `entry` from `sample`.
-    pub fn new(
-        sample: Arc<VoiceSample>,
-        entry: &OtoEntry,
-        start: f64,
-        length: f64,
-        key: f64,
-    ) -> Self {
+    /// A note singing `entry` from `sample`, at the recording's level, with
+    /// no colour or breath.
+    pub fn new(sample: Arc<VoiceSample>, entry: &OtoEntry, start: f64, length: f64) -> Self {
         let region = entry.stretch(sample.seconds());
         Self {
             region,
@@ -289,7 +443,8 @@ impl SungNote {
             overlap: (entry.overlap / 1000.0).max(0.0),
             start,
             length,
-            key,
+            gain: 1.0,
+            colour: Colour::default(),
         }
     }
 }
@@ -304,36 +459,20 @@ pub struct SungPhrase {
     pub samples: Vec<f32>,
 }
 
-/// The pitch of a phrase at a moment of the song, in semitones: each
-/// note's key, gliding into it from the note before around its start.
-fn phrase_key(notes: &[SungNote], at: f64) -> f64 {
-    let index = notes
-        .partition_point(|n| n.start - PORTAMENTO_SECONDS / 2.0 <= at)
-        .saturating_sub(1);
-    let note = &notes[index];
-    let Some(before) = index.checked_sub(1).map(|i| &notes[i]) else {
-        return note.key;
-    };
-    let into = (at - (note.start - PORTAMENTO_SECONDS / 2.0)) / PORTAMENTO_SECONDS;
-    if into >= 1.0 {
-        return note.key;
-    }
-    let eased = 0.5 - 0.5 * (std::f64::consts::PI * into.clamp(0.0, 1.0)).cos();
-    before.key + (note.key - before.key) * eased
-}
-
 /// Sings a phrase (decision 0027): notes in order, each touching or close
-/// to the next. Each syllable starts its preutterance before its note and
-/// fades in over the note before for its overlap; when a note is too short
-/// for the next one's preutterance, both preutterance and overlap shrink
-/// together. Rendered at `rate`.
+/// to the next, at the pitch `pitch` gives (a fractional key, 69 being A
+/// 440) at each second of the song. Each syllable starts its preutterance
+/// before its note and fades in over the note before for its overlap; when
+/// a note is too short for the next one's preutterance, both preutterance
+/// and overlap shrink together. Each note is sung at its gain and colour
+/// (decision 0028). Rendered at `rate`.
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     reason = "frame counts are small and never negative"
 )]
-pub fn sing_phrase(notes: &[SungNote], rate: u32) -> SungPhrase {
+pub fn sing_phrase(notes: &[SungNote], pitch: impl Fn(f64) -> f64, rate: u32) -> SungPhrase {
     if notes.is_empty() {
         return SungPhrase {
             start: 0.0,
@@ -364,9 +503,14 @@ pub fn sing_phrase(notes: &[SungNote], rate: u32) -> SungPhrase {
     for (i, note) in notes.iter().enumerate() {
         let length = (ends[i] - begins[i]).max(0.0);
         let begin = begins[i];
-        let sung = resample(&note.sample, note.region, length, rate, |t| {
-            key_hz(phrase_key(&notes, begin + t))
-        });
+        let sung = resample(
+            &note.sample,
+            note.region,
+            length,
+            rate,
+            |t| key_hz(pitch(begin + t)),
+            note.colour,
+        );
         let fade_in = if i == 0 {
             PHRASE_FADE_IN
         } else {
@@ -382,7 +526,7 @@ pub fn sing_phrase(notes: &[SungNote], rate: u32) -> SungPhrase {
             let t = k as f64 / rate_f;
             let gain = (t / fade_in).min(1.0) * ((total - t) / fade_out).clamp(0.0, 1.0);
             if let Some(slot) = samples.get_mut(offset + k) {
-                *slot += value * gain as f32;
+                *slot += value * gain as f32 * note.gain;
             }
         }
     }
