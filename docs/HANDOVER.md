@@ -155,7 +155,10 @@ fast-forwarded into `main` at the owner's request, without pull requests).
 ## Built on the branch `claude/admiring-dirac-yzpv2t`, not merged yet
 
 November 19, 2026. CI on `main` for 7a's merge was green on Windows and
-Linux before this work started.
+Linux before this work started. CI and the Spikes workflow, started by
+hand on the branch (they run on `main` and pull requests only), passed
+on Windows and Linux for commit `0642f87` (everything but the Pitch
+mode's hover hint, which came after and was checked locally).
 
 - **Singing voices, milestone 7b: expression** (decision 0028).
   `daw_model::expression` (each note's `NoteExpression`: pitch points in
@@ -203,10 +206,9 @@ Linux before this work started.
 
 ## Next session: start here
 
-1. Look at the CI run started by hand on the branch
-   `claude/admiring-dirac-yzpv2t` (CI runs on `main` and on pull requests
-   only, so it was started with "Run workflow"): 7b has not run on
-   Windows otherwise. Fix anything it finds first.
+1. If the branch was merged since, look at `main`'s CI run for it;
+   otherwise start CI on the branch with "Run workflow" after any change
+   (CI runs on `main` and pull requests only).
 2. Ask the owner how the hands-on checks went (ROADMAP.md: "Expressive
    tempo", "7a: things to try" and "7b: things to try", with a real Kasane
    Teto UTAU voicebank), and whether to merge the branch into `main` (a
@@ -232,8 +234,8 @@ Linux before this work started.
 ## Not verified by the development session (say so if asked)
 
 - Singing expression (7b): listening (everything was measured, in tests
-  and in the program's output); real voicebanks; Windows (no CI run when
-  this was written, see above); shortcuts on the virtual screen
+  and in the program's output); real voicebanks; the program on Windows by
+  hand (CI runs every test there); shortcuts on the virtual screen
   (Ctrl+P, Ctrl+A did not reach the window there; tests press them).
 
 - Expressive tempo and singing: listening (everything was measured, not
