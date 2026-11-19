@@ -34,6 +34,7 @@ considered instead.
 | [0025](0025-custom-kits.md) | Custom kits: a drum kit of your own sounds, played from the step grid | Accepted |
 | [0026](0026-expressive-tempo.md) | Expressive tempo: shaped glides, and the tempo under the piano roll | Accepted |
 | [0027](0027-singing-voices.md) | Singing voices: voicebanks, lyrics on notes, a renderer of our own | Accepted |
+| [0028](0028-singing-expression.md) | Singing expression: the sung pitch drawn over the notes, vibrato, loudness, colour and breath | Accepted |
 
 ## Writing a new record
 
