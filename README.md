@@ -13,10 +13,12 @@ trackpad and a typing keyboard. A MIDI keyboard or an audio interface is used
 automatically when you plug one in, but nothing extra is ever required.
 
 After the first full version: singing voices, in the spirit of OpenUtau.
-The first part is built: notes with lyrics sung by classic UTAU voicebanks
-you install (such as Kasane Teto's), managed inside VLabs. Expression
-(pitch curves, vibrato), UST and USTX projects, and DiffSinger voices come
-next (see [ROADMAP.md](ROADMAP.md)).
+The first two parts are built: notes with lyrics sung by classic UTAU
+voicebanks you install (such as Kasane Teto's), managed inside VLabs, and
+expression: the sung pitch drawn through the notes and shaped by hand
+(bends, scoops, overshoots, vibrato), each note's loudness, colour and
+breath. UST and USTX projects and DiffSinger voices come next (see
+[ROADMAP.md](ROADMAP.md)).
 
 ## Status
 
@@ -48,7 +50,9 @@ the sound library and drag them into the song, and play SoundFont (`.sf2`)
 and SFZ (`.sfz`) instruments, however large (SFZ instruments are read in
 the background). Make a drum kit of your own sounds (a custom kit) and build
 beats with it on the step grid. Add classic UTAU voicebanks and give notes
-lyrics: a voice track sings them. A Windows installer and a Linux AppImage are built for each
+lyrics: a voice track sings them, and in its piano roll you shape how:
+bend the sung pitch where you click, add vibrato, make notes louder,
+lighter, darker or breathier. A Windows installer and a Linux AppImage are built for each
 milestone, with a user guide (F1 in the program, or
 [docs/user-guide.md](docs/user-guide.md)). See [ROADMAP.md](ROADMAP.md) for
 what to try and what comes next.

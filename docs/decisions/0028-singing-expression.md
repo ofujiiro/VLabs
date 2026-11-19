@@ -144,7 +144,13 @@ voicebanks have been heard (ROADMAP.md).
 - File format version 10: a pattern keeps each note's expression beside
   it, by note identity, as it keeps lyrics (a note stays a small value
   cheap to copy). Copying, pasting and duplicating notes, and duplicating
-  a pattern, carry lyrics and expression (closing a 7a gap).
+  a pattern, carry lyrics and expression (closing a 7a gap); on Linux the
+  clipboard's text carries them beside each note's own fields, so text
+  from older copies of the program still pastes.
+- MIDI files carry lyrics: a Lyric event just before each sung note
+  starts, read back onto the note starting at its moment (another 7a gap).
+  Expression has no place in MIDI and stays out of it, as it does of
+  DAWproject.
 - `daw-dsp::voice::sing_phrase` takes the phrase's pitch as a function of
   time, and each note's gain, colour and breath; it no longer decides the
   glide itself.

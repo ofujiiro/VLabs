@@ -43,6 +43,8 @@ record, notes, the play position); the processing half belongs to
 | Recorder | Writes takes of sound to WAV files as they come, keeps their loudness summary | Ordinary thread |
 | Plugin scanner | A separate run of the program that inspects plugin files | A crash there cannot reach the program |
 | SFZ reader | Reads an SFZ instrument and decodes its sounds (on up to eight helper threads), one thread per instrument | Ordinary thread; the engine builds the track again once it is done |
+| Voicebank reader | Reads a voicebank's `oto.ini` and other files the first time a voice track needs it | Ordinary thread, one per voicebank |
+| Voice renderer | Renders voice tracks' phrases, one at a time, keeping each by everything that shapes it | Ordinary thread; the audio thread plays rendered phrases like audio clips |
 
 ## How an edit becomes sound
 
@@ -165,7 +167,12 @@ The window is `daw-ui::synth_ui`.
 - **Format version 5** (decision 0018) adds the song's key changes, each
   pattern's swing and tempo glides; all have defaults, so older files are
   read unchanged.
-- **Format version 6** (decision 0019) adds the synth instrument.
+- **Format version 6** (decision 0019) adds the synth instrument;
+  **7** SFZ instruments and custom kits (decisions 0024, 0025); **8** the
+  bend of a tempo glide (decision 0026); **9** voice instruments and each
+  pattern's lyrics (decision 0027); **10** how each note is sung (decision
+  0028). Each kept beside what it belongs to, with defaults, so older
+  files are read unchanged.
 - **Interchange** (decision 0020, `daw-formats::midi`, `dawproject`,
   `flac`): Standard MIDI Files and DAWproject, in and out; what a clip
   plays is worked out once, in `Pattern::played_in`, for the engine and
@@ -323,6 +330,51 @@ The window is `daw-ui::synth_ui`.
 - **Files:** file format version 7; DAWproject carries the kit as one of
   the program's own devices with its sounds in the archive.
 
+## Singing voices *(decisions 0027 and 0028)*
+
+A voice track's instrument names a voicebank; its patterns keep, beside
+their notes and by note, each note's lyric (`Pattern::lyrics`) and how it
+is sung (`Pattern::expression`: pitch points, vibrato, colour, breath), so
+a note stays a small value that is cheap to copy.
+
+```text
+ notes + lyrics + expression ──▶ phrases (model) ──▶ per phrase: aliases (model)
+                                                     pitch curve (model)
+                                                     recordings (formats::utau)
+                                                          │ worker thread
+                                                          ▼
+                              audio thread ◀── rendered phrase (dsp::voice), kept by key
+```
+
+- **`daw_model::lyrics`** turns romaji and kana into the names a classic
+  UTAU voicebank gives its recordings (VCV, then CV).
+- **`daw_model::expression`** says how a voice's notes fall into phrases
+  (one note at a time, a rest of 50 ms or more starts a phrase) and works
+  out the pitch sung through a phrase (`PhrasePitch`): each note takes over
+  at its first pitch point, gliding from wherever the voice is then, follows
+  its points' shapes and its vibrato. Notes without points glide 80 ms
+  around their start, as in 7a. The engine renders with it and the piano
+  roll draws with it, so what is drawn is what is sung.
+- **`daw_formats::utau`** reads and installs voicebanks (`oto.ini`,
+  `prefix.map`, `character.txt`, the readme; UTF-8 or Shift-JIS).
+- **`daw_dsp::voice`** analyses a recording (YIN pitch, a mark on every
+  period) and sings a phrase by pitch-synchronous overlap-add at the pitch
+  it is given as a function of time: each syllable starts its
+  preutterance before its note and crossfades over the note before, as
+  UTAU's wavtool joins them. Per note: a gain (velocity, on the sampler's
+  square curve), a formant ratio (colour: grains read faster or slower)
+  and breath (a granular whisper of the same syllable, above 1 kHz).
+- **`daw_engine::voices`** places a track's notes in seconds through the
+  tempo map, cuts them into phrases, renders each on the voice renderer
+  thread (at once when rendering offline) and keeps it by a hash of
+  everything that shapes it, so an edit renders again only what it
+  changed; a phrase still rendering is silent.
+- **In the interface:** the Voicebanks window (`voicebanks`), voice tracks,
+  lyrics and the expression edits (`session/voice`), lyrics typed in the
+  piano roll, and the sung pitch line with its Pitch mode, points, vibrato
+  handles and panels (`pitch_line`); the lane under a voice's notes shows
+  velocity, colour, breath or tempo.
+
 ## Automation *(phase 3)*
 
 A track's lanes (`AutomationLane`) each change one setting: its volume, its
@@ -397,7 +449,8 @@ Built with egui (eframe, wgpu renderer). All interface code is in `daw-ui`:
   position and their changes along the song (decision 0018).
 - `song_view`, `step_grid`, `piano_roll`, `mixer`, `effect_ui`,
   `transport`, `keyboard_panel`: the views; the custom-drawn ones draw
-  only what is visible. `signature_row` is the song view's row of tempo,
+  only what is visible. `pitch_line` is the sung pitch of a voice track,
+  drawn over the piano roll's notes (decision 0028). `signature_row` is the song view's row of tempo,
   time-signature and key changes, pinned under its ruler. `tempo_lane` is
   the tempo line itself (points, glides with their shapes and handles,
   their panels; decision 0026), drawn in the signature row and in the lane

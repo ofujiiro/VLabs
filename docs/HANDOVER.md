@@ -152,35 +152,89 @@ fast-forwarded into `main` at the owner's request, without pull requests).
   390 Hz against 330, 392, 440 and 392) with a harmonic-rich synthetic
   voice.
 
+## Built on the branch `claude/admiring-dirac-yzpv2t`, not merged yet
+
+November 19, 2026. CI on `main` for 7a's merge was green on Windows and
+Linux before this work started.
+
+- **Singing voices, milestone 7b: expression** (decision 0028).
+  `daw_model::expression` (each note's `NoteExpression`: pitch points in
+  ms and cents with `PitchShape`, `Vibrato`, colour, breath; `phrases`,
+  the one rule for cutting a voice's notes into phrases; `PhrasePitch`, the
+  pitch sung through a phrase, each note taking over at its first point
+  from wherever the voice is; `sung_gain`), `Pattern::expression` by note
+  id (file format 10, sample and migration check), `daw_dsp::voice`
+  (`sing_phrase` takes the pitch as a function of time; `Colour` per note:
+  formant ratio by reading grains faster or slower, breath by a granular
+  whisper above 1 kHz that also softens the voice's highs; per-note gain),
+  `daw_engine::voices` (velocity and expression in each job and its key),
+  and in the window: `daw-ui::pitch_line` (the sung line, Pitch mode
+  handles and panels), `session/voice` (`SungLine`, the expression edits),
+  the location line's **Notes | Pitch** switch in place of Draw on voice
+  tracks (`Command::PitchMode`, Ctrl+P), **Add vibrato / Remove vibrato /
+  Plain pitch** in the notes menu, the lane's **Velocity / Colour /
+  Breath / Tempo** on voice tracks.
+- **7a gaps closed:** copy, cut, paste and duplicate carry lyrics and
+  expression (`session::CopiedNote`, also in the clipboard text, which
+  stays readable both ways with older copies); MIDI files carry lyrics
+  (`EventKind::Lyric`, out and in).
+- Checked by the development session: `cargo xtask ci` (Linux); model
+  tests (the plain glide equals 7a's arithmetic to 1e-9; shapes,
+  snapping, vibrato's start, growth and hand-over, no jumps; ranges); DSP
+  tests (a 5.5 Hz vibrato of 50 cents sang at 5.51 Hz and 54 cents; colour
+  moved the formants' centre ×1.255 for a ratio of 1.26 and ×0.812 for
+  0.794 with the pitch held; breath took the highs from 99 % to 80 % to
+  40 % periodic, pitch and level kept; gain exact); an engine render
+  (vibrato swings both ways, half velocity sings at a quarter level, the
+  untouched note is sample-identical, an edit renders again); interface
+  tests (bend by click, drag, a leaving point in time only, right-click,
+  the point's panel with slow clicks, Ctrl+P, vibrato from the menu, its
+  handle and panel, the Colour and Breath lanes, copy/paste through the
+  clipboard text, old clipboard text, duplicate); MIDI lyrics round trip.
+  **The real program** on the virtual screen and sound card, with a
+  synthetic voicebank: the Pitch mode, a vibrato added from the menu and
+  dragged deeper, a bend added by a click, the lanes; its recorded output
+  sang A3 at 219.9 Hz, C4's vibrato from 0.25 s in at ±131/134 cents and
+  5.56 Hz, E4 rising to F#4 at 369.9 Hz where clicked; breath took note
+  1's highs from 0.990 to 0.668 periodic at nearly the same level; colour
+  moved note 4's harmonics' centre from 999 to 1196 Hz. That run found two
+  faults, fixed with a test: the voice lane's Tempo button fell below the
+  lane, and lyrics vanished in the Pitch mode.
+
 ## Next session: start here
 
-1. Look at `main`'s CI run for the merge (commit `8392189` and the
-   handover commit after it): these changes have not run on Windows yet.
-   Fix anything it finds first.
+1. Look at the CI run started by hand on the branch
+   `claude/admiring-dirac-yzpv2t` (CI runs on `main` and on pull requests
+   only, so it was started with "Run workflow"): 7b has not run on
+   Windows otherwise. Fix anything it finds first.
 2. Ask the owner how the hands-on checks went (ROADMAP.md: "Expressive
-   tempo" and "7a: things to try", with a real Kasane Teto UTAU voicebank).
-   Real recordings are the big unknown: the renderer has only met
-   synthetic voices.
-3. Build **singing voices 7b, expression** (decision 0027) on a new
-   branch: pitch curves drawn over a voice track's notes and vibrato
-   (depth, rate, delay per note), loudness envelopes, UTAU-style flags
-   (breathiness, gender). Pointers:
-   - pitch today comes from `phrase_key` in `daw_dsp::voice` (each note's
-     key, an 80 ms glide between notes), handed to `resample` as an `hz`
-     closure: a curve or vibrato is another term in that closure;
-   - keep per-note expression beside the notes in `Pattern`, by note id,
-     like `lyrics` (a note stays `Copy`); file format 10 with its sample
-     (`WRITE_FORMAT_SAMPLE=1`) and migration check;
-   - include the new fields in `phrase_key`'s hash in `daw_engine::voices`
-     so edits render again;
-   - draw and edit them in the piano roll only on voice tracks (the lane
-     under the notes could gain a "Pitch" choice beside Velocity and
-     Tempo); a decision record for the screen, with rejected concepts.
-4. Small 7a gaps worth closing on the way: copying and pasting notes loses
-   their lyrics (the session clipboard holds `Note`s only); MIDI export
-   could write lyrics as lyric meta events; a fermata command for tempo.
+   tempo", "7a: things to try" and "7b: things to try", with a real Kasane
+   Teto UTAU voicebank), and whether to merge the branch into `main` (a
+   pull request, or a fast-forward as for 7a). Real recordings are still
+   the big unknown: the renderer has only met synthetic voices.
+3. Build **singing voices 7c, exchange** (decision 0027): UST (UTAU) and
+   USTX (OpenUtau) projects in and out. Pointers:
+   - 7b's model is OpenUtau's: pitch points in ms from the note's start
+     (USTX `pitch.data` x), cents (USTX y is in tenths of a semitone),
+     shapes io/l/i/o = Smooth/Straight/SlowStart/SlowEnd, a first point
+     that snaps to the note before (`snap_first`); OpenUtau's vibrato
+     length is a share of the note from its end (ours: a start in seconds),
+     period in ms (ours: a rate in Hz), in/out in % (ours: a growth in
+     seconds, a fixed 80 ms fade-out);
+   - UST is Shift-JIS text (`encoding_rs` is in); its Mode2 pitch is
+     PBS/PBW/PBY/PBM, its vibrato VBR, its flags g and B (ours: colour
+     with the sign turned round, breath);
+   - a decision record first (where import and export sit in the menus,
+     what is left out and named, as DAWproject import does).
+4. Small gaps worth closing on the way: a fermata command for tempo; the
+   pitch line follows the first placement's tempo (see known gaps).
 
 ## Not verified by the development session (say so if asked)
+
+- Singing expression (7b): listening (everything was measured, in tests
+  and in the program's output); real voicebanks; Windows (no CI run when
+  this was written, see above); shortcuts on the virtual screen
+  (Ctrl+P, Ctrl+A did not reach the window there; tests press them).
 
 - Expressive tempo and singing: listening (everything was measured, not
   heard); Windows (no CI run yet); real UTAU voicebanks (none could be
@@ -240,9 +294,13 @@ fast-forwarded into `main` at the owner's request, without pull requests).
 
 - Expressive tempo: no fermatas, no tempo from a free performance, no
   freehand drawing.
-- Singing 7a: no pitch curves, vibrato, envelopes or flags; no UST/USTX;
-  no DiffSinger/ENUNU; Japanese phonemes only; lyrics not carried by copy
-  and paste, nor exported to DAWproject or MIDI.
+- Singing 7a: no UST/USTX; no DiffSinger/ENUNU; Japanese phonemes only;
+  lyrics not exported to DAWproject (MIDI carries them since 7b).
+- Singing 7b: no freehand pitch, no envelope inside a note (volume
+  automation does crescendos), no other UTAU flags, no vocoder (a
+  milestone of its own); the line follows the tempo of the pattern's first
+  placement and is drawn unswung; expression stays out of MIDI and
+  DAWproject.
 
 ## Practical notes
 

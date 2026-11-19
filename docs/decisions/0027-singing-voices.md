@@ -1,7 +1,8 @@
 # 0027. Singing voices: voicebanks, lyrics on notes, a renderer of our own
 
 - **Status:** accepted, November 2026 (the owner's request; builds on
-  decisions 0005, 0014, 0017, 0023 and 0024)
+  decisions 0005, 0014, 0017, 0023 and 0024). Milestone 7b is designed in
+  decision 0028, which moves the vocoder to a milestone of its own.
 
 ## The task
 

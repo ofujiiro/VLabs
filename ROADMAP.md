@@ -14,8 +14,12 @@ A new or opened song now starts on the whole song, not an instrument
 the piano roll too (decision 0026). Singing voices have begun: milestone
 7a, a first voice sung from classic UTAU voicebanks, is built (decision
 0027). Both are merged into `main` and await the owner's hands-on check.
-Next: 7b, expression (pitch curves, vibrato). The repository has been
-public since November 2026 (the owner's decision).
+Milestone 7b, expression, is built on the branch
+`claude/admiring-dirac-yzpv2t` (decision 0028): the sung pitch drawn
+through the notes and shaped in a Pitch mode, vibrato, and each note's
+loudness, colour and breath. Next: 7c, UST and USTX projects in and out.
+The repository has been public since November 2026 (the owner's
+decision).
 
 ## Phase 0 — Foundations and risk spikes
 
@@ -677,7 +681,8 @@ Sing from the piano roll: give notes lyrics and have a voicebank sing
 them, with the voice managed and tuned inside VLabs, in the spirit of
 OpenUtau (MIT-licensed, the open successor of UTAU). Designed in decision
 0027 as four milestones; **7a, a first voice, is built** and merged
-into `main` (November 2026).
+into `main` (November 2026); **7b, expression, is built** (decision 0028)
+on the branch `claude/admiring-dirac-yzpv2t`.
 
 ### 7a. A first voice (built)
 
@@ -720,22 +725,100 @@ into `main` (November 2026).
 
 ### 7a: known gaps
 
-- No pitch curves, vibrato, envelopes or flags yet (7b); the glide
-  between notes is fixed. The sound is UTAU-like, without its resampler
-  flags; large shifts (an octave or more from where a syllable was
-  recorded) sound buzzier.
+- (Pitch curves, vibrato, loudness, colour and breath came in 7b.) The
+  sound is UTAU-like; large shifts (an octave or more from where a
+  syllable was recorded) sound buzzier.
 - No UST or USTX import or export yet (7c); DAWproject keeps the voice
   track (without lyrics), MIDI files keep the notes.
 - No DiffSinger or ENUNU voices yet (7d); no English or other languages'
   phonemizers yet.
-- Copying and pasting notes does not carry their lyrics yet.
+- (Copying and pasting notes now carries their lyrics, and MIDI files
+  carry them: closed in 7b.)
 - Not heard by ear: the singing was measured (pitch, timing, no clicks)
   with synthetic voices made by the tests, not listened to, and not tried
   with a real voicebank here (none can be downloaded in the development
   container).
 
+### 7b. Expression (built, decision 0028)
+
+- [x] The pitch the voice sings drawn as a line through a voice track's
+      notes, from the same arithmetic the engine sings with
+      (`daw_model::expression`): faint while notes are edited
+- [x] **Notes | Pitch** on a voice track's location line, in the place of
+      Draw (Ctrl+P): in Pitch the notes stay put and the line's handles
+      come forward
+- [x] Pitch points per note, in milliseconds and cents: a click over a
+      note bends the voice there, points are dragged (a glide's first
+      point, which leaves from wherever the voice is, in time only),
+      clicked for their exact values and the curve's shape after them
+      (smooth, straight, slow start, slow end), right-clicked away; notes
+      without points glide exactly as in 7a
+- [x] Vibrato per note: **Transpose › Add vibrato** for the selected notes
+      (±35 cents at 5.5 Hz, from 0.25 s, growing over 0.2 s: short notes
+      stay plain); a diamond dragged for its start and depth, clicked for
+      its depth, rate, start and growth
+- [x] The lane under a voice's notes: **Velocity** (now how loud each note
+      is sung), **Colour** (formants moved up to four semitones, the pitch
+      kept), **Breath** (a whisper of the syllable mixed in above 1 kHz)
+      and **Tempo**
+- [x] Rendered again only where an edit changed something; file format
+      version 10 (each note's expression kept beside it), with its sample
+      and migration check
+- [x] Copying, pasting and duplicating notes carry their lyrics and
+      expression; MIDI files carry lyrics, out and in (7a gaps)
+- The vocoder planned for 7b in decision 0027 waits: colour and breath
+  work in the resampler we have, and whether real voicebanks need a
+  vocoder is for the owner's first real voicebank to show (decision 0028)
+
+### 7b: things to try
+
+1. Open a voice track's pattern with a few notes (7a's steps above), and
+   click **Pitch** at the top right of the window (or press Ctrl+P): the
+   notes dim and a white line shows the pitch the voice sings, gliding from
+   note to note.
+2. Click above the middle of a long note: the line now rises to that spot
+   and stays there. Play: the voice bends up. Drag the new point around;
+   right-click it to remove it. Ctrl+Z undoes.
+3. Click the small hollow circle where a glide leaves the note before and
+   drag it to the left: the voice leaves earlier and glides more slowly.
+   Click it (without dragging) and try **Straight** or **Slow end**.
+4. Select the notes (Ctrl+A in **Notes**, or Ctrl-drag a box around them)
+   and choose **Transpose › Add vibrato**: the long notes start to swing a
+   moment in. Drag a vibrato's diamond up for a wider vibrato; click it and
+   change its **Rate**.
+5. Under the notes, click **Breath** and drag one note's bar up; then
+   **Colour** and drag another's above or below the middle line. Play and
+   compare with the notes left plain.
+6. Save, close and open the song: the bends, vibratos, colours and breath
+   come back. Copy a phrase (Ctrl+C) and paste it (Ctrl+V): the copy sings
+   the same lyrics the same way.
+
+### 7b: known gaps
+
+- No shapes drawn freehand (points and their curves only), no envelope
+  inside a note (the track's volume automation does crescendos), no other
+  UTAU flags, no vocoder yet.
+- In a pattern placed several times at different tempos, the line is drawn
+  at the tempo where the pattern is first placed (the glides last as long
+  in seconds everywhere, so they cover a little more or less of a note).
+- A swung voice pattern is drawn where its notes are written; the voice
+  sings them swung.
+- Colour moves the formants by reading grains faster or slower: very large
+  colours with very low notes can sound grainy. Breath is a whisper of the
+  same syllable, not a model of the breath itself.
+- Not heard by ear: pitch, vibrato rate and depth, formant movement, the
+  noise of breath and levels were measured, in tests and in the program's
+  own output on a virtual sound card, with a synthetic voice made for the
+  tests; no real voicebank was tried.
+
 ### Later milestones (decision 0027)
 
+- **Next, 7c:** UST (UTAU) and USTX (OpenUtau) projects in and out; 7b's
+  pitch points, shapes and vibrato follow OpenUtau's, so they map across.
+  **Then 7d:** DiffSinger voices, after a spike on licences, model sizes
+  and speed. **A vocoder** (WORLD-style, for larger shifts and more flags)
+  is a milestone of its own, judged once real voicebanks have been heard
+  (decision 0028).
 - **Voicebanks the person installs**, in the open formats that matter
   most: classic UTAU voicebanks (WAV recordings with `oto.ini` timing, in
   CV, VCV or CVVC style, with `character.txt`), such as the many Kasane
@@ -757,8 +840,7 @@ into `main` (November 2026).
   (Kasane Teto voicebanks differ: some allow commercial use, some do not),
   and VLabs shows them when a voicebank is added.
 - **Already leaves room:** notes keep space for per-note pitch offsets;
-  lyrics and pitch curves will be new optional fields of a note (a new
-  file format version, with its migration test).
+  lyrics (7a) and expression (7b) are kept beside the notes, by note.
 
 ## Later (not in v1, not designed out)
 

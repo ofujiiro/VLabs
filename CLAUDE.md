@@ -192,6 +192,21 @@ These come from the brief; tests and CI enforce most of them.
   measures wrong. The project file extension is a word the identity rule
   refuses anywhere in Rust code, and it is also Kasane Teto's name: use
   other names in code and tests.
+- **Singing expression (decision 0028):** in interface tests, find the sung
+  pitch's handles by their labels (`text::pitch_point(key, index)`,
+  `text::vibrato_handle(key)`) and click relative to them: the piano
+  roll's zoom is not fixed. Accessible names must be unique on screen: the
+  swing button can say "Straight" while a point's panel offers the
+  "Straight" curve, which is why the shapes are labelled
+  `text::curve_shape(..)`. A clipped widget is still in the accessibility
+  tree: check that a control you rely on lies inside its area (the voice
+  lane's Tempo button once fell below the lane unnoticed). Breathy voices
+  hide their pitch from YIN in the full band; measure pitch below 500 Hz.
+  To check the real program, a song made with the crates themselves (a
+  small Cargo project in the scratchpad depending on `daw-model` and
+  `daw-formats` by path, with its own copy of `rust-toolchain.toml`) and a
+  synthetic voicebank in the scratch home's `.local/share/vlabs/voicebanks`
+  save a lot of clicking; `pw-record` the output and measure it.
 - **Panels and popups:** give an `egui::Area` panel fixed column widths and
   no separators that stretch across it. A widget that takes "all the room
   there is" grows the panel to the window's edge, the window nudges it
@@ -236,7 +251,12 @@ These come from the brief; tests and CI enforce most of them.
   read every `.sfz` inside and play notes across each one's range.
 - **Typing in the real program:** `xdotool type` does not reach text
   fields on the virtual screen (no window manager); scroll lists with the
-  mouse wheel (`xdotool click 5`) instead of searching.
+  mouse wheel (`xdotool click 5`) instead of searching. Shortcuts sent with
+  `xdotool key` (Ctrl+A, F5, Ctrl+P) did not reach the window either in
+  November 2026: use the program's buttons and menus (double-click a clip
+  to open it), and screenshot a menu before clicking in it: its items move
+  (the notes menu loses its "Select notes first" line once notes are
+  selected).
 - Network access in the development container is restricted: crates.io,
   GitHub (git, raw files and release downloads) and the Ubuntu archive work;
   many other sites do not.

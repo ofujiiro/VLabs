@@ -238,6 +238,54 @@ Kana show in the piano roll when your computer has a Japanese font
 shown in romaji. VCV voicebanks get the syllable sung after the previous
 note's vowel ("a か") automatically, CV voicebanks the syllable alone.
 
+Copying, pasting and duplicating notes keeps their lyrics (and how they
+are sung, below). MIDI files you export carry the lyrics, and MIDI files
+with lyrics bring them in on their notes.
+
+### Shaping the voice
+
+A voice track's piano roll draws the pitch the voice sings as a white line
+through the notes: you see each glide from one note into the next. Where
+**Draw** is on other tracks, the location line has **Notes** and
+**Pitch**; <kbd>Ctrl+P</kbd> switches between them.
+
+![Shaping the sung pitch: a vibrato on "ka", a bend up on "sa"](guide-images/singing.png)
+
+In **Pitch** the notes stay where they are (they step back) and the line
+comes forward with its handles:
+
+- **Bend the voice:** click over a note and the voice goes through that
+  spot (keep the button down to move it there and then). A click a little
+  below a note, just after it starts, makes the voice scoop up into it; a
+  click a little above it, just after the glide arrives, makes it
+  overshoot and settle.
+- **Points** are dragged in time and pitch. The small hollow point where a
+  glide leaves the note before always leaves from wherever the voice is, so
+  it moves in time only: drag it earlier for a slower, earlier glide.
+  Click a point for its exact time and pitch and the shape of the curve
+  after it (**Smooth**, **Straight**, **Slow start**, **Slow end**);
+  right-click it to remove it. **Transpose › Plain pitch** puts the selected
+  notes back to the plain glide.
+- **Vibrato:** select notes and choose **Transpose › Add vibrato**. Long
+  notes start to swing a quarter of a second in and grow into it; short
+  notes stay plain. Each vibrato has a small diamond where it starts, as
+  high above the note as the vibrato is deep: drag it sideways to start
+  earlier or later, up or down for a wider or narrower swing. Click it for
+  its depth, rate (swings a second), start and how long it takes to grow;
+  right-click it to remove it.
+
+The lane under a voice's notes shows four things, edited like velocity (drag
+a note's bar; the selected notes move together):
+
+- **Velocity**: how loud each note is sung.
+- **Colour**: lighter and brighter above the middle line, darker and deeper
+  below it, without changing the pitch.
+- **Breath**: how breathy each note is.
+- **Tempo**: the song's tempo, as on every track.
+
+For a crescendo across a phrase, use the track's volume automation (see
+Automation).
+
 ## Recording
 
 **Notes**: press <kbd>Ctrl+R</kbd> (or the red button) with a piano or synth
@@ -388,6 +436,7 @@ including a recording that was in progress.
 | <kbd>F6</kbd> | Show or hide the sound library |
 | <kbd>Page Up</kbd> / <kbd>Page Down</kbd> | The computer keyboard's octave |
 | <kbd>Ctrl+B</kbd> | Split the selected clip at the play position |
+| <kbd>Ctrl+P</kbd> | On a voice track: edit the notes or the sung pitch |
 | <kbd>F1</kbd> | This guide |
 
 Every shortcut can be changed in the menu's **Keyboard shortcuts**, and
