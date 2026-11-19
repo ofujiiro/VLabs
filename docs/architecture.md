@@ -96,10 +96,11 @@ travel as short messages on the same queues rather than recompiling.
 Positions and lengths are integer ticks, 2,882,880 per quarter note, so every
 common tuplet and polyrhythm is exact (decision 0007). A tempo map with
 changes anywhere converts ticks to seconds; a change can glide to the
-next one, the tempo moving in a straight line over the ticks between
-them, which makes its seconds a logarithm, worked out exactly both ways
-(`daw_model::piece_seconds`, `piece_ticks`; the engine's tempo table uses
-the same formulas). Time-signature changes define bars, and every grid
+next one, the tempo following a curve of the family
+`T0·[1 + (w^q − 1)x]^(1/q)` over the ticks between them (a straight line
+for `q = 1`, bent by the glide's shape, decision 0026), whose seconds have
+closed forms both ways (`daw_model::TempoPiece`; the engine's tempo table
+uses the same arithmetic). Time-signature changes define bars, and every grid
 counts from the bar line (`MeterMap::grid_floor`, `grid_round`), so after
 an odd bar the beats still fall on the bar lines. Changing the time
 signatures keeps the song in its bars (`Project::change_meter`, decision
@@ -397,7 +398,10 @@ Built with egui (eframe, wgpu renderer). All interface code is in `daw-ui`:
 - `song_view`, `step_grid`, `piano_roll`, `mixer`, `effect_ui`,
   `transport`, `keyboard_panel`: the views; the custom-drawn ones draw
   only what is visible. `signature_row` is the song view's row of tempo,
-  time-signature and key changes, pinned under its ruler.
+  time-signature and key changes, pinned under its ruler. `tempo_lane` is
+  the tempo line itself (points, glides with their shapes and handles,
+  their panels; decision 0026), drawn in the signature row and in the lane
+  under the piano roll.
 - `export`: writes the song to a WAV file on a background thread, with a
   second engine rendering it offline through the same processing as
   playback (`daw_engine::OfflineRender`), block by block, with progress and

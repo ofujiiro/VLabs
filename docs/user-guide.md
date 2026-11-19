@@ -131,8 +131,26 @@ and marks the key's tonic.
 In the song view, open **Tempo and signatures** under the ruler. Click a bar
 in the signatures strip to change the time signature or key from there
 (everything after keeps its bars). Click the tempo line to add a tempo
-change, drag its point to change it, and tick **Glide to the next tempo** for
-a gradual speeding up or slowing down.
+change and drag its point to change it.
+
+For a gradual change (a *ritardando* or an *accelerando*), click a point:
+**Arrive gradually** slows down or speeds up from the previous change to
+this one, and **Glide to the next tempo** from this one to the next. The
+line then slopes, marked *rit.* or *accel.*, with a small diamond in its
+middle. Click the diamond to choose how the tempo moves:
+
+- **Even**: by the same amount on every beat;
+- **Late**: it holds back, then changes more and more, the way a pianist
+  slows into a final chord;
+- **Early**: most of the change comes first, then it settles.
+
+Drag the diamond up or down for any shape in between, or right-click it to
+make the change sudden again.
+
+When you write in the piano roll, click **Tempo** at the left of the lane
+under the notes: it shows the song's tempo where the pattern plays, and you
+can shape it there, under the phrase. **Velocity** brings the notes'
+loudness back.
 
 In a pattern, **Swing** delays every second eighth or sixteenth note:
 "Triplet feel" is the classic shuffle.

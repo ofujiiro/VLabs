@@ -10,8 +10,10 @@ fixes for plugins the owner tried (MT Power Drum Kit 2, Decent Sampler),
 merged in pull request 7. The owner has tried every milestone build and
 the plugins round (November 2026): everything works, which closes v1.
 A new or opened song now starts on the whole song, not an instrument
-(the owner's request). Next: the singing voices. The
-repository has been public since November 2026 (the owner's decision).
+(the owner's request). Glides now have shapes, and the tempo shows under
+the piano roll too (decision 0026, on branch `expressive-tempo`). Next:
+the singing voices. The repository has been public since November 2026
+(the owner's decision).
 
 ## Phase 0 — Foundations and risk spikes
 
@@ -617,6 +619,56 @@ request 4).
       or step grid. Opened and recovered songs already did; a new song
       opened on the drum step grid and now opens on the song too.
 
+## After v1 — Expressive tempo (the owner's request, November 2026)
+
+Gradual tempo changes for piano writing (decision 0026), on branch
+`expressive-tempo`. Glides themselves came in phase 5; this round shapes
+them and brings the tempo to the piano roll.
+
+- [x] A glide has a shape: **Early** (most of the change first), **Even**
+      (a straight line, as before) or **Late** (holds back, then changes
+      more and more: a ritardando that gathers), or anything in between by
+      dragging the handle in the middle of the glide. Worked out exactly,
+      in the model and on the audio thread (file format version 8)
+- [x] Glides are labelled *rit.* or *accel.*; a tempo point's panel can
+      make the tempo **arrive there gradually**; right-clicking a glide's
+      handle makes the change sudden again
+- [x] The lane under the piano roll shows **Velocity** or **Tempo**: the
+      song's tempo where the pattern plays, edited there as in the song view
+- [x] A tempo change added inside a glide glides on with the same shape,
+      so nothing changes until it is moved (before, the tempo after it
+      jumped)
+- [x] DAWproject: a bent glide goes out as straight pieces a sixteenth
+      note long; MIDI files already follow any shape
+
+### Things to try
+
+1. Open a song with a melody, show the song (F5) and open **Tempo and
+   signatures** under the ruler. Click the tempo line at bar 5 and drag
+   the new point down to about 60.
+2. Click that point and tick **Arrive gradually**: the line slopes from
+   the start down to bar 5, marked *rit.*, with a small diamond in the
+   middle. Play: the song slows down gradually.
+3. Click the diamond and choose **Late**: the tempo now holds on, then
+   slows more and more before bar 5. Try **Early**, then drag the diamond
+   up and down and listen to the difference. Ctrl+Z undoes a whole drag.
+4. Open the melody (double-click its clip). Under the notes, click
+   **Tempo** (left of the lane): the same tempo line, under the phrase it
+   shapes. Add a change there, open it, and tick **Glide to the next
+   tempo**.
+5. Save, close and open the song again: the shapes come back.
+
+### Known gaps in this round
+
+- No fermatas yet (a slower tempo for one beat does the job meanwhile).
+- The tempo cannot follow a free performance yet (playing without the
+  metronome and having the bars follow): on the "Later" list.
+- The tempo lane under the piano roll is as tall as the velocity lane, so
+  small tempo changes are drawn small; the song view's tempo strip is a
+  little taller now.
+- Not heard by ear: the shapes were measured (beat times against the
+  formula, offline renders), not listened to.
+
 ## After v1 — Singing voices (the owner's request, November 2026)
 
 Sing from the piano roll: give notes lyrics and have a voicebank sing
@@ -655,4 +707,6 @@ bridge, LV2, plugins running in their own process, a staff-notation view,
 microtonal tunings (the note model already leaves room for per-note pitch
 offsets), lower-latency Windows audio modes (low-latency shared mode,
 optional exclusive mode), cpal's native PipeWire backend, native Wayland
-plugin editors as plugins adopt them.
+plugin editors as plugins adopt them, the tempo following a free
+performance (play without the metronome, tap or find the beats, and the
+bars follow; decision 0026), fermatas, drawing the tempo freehand.

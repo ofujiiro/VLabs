@@ -115,8 +115,26 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   Checked: `cargo xtask ci`, and the program on the virtual screen opened
   on the song view.
 
+- Expressive tempo (decision 0026, the owner's request "make the tempo
+  able to change gradually, for piano compositions"), on branch
+  `expressive-tempo` (not merged yet): glides have a bend
+  (`TempoChange::curve`, file format 8) following
+  `T0·[1 + (w^q − 1)x]^(1/q)` with closed forms both ways, shared by the
+  model and the engine (`daw_model::TempoPiece`); Early, Even and Late in a
+  glide's panel and a handle to drag; *rit.*/*accel.* labels; "Arrive
+  gradually" in a point's panel; the tempo line became a widget of its own
+  (`daw-ui::tempo_lane`), used by the song view's signature row and by the
+  piano roll, whose lane now switches between Velocity and Tempo; a point
+  added inside a glide glides on with the same bend. Checked: `cargo xtask
+  ci`; tests of the closed forms against the tempo they integrate, an
+  offline render of a bent ritardando, DAWproject and file round trips,
+  interface tests; and the program on the virtual screen (the song view's
+  bent glide, the piano roll's tempo lane, the glide's panel).
+
 ## Next
 
+- Open the pull request for `expressive-tempo`, and its hands-on check
+  (ROADMAP.md, "Expressive tempo", "Things to try").
 - The singing voices (ROADMAP.md).
   Possible SFZ follow-ups: LFOs and pitch envelopes, streaming very large
   instruments from the disk, previews in the library.
