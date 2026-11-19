@@ -31,6 +31,11 @@ impl Paths {
         self.config.join("settings.json")
     }
 
+    /// Where the voicebanks added in the program are kept (decision 0027).
+    pub fn voicebanks(&self) -> PathBuf {
+        self.data.join("voicebanks")
+    }
+
     /// Where crash-recovery copies go.
     pub fn recovery(&self) -> PathBuf {
         self.data.join("recovery")

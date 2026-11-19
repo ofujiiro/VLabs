@@ -28,6 +28,7 @@ use crate::step_grid::StepGrid;
 use crate::text;
 use crate::theme::{self, Palette};
 use crate::transport;
+use crate::voicebanks::VoicebanksWindow;
 
 /// What the window needs from the program around it.
 pub trait Host {
@@ -68,6 +69,10 @@ pub trait Host {
     /// Shows a folder in the system's file manager.
     fn open_folder(&mut self, folder: &std::path::Path) {
         let _ = folder;
+    }
+    /// Asks the person for the `.zip` a voicebank came in.
+    fn choose_voicebank_zip(&mut self) -> Option<PathBuf> {
+        None
     }
 }
 
@@ -175,6 +180,11 @@ enum Dialog {
         /// Opened from the instrument chooser, which comes back after.
         from_chooser: bool,
     },
+    Voicebanks {
+        window: VoicebanksWindow,
+        /// Opened from the instrument chooser, which comes back after.
+        from_chooser: bool,
+    },
 }
 
 /// The whole window.
@@ -201,6 +211,10 @@ pub struct Workspace {
     plugin_places: PluginPlaces,
     /// What the last change to the plugins did, for the Plugins window.
     plugin_messages: Vec<String>,
+    /// The program's own voicebanks folder, and what it holds (decision
+    /// 0027).
+    voicebanks_root: Option<PathBuf>,
+    voicebank_list: Vec<daw_formats::utau::VoicebankInfo>,
 }
 
 impl Workspace {
@@ -242,6 +256,8 @@ impl Workspace {
             applied_theme: None,
             plugin_places: PluginPlaces::default(),
             plugin_messages: Vec::new(),
+            voicebanks_root: None,
+            voicebank_list: Vec::new(),
         }
     }
 
@@ -283,6 +299,27 @@ impl Workspace {
         self.plugin_messages = text::plugin_job_lines(done);
         if let Some(first) = self.plugin_messages.first() {
             self.session.set_status(first);
+        }
+    }
+
+    /// Where voicebanks are kept (the program's own folder), and what is
+    /// there.
+    pub fn set_voicebanks_folder(&mut self, root: Option<PathBuf>) {
+        self.voicebank_list = root
+            .as_deref()
+            .map_or_else(Vec::new, daw_formats::utau::installed);
+        self.session.set_voicebanks_folder(root.as_deref());
+        self.voicebanks_root = root;
+    }
+
+    /// Opens the Voicebanks window.
+    pub fn open_voicebanks_window(&mut self) {
+        let from_chooser = matches!(self.dialog, Some(Dialog::Instruments { .. }));
+        if !matches!(self.dialog, Some(Dialog::Voicebanks { .. })) {
+            self.dialog = Some(Dialog::Voicebanks {
+                window: VoicebanksWindow::default(),
+                from_chooser,
+            });
         }
     }
 
@@ -587,8 +624,10 @@ impl Workspace {
         } else if self.session.is_previewing()
             || self.library.is_listing()
             || self.session.is_reading_instruments()
+            || self.session.is_rendering_voices()
         {
-            // The library's playing mark and listings; instruments read.
+            // The library's playing mark and listings; instruments read;
+            // singing rendered.
             ctx.request_repaint_after(Duration::from_millis(100));
         } else if self.session.any_plugin_window_open() || !self.session.plugin_search().done {
             // Plugin windows are looked after between frames.
@@ -1069,6 +1108,14 @@ impl Workspace {
                 self.open_plugins_window();
                 ui.close();
             }
+            if ui
+                .button(text::MANAGE_VOICEBANKS)
+                .on_hover_text(text::MANAGE_VOICEBANKS_HINT)
+                .clicked()
+            {
+                self.open_voicebanks_window();
+                ui.close();
+            }
             ui.separator();
             ui.menu_button(text::THEME, |ui| self.theme_menu(ui));
             ui.menu_button(text::KEY_LABELS, |ui| self.labels_menu(ui));
@@ -1386,11 +1433,45 @@ impl Workspace {
             Dialog::Instruments { search } => {
                 let (search, close) = self.instrument_chooser(ctx, search);
                 keep = !close;
-                if matches!(self.dialog, Some(Dialog::Plugins { .. })) {
-                    // "Plugins…" in the chooser opened the Plugins window.
+                if matches!(
+                    self.dialog,
+                    Some(Dialog::Plugins { .. } | Dialog::Voicebanks { .. })
+                ) {
+                    // "Plugins…" or "Voicebanks…" in the chooser opened its
+                    // window.
                     return;
                 }
                 Dialog::Instruments { search }
+            }
+            Dialog::Voicebanks {
+                mut window,
+                from_chooser,
+            } => {
+                let mut close = false;
+                let busy = window.is_busy();
+                let response = modal("voicebanks", ctx).show(ctx, |ui| {
+                    let mut parts = crate::voicebanks::Parts {
+                        root: self.voicebanks_root.as_deref(),
+                        list: &mut self.voicebank_list,
+                        host: self.host.as_mut(),
+                        session: &mut self.session,
+                    };
+                    close = window.contents(ui, &mut parts);
+                });
+                if response.should_close() && !busy {
+                    close = true;
+                }
+                if close {
+                    keep = from_chooser;
+                    Dialog::Instruments {
+                        search: String::new(),
+                    }
+                } else {
+                    Dialog::Voicebanks {
+                        window,
+                        from_chooser,
+                    }
+                }
             }
             Dialog::Plugins {
                 mut window,
@@ -1478,12 +1559,73 @@ impl Workspace {
         true
     }
 
+    /// The buttons under the instrument chooser: Cancel, Look again (when
+    /// the search is done), Plugins… and Voicebanks….
+    fn chooser_buttons(&mut self, ui: &mut Ui, search_done: bool) -> ChooserButtons {
+        let mut pressed = ChooserButtons::default();
+        ui.horizontal(|ui| {
+            pressed.cancel = ui.button(text::CANCEL).clicked();
+            if ui
+                .add_enabled(search_done, Button::new(text::LOOK_AGAIN))
+                .on_hover_text(text::LOOK_AGAIN_HINT)
+                .clicked()
+            {
+                self.requests.push(Request::FindPlugins);
+            }
+            pressed.plugins = ui
+                .button(text::MANAGE_PLUGINS)
+                .on_hover_text(text::MANAGE_PLUGINS_HINT)
+                .clicked();
+            pressed.voicebanks = ui
+                .button(text::MANAGE_VOICEBANKS)
+                .on_hover_text(text::MANAGE_VOICEBANKS_HINT)
+                .clicked();
+        });
+        pressed
+    }
+
+    /// The chooser's voices (decision 0027): the installed voicebanks that
+    /// match the search (none installed: "Voicebanks…" below is the way
+    /// in). Returns whether a voice track was added.
+    fn voice_choices(&mut self, ui: &mut Ui, needle: &str) -> bool {
+        let wanted = |text: &str| needle.is_empty() || text.to_lowercase().contains(needle);
+        let voices: Vec<_> = self
+            .voicebank_list
+            .iter()
+            .filter(|info| {
+                wanted(&info.name)
+                    || wanted(&text::voicebank_detail(
+                        info.author.as_deref(),
+                        info.syllables,
+                    ))
+                    || wanted(text::VOICES)
+            })
+            .cloned()
+            .collect();
+        if voices.is_empty() {
+            return false;
+        }
+        ui.label(RichText::new(text::VOICES).weak());
+        let mut added = false;
+        for info in voices {
+            let detail = text::voicebank_detail(info.author.as_deref(), info.syllables);
+            if choice_row(ui, &info.name, &detail) {
+                let folder = crate::voicebanks::folder_name(&info);
+                self.session.add_voice_track(&folder, &info.name);
+                added = true;
+            }
+        }
+        ui.add_space(8.0);
+        added
+    }
+
     /// The instrument chooser: the included instruments, then the plugins
     /// found on this computer, with a search field. Returns the search text
     /// and whether the chooser closes.
     fn instrument_chooser(&mut self, ctx: &egui::Context, mut search: String) -> (String, bool) {
         let mut close = false;
         let mut manage = false;
+        let mut manage_voices = false;
         let plugins = self.session.plugins_of(PluginKind::Instrument);
         let found = self.session.plugin_search().clone();
         let response = modal("instruments", ctx).show(ctx, |ui| {
@@ -1533,6 +1675,9 @@ impl Workspace {
                         }
                         ui.add_space(8.0);
                     }
+                    if self.voice_choices(ui, &needle) {
+                        close = true;
+                    }
                     ui.label(RichText::new(text::PLUGINS).weak());
                     let mut shown = 0;
                     for info in &plugins {
@@ -1549,26 +1694,19 @@ impl Workspace {
                     search_state(ui, &found, plugins.is_empty(), shown);
                 });
             ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                if ui.button(text::CANCEL).clicked() {
-                    close = true;
-                }
-                if ui
-                    .add_enabled(found.done, Button::new(text::LOOK_AGAIN))
-                    .on_hover_text(text::LOOK_AGAIN_HINT)
-                    .clicked()
-                {
-                    self.requests.push(Request::FindPlugins);
-                }
-                if ui
-                    .button(text::MANAGE_PLUGINS)
-                    .on_hover_text(text::MANAGE_PLUGINS_HINT)
-                    .clicked()
-                {
-                    manage = true;
-                }
-            });
+            let pressed = self.chooser_buttons(ui, found.done);
+            close |= pressed.cancel;
+            manage |= pressed.plugins;
+            manage_voices |= pressed.voicebanks;
         });
+        if manage_voices {
+            // The chooser comes back once the Voicebanks window closes.
+            self.dialog = Some(Dialog::Voicebanks {
+                window: VoicebanksWindow::default(),
+                from_chooser: true,
+            });
+            return (search, false);
+        }
         if manage {
             // The chooser comes back once the Plugins window closes.
             self.plugin_messages.clear();
@@ -1672,6 +1810,14 @@ fn choice_row(ui: &mut Ui, name: &str, detail: &str) -> bool {
             .min_size(egui::vec2(ui.available_width(), 30.0)),
     )
     .clicked()
+}
+
+/// Which of the buttons under the instrument chooser were pressed.
+#[derive(Clone, Copy, Debug, Default)]
+struct ChooserButtons {
+    cancel: bool,
+    plugins: bool,
+    voicebanks: bool,
 }
 
 /// How many plugin files that cannot be used the chooser explains in full.

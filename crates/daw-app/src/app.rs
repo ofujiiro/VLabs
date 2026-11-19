@@ -152,6 +152,7 @@ impl App {
             busy: false,
         };
         workspace.set_plugin_places(plugin_places.clone());
+        workspace.set_voicebanks_folder(paths.as_ref().map(crate::paths::Paths::voicebanks));
 
         let mut app = Self {
             workspace,

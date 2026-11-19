@@ -780,6 +780,80 @@ pub fn sfz_track(file: &str, reading: bool) -> String {
     }
 }
 
+// Singing voices (decision 0027).
+pub const VOICEBANKS_TITLE: &str = "Voicebanks";
+pub const VOICEBANKS_INTRO: &str = "Voicebanks sing the notes of voice tracks. Add classic UTAU \
+     voicebanks: a voicebank's folder, or the .zip it came in.";
+pub const VOICEBANKS_NO_FOLDER: &str = "Voicebanks cannot be added on this computer: the program \
+     has no folder of its own to keep them in.";
+pub const ADD_VOICEBANK_FOLDER: &str = "Add a folder…";
+pub const ADD_VOICEBANK_FOLDER_HINT: &str =
+    "A voicebank's folder (the one with oto.ini in it): it is copied here";
+pub const ADD_VOICEBANK_ZIP: &str = "Add a .zip…";
+pub const ADD_VOICEBANK_ZIP_HINT: &str = "The .zip a voicebank came in: it is unpacked here";
+pub const CHOOSE_VOICEBANK_FOLDER: &str = "Choose a voicebank's folder";
+pub const CHOOSE_VOICEBANK_ZIP_TITLE: &str = "Choose a voicebank's .zip";
+pub const ZIP_FILE_TYPE: &str = "Zip archive";
+pub const ADDING_VOICEBANK: &str = "Adding the voicebank…";
+pub const ADDING_STOPPED: &str = "adding it stopped unexpectedly";
+pub const NO_VOICEBANKS: &str = "No voicebank yet.";
+pub const READ_THE_TERMS: &str =
+    "Read the creator's terms before you use this voice: they say what you may do with it.";
+pub const NO_TERMS: &str = "This voicebank came without a readme.";
+pub const REMOVE_VOICEBANK: &str = "Remove this voicebank";
+pub const VOICES: &str = "Voices";
+pub const MANAGE_VOICEBANKS: &str = "Voicebanks…";
+pub const MANAGE_VOICEBANKS_HINT: &str = "Add, read and remove voicebanks";
+pub const RENDERING_VOICES: &str = "Rendering the voice…";
+pub const LYRIC: &str = "Lyric";
+pub const LYRIC_HINT: &str = "Type the lyric (words after a space go to the next notes); Enter \
+     to finish, Escape to leave it as it was";
+pub const LYRIC_NOT_FOUND: &str = "The voicebank has no recording for this lyric: it sings \"a\"";
+pub const EDIT_LYRIC_HINT: &str = "Press Enter to type the selected note's lyric";
+
+/// Why a song's voice is silent on this computer.
+pub fn voicebank_not_installed(name: &str) -> String {
+    format!("the voicebank “{name}” is not installed on this computer (add it in Voicebanks…)")
+}
+
+/// What the Voicebanks window says once one is added.
+pub fn voicebank_added(name: &str) -> String {
+    format!("Added {name}.")
+}
+
+/// What it says when one cannot be added.
+pub fn could_not_add_voicebank(reason: &str) -> String {
+    format!("Could not add it: {reason}.")
+}
+
+/// What it says once one is removed.
+pub fn voicebank_removed(name: &str) -> String {
+    format!("Removed {name}.")
+}
+
+/// What it says when one cannot be removed.
+pub fn could_not_remove_voicebank(reason: &str) -> String {
+    format!("Could not remove it: {reason}.")
+}
+
+/// A voicebank in a list: "by Someone · 412 syllables".
+pub fn voicebank_detail(author: Option<&str>, syllables: usize) -> String {
+    let count = if syllables == 1 {
+        "1 syllable".to_owned()
+    } else {
+        format!("{syllables} syllables")
+    };
+    match author {
+        Some(author) => format!("by {author} · {count}"),
+        None => count,
+    }
+}
+
+/// The title of a voicebank's terms.
+pub fn voicebank_terms_title(name: &str) -> String {
+    format!("{name}: its creator's terms")
+}
+
 /// A voice track's description: "Voice · Uta", while its voicebank is
 /// read "Voice · Uta · reading…".
 pub fn voice_track(voicebank: &str, reading: bool) -> String {
@@ -1727,6 +1801,8 @@ pub const EDIT_REMOVE_TEMPO_CHANGE: &str = "remove tempo change";
 pub const EDIT_MOVE_TEMPO_CHANGE: &str = "move tempo change";
 pub const EDIT_GLIDE: &str = "change tempo glide";
 pub const EDIT_GLIDE_SHAPE: &str = "bend tempo glide";
+pub const EDIT_ADD_VOICE: &str = "add voice track";
+pub const EDIT_LYRICS: &str = "change lyrics";
 pub const EDIT_MOVE_SIGNATURE: &str = "move signature change";
 pub const EDIT_REMOVE_SIGNATURE: &str = "remove signature change";
 

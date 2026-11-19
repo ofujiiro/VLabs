@@ -20,6 +20,7 @@ mod plugins;
 mod recorder;
 mod synth;
 mod theory;
+mod voice;
 
 pub use audio::{LiveTake, SoundState, TakeNote};
 pub use files::SongFile;
@@ -232,6 +233,8 @@ pub struct Session {
     paste_at: Option<Ticks>,
     keyboard_base: u8,
     drum_base: u8,
+    /// The voicebanks lyrics are checked against (decision 0027).
+    voicebanks: voice::VoicebankCache,
     keyboard_velocity: f32,
     held_keys: HashMap<Key, u8>,
     pointer_note: Option<u8>,
@@ -328,6 +331,7 @@ impl Session {
             paste_at: None,
             keyboard_base: 48,
             drum_base: DRUM_BASE,
+            voicebanks: voice::VoicebankCache::default(),
             keyboard_velocity: 0.8,
             held_keys: HashMap::new(),
             pointer_note: None,

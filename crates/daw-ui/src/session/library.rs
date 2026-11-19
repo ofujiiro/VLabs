@@ -240,6 +240,14 @@ impl Session {
     /// it has nothing else to say; clears it once they are ready.
     pub(super) fn note_reading(&mut self) {
         let files = self.engine.loading_sounds();
+        if files.is_empty() && self.engine.is_rendering_voices() {
+            // Singing being rendered (decision 0027).
+            if self.status.is_none() || self.reading_notice {
+                self.status = Some((text::RENDERING_VOICES.to_owned(), std::time::Instant::now()));
+                self.reading_notice = true;
+            }
+            return;
+        }
         if files.is_empty() {
             if self.reading_notice {
                 self.reading_notice = false;

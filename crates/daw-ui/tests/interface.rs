@@ -2883,3 +2883,169 @@ fn a_library_folder_becomes_a_custom_kit() {
         .collect();
     assert_eq!(names, ["Kick", "Snare"]);
 }
+
+// ----- Singing voices (decision 0027)
+
+/// A fresh folder of this test run's own.
+fn fresh_folder(name: &str) -> PathBuf {
+    let folder = std::env::temp_dir().join(format!(
+        "interface-{name}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    ));
+    std::fs::create_dir_all(&folder).unwrap();
+    folder
+}
+
+/// A voicebank made for the tests in `folder`: one recording of a vowel,
+/// named "- a", "a", "ka" and "a ka" (plain letters, which the interface's
+/// own fonts draw), a `character.txt` and a readme.
+fn test_voicebank(folder: &std::path::Path) {
+    std::fs::create_dir_all(folder).unwrap();
+    let rate = 22_050_u32;
+    let samples: Vec<f32> = (0..rate)
+        .map(|i| {
+            (0.3 * (std::f64::consts::TAU * 220.0 * f64::from(i) / f64::from(rate)).sin()) as f32
+        })
+        .collect();
+    let mut writer = daw_formats::wav::WavWriter::create_with_channels(
+        &folder.join("vowel.wav"),
+        daw_formats::wav::WavFormat::Pcm16,
+        rate,
+        1,
+    )
+    .unwrap();
+    writer.write_interleaved(&samples).unwrap();
+    writer.finish().unwrap();
+    std::fs::write(
+        folder.join("oto.ini"),
+        "vowel.wav=- a,20,30,-900,40,10\nvowel.wav=a,20,30,-900,40,10\n\
+         vowel.wav=ka,20,30,-900,40,10\nvowel.wav=a ka,20,30,-900,40,10\n",
+    )
+    .unwrap();
+    std::fs::write(
+        folder.join("character.txt"),
+        "name=Test Voice\nauthor=Tester\n",
+    )
+    .unwrap();
+    std::fs::write(folder.join("readme.txt"), "Free to use in tests.\n").unwrap();
+}
+
+#[test]
+fn a_voice_track_sings_lyrics_typed_on_its_notes() {
+    let folder = fresh_folder("voice-track");
+    let root = folder.join("voicebanks");
+    test_voicebank(&root.join("Test Voice"));
+    let mut f = new_song();
+    f.workspace_mut().set_voicebanks_folder(Some(root));
+    // The instrument chooser offers it among the voices.
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    f.harness
+        .get_by_label(&format!("+ {}", text::ADD_INSTRUMENT))
+        .click();
+    f.harness.run_steps(3);
+    f.harness.get_by_label(text::VOICES);
+    // (The chooser, taller with its voices, settles before the click.)
+    f.harness.run_steps(8);
+    f.harness.get_by_label_contains("Test Voice").click();
+    f.harness.run_steps(3);
+    assert_eq!(f.session().voicebank(), Some("Test Voice"));
+    let track = f.session().track_id();
+    f.workspace_mut().session_mut().open_track(track);
+    f.harness.run_steps(3);
+    let ids: Vec<daw_model::NoteId> = (0..3_u8)
+        .map(|i| {
+            f.workspace_mut()
+                .session_mut()
+                .add_note(Ticks::QUARTER * i64::from(i), 60 + 2 * i, 0.8)
+                .unwrap()
+        })
+        .collect();
+    f.workspace_mut().session_mut().select_only([ids[0]]);
+    f.harness.run_steps(2);
+    // Enter types the selected note's lyric; words after a space go to the
+    // next notes.
+    f.key(Key::Enter, Key::Enter, true, Modifiers::NONE);
+    f.key(Key::Enter, Key::Enter, false, Modifiers::NONE);
+    f.harness.run_steps(2);
+    f.harness.event(Event::Text("ka sa".to_owned()));
+    f.harness.run_steps(1);
+    f.key(Key::Enter, Key::Enter, true, Modifiers::NONE);
+    f.key(Key::Enter, Key::Enter, false, Modifiers::NONE);
+    f.harness.run_steps(2);
+    let pattern = f.session().pattern();
+    assert_eq!(pattern.lyric(ids[0]), Some("ka"));
+    assert_eq!(pattern.lyric(ids[1]), Some("sa"));
+    assert_eq!(
+        pattern.lyric(ids[2]),
+        None,
+        "the third note still sings \"a\""
+    );
+    // The voicebank has "ka" but not "sa" (which sings "a"): marked.
+    assert!(f.workspace_mut().session_mut().lyric_found(ids[0]));
+    assert!(!f.workspace_mut().session_mut().lyric_found(ids[1]));
+    assert!(f.workspace_mut().session_mut().lyric_found(ids[2]));
+    // The phrase was one step: one undo takes it back.
+    f.workspace_mut().session_mut().undo();
+    assert!(f.session().pattern().lyrics.is_empty());
+    // Escape leaves a lyric as it was.
+    f.key(Key::Enter, Key::Enter, true, Modifiers::NONE);
+    f.key(Key::Enter, Key::Enter, false, Modifiers::NONE);
+    f.harness.run_steps(2);
+    f.harness.event(Event::Text("ne".to_owned()));
+    f.harness.run_steps(1);
+    f.key(Key::Escape, Key::Escape, true, Modifiers::NONE);
+    f.key(Key::Escape, Key::Escape, false, Modifiers::NONE);
+    f.harness.run_steps(2);
+    assert!(
+        f.session().pattern().lyrics.is_empty(),
+        "nothing typed was kept"
+    );
+    std::fs::remove_dir_all(folder).ok();
+}
+
+#[test]
+fn the_voicebanks_window_adds_one_shows_its_terms_and_removes_it() {
+    let folder = fresh_folder("voicebanks");
+    let source = folder.join("downloaded").join("Test Voice");
+    test_voicebank(&source);
+    let root = folder.join("voicebanks");
+    let mut f = new_song();
+    f.workspace_mut().set_voicebanks_folder(Some(root.clone()));
+    *f.host.folder.lock().unwrap() = Some(source);
+    f.workspace_mut().open_voicebanks_window();
+    f.harness.run_steps(3);
+    f.harness.get_by_label(text::VOICEBANKS_TITLE);
+    f.harness.get_by_label(text::NO_VOICEBANKS);
+    f.harness.get_by_label(text::ADD_VOICEBANK_FOLDER).click();
+    // It is copied on a thread of its own.
+    for _ in 0..200 {
+        f.harness.run_steps(1);
+        if f.harness
+            .query_by_label(&text::voicebank_added("Test Voice"))
+            .is_some()
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    f.harness.get_by_label(&text::voicebank_added("Test Voice"));
+    // Its terms are shown, with a reminder to read them.
+    f.harness.get_by_label(text::READ_THE_TERMS);
+    f.harness.get_by_label_contains("Free to use in tests.");
+    assert!(root.join("Test Voice").join("oto.ini").is_file());
+    // Removed, it is gone.
+    // (The window grew with the terms: it settles before the click.)
+    f.harness.run_steps(8);
+    f.harness.get_by_label(text::REMOVE_VOICEBANK).click();
+    f.harness.run_steps(3);
+    f.harness.get_by_label(text::NO_VOICEBANKS);
+    assert!(!root.join("Test Voice").exists());
+    f.harness.get_by_label(text::CLOSE).click();
+    f.harness.run_steps(3);
+    assert!(f.harness.query_by_label(text::VOICEBANKS_TITLE).is_none());
+    std::fs::remove_dir_all(folder).ok();
+}

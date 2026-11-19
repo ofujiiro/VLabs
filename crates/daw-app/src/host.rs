@@ -184,6 +184,20 @@ impl Host for DialogHost {
         folder
     }
 
+    fn choose_voicebank_zip(&mut self) -> Option<PathBuf> {
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter(text::ZIP_FILE_TYPE, &["zip"])
+            .set_title(text::CHOOSE_VOICEBANK_ZIP_TITLE);
+        if let Some(folder) = self.plugins.as_ref().or(self.folder.as_ref()) {
+            dialog = dialog.set_directory(folder);
+        }
+        let file = dialog.pick_file();
+        if let Some(folder) = file.as_deref().and_then(Path::parent) {
+            self.plugins = Some(folder.to_path_buf());
+        }
+        file
+    }
+
     fn open_folder(&mut self, folder: &Path) {
         let _ = std::fs::create_dir_all(folder);
         open_in_browser(&folder.display().to_string());

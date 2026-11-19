@@ -91,7 +91,7 @@ fn main() {
         .and_then(|p| std::fs::read_to_string(p.settings_file()).ok())
         .map_or_else(Settings::default, |json| Settings::from_json(&json));
 
-    let library = sound_library();
+    let library = sound_library(paths.as_ref().map(paths::Paths::voicebanks));
     let config = EngineConfig {
         sample_rate: SAMPLE_RATE,
         max_block: 1024,
@@ -141,6 +141,9 @@ fn main() {
                 Box::new(host::DialogHost::default()),
                 labels,
             );
+            if let Some((bytes, index)) = japanese_font() {
+                daw_ui::theme::use_fallback_font(&cc.egui_ctx, bytes, index);
+            }
             let mut app = App::new(
                 &cc.egui_ctx,
                 Parts {
@@ -165,16 +168,50 @@ fn main() {
     }
 }
 
-/// The instruments' sounds: the bundled piano and drum kit, and a reader
-/// for the person's SFZ instruments, read on a thread of their own
-/// (decision 0024).
-fn sound_library() -> SoundLibrary {
+/// The instruments' sounds: the bundled piano and drum kit, and readers
+/// for the person's SFZ instruments (decision 0024) and voicebanks (in the
+/// program's own folder, decision 0027), read on threads of their own.
+fn sound_library(voicebanks: Option<std::path::PathBuf>) -> SoundLibrary {
     let mut library = SoundLibrary::new();
     library.register_builtin(daw_model::BUILTIN_PIANO, PIANO);
     library.register_kit(daw_model::ACOUSTIC_KIT, ACOUSTIC_KIT);
     library.set_sfz_reader(|path| daw_formats::sfz::load(path).map_err(|e| e.to_string()));
+    library.set_voice_reader(std::sync::Arc::new(move |name| match &voicebanks {
+        Some(root) if daw_formats::utau::read_info(&root.join(name)).is_ok() => {
+            daw_formats::utau::read_voicebank(&root.join(name))
+        }
+        _ => Err(text::voicebank_not_installed(name)),
+    }));
     library.set_background_loading(true);
     library
+}
+
+/// A font on this computer that draws Japanese (for lyrics and voicebank
+/// names, decision 0027): none is bundled, as none we could bundle has
+/// the right licence. The first one found, and its index in a collection.
+fn japanese_font() -> Option<(Vec<u8>, u32)> {
+    let candidates: &[&str] = if cfg!(windows) {
+        &[
+            "C:\\Windows\\Fonts\\YuGothR.ttc",
+            "C:\\Windows\\Fonts\\meiryo.ttc",
+            "C:\\Windows\\Fonts\\msgothic.ttc",
+        ]
+    } else {
+        &[
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
+            "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
+            "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
+            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+            "/usr/share/fonts/droid/DroidSansFallbackFull.ttf",
+        ]
+    };
+    candidates
+        .iter()
+        .find_map(|path| std::fs::read(path).ok())
+        .map(|bytes| (bytes, 0))
 }
 
 /// Tells the person the program could not start: on the terminal, and in a

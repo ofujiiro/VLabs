@@ -19,6 +19,9 @@
 //! - with the song's key set, rows outside the key are shaded; "Keep notes
 //!   in the key" puts new and dragged notes on notes of the key; a chord
 //!   stamp ("Draw") shows its notes under the pointer and places them all.
+//! - on a voice track, each note shows its lyric (decision 0027): press
+//!   Enter (or double-click a note) to type it; words after a space go to
+//!   the next notes; a lyric the voicebank does not have is marked "?";
 //! - the lane under the notes shows their velocity, or the song's tempo
 //!   where the pattern plays (decision 0026; `tempo_lane`), edited there.
 //!
@@ -124,6 +127,19 @@ pub struct PianoRoll {
     shows_tempo: bool,
     /// The tempo line, when the lane shows it.
     tempo: TempoLane,
+    /// The lyric being typed (decision 0027).
+    lyric: Option<LyricEdit>,
+    /// The notes whose lyric the voicebank does not have, this frame.
+    missing_lyrics: HashSet<NoteId>,
+}
+
+/// A lyric being typed: on which note, and the text so far.
+#[derive(Clone, Debug)]
+struct LyricEdit {
+    note: NoteId,
+    text: String,
+    /// The field takes the keyboard on its first frame.
+    fresh: bool,
 }
 
 impl Default for PianoRoll {
@@ -142,6 +158,8 @@ impl Default for PianoRoll {
             pattern_end: Ticks::WHOLE,
             shows_tempo: false,
             tempo: TempoLane::with_panels_above(),
+            lyric: None,
+            missing_lyrics: HashSet::new(),
         }
     }
 }
@@ -222,6 +240,7 @@ impl PianoRoll {
         }
         self.handle_view_input(ui, &response, &layout);
         self.handle_pointer(ui, &response, &layout, session);
+        self.start_lyric(ui, &response, &layout, session);
         self.follow_playhead(ui, session, &layout);
         self.clamp_view(&layout, session);
 
@@ -247,6 +266,119 @@ impl PianoRoll {
         }
         self.paint_overlay(ui, &layout, session);
         self.tempo.panel_ui(ui, session);
+        self.lyric_editor(ui, &layout, session);
+    }
+
+    /// Opens the lyric field of a voice track's note: Enter types the
+    /// first selected note's, a double-click the note's under the pointer.
+    fn start_lyric(
+        &mut self,
+        ui: &Ui,
+        response: &Response,
+        layout: &Layout,
+        session: &mut Session,
+    ) {
+        if !session.is_voice_track() {
+            self.lyric = None;
+            self.missing_lyrics.clear();
+            return;
+        }
+        let ids: Vec<NoteId> = session.pattern().notes.iter().map(|n| n.id).collect();
+        self.missing_lyrics = ids
+            .into_iter()
+            .filter(|id| !session.lyric_found(*id))
+            .collect();
+        if self.lyric.is_some() || ui.ctx().text_edit_focused() {
+            return;
+        }
+        let pattern = session.pattern();
+        let target = if response.double_clicked() {
+            response
+                .interact_pointer_pos()
+                .and_then(|pos| self.note_at(&pattern.notes, layout.grid, pos))
+                .map(|n| n.id)
+        } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            pattern
+                .notes
+                .iter()
+                .filter(|n| session.is_selected(n.id))
+                .min_by(|a, b| a.start.cmp(&b.start).then(b.key.cmp(&a.key)))
+                .map(|n| n.id)
+        } else {
+            None
+        };
+        if let Some(note) = target {
+            self.lyric = Some(LyricEdit {
+                note,
+                text: pattern.lyric(note).unwrap_or("").to_owned(),
+                fresh: true,
+            });
+        }
+    }
+
+    /// The lyric field, over its note: Enter keeps what was typed, Tab
+    /// keeps it and goes on to the next note, Escape leaves it as it was.
+    fn lyric_editor(&mut self, ui: &mut Ui, layout: &Layout, session: &mut Session) {
+        let Some(editing) = self.lyric.as_ref().map(|e| e.note) else {
+            return;
+        };
+        let Some(note) = session.pattern().note(editing).copied() else {
+            self.lyric = None;
+            return;
+        };
+        let body = self.note_rect(layout.grid, &note);
+        let Some(edit) = &mut self.lyric else {
+            return;
+        };
+        let (mut keep, mut next, mut leave) = (false, false, false);
+        egui::Area::new(ui.scope_id().with("lyric-editor"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(body.left_top() - vec2(4.0, 6.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style())
+                    .inner_margin(egui::Margin::same(4))
+                    .show(ui, |ui| {
+                        let field = ui
+                            .add(
+                                egui::TextEdit::singleline(&mut edit.text)
+                                    .desired_width(body.width().max(140.0))
+                                    .hint_text(text::LYRIC),
+                            )
+                            .on_hover_text(text::LYRIC_HINT);
+                        // On its first frame the keys are the ones that
+                        // opened it.
+                        let first = std::mem::take(&mut edit.fresh);
+                        if first {
+                            field.request_focus();
+                            return;
+                        }
+                        let (enter, tab, escape) = ui.input(|i| {
+                            (
+                                i.key_pressed(egui::Key::Enter),
+                                i.key_pressed(egui::Key::Tab),
+                                i.key_pressed(egui::Key::Escape),
+                            )
+                        });
+                        if escape {
+                            leave = true;
+                        } else if tab {
+                            next = true;
+                        } else if enter {
+                            keep = true;
+                        }
+                    });
+            });
+        if leave {
+            self.lyric = None;
+        } else if keep || next {
+            let typed = edit.text.clone();
+            let following = session.sing_from(note.id, &typed);
+            self.lyric = following.filter(|_| next).map(|note| LyricEdit {
+                note,
+                text: session.pattern().lyric(note).unwrap_or("").to_owned(),
+                fresh: true,
+            });
+        }
     }
 
     /// The buttons left of the lane: what it shows.
@@ -1186,6 +1318,7 @@ impl PianoRoll {
         let mut mesh = Mesh::default();
         let mut labels = Vec::new();
         let show_names = self.key_height >= 13.0 && range.len() < 400;
+        let voice = session.is_voice_track() && range.len() < 400;
         let (left, _) = self.visible_ticks(grid);
         for note in &notes[range] {
             if (note.end().0 as f64) < left
@@ -1200,7 +1333,13 @@ impl PianoRoll {
             let fill = shade(base, 0.55 + 0.45 * note.velocity);
             add_rect(&mut mesh, body, p.note_edge);
             add_rect(&mut mesh, body.shrink(1.0), fill);
-            if show_names && body.width() > 30.0 {
+            if voice && body.width() > 14.0 {
+                let mut lyric = shown_lyric(ui.ctx(), session.lyric(note.id));
+                if self.missing_lyrics.contains(&note.id) {
+                    lyric.push_str(" ?");
+                }
+                labels.push((body, lyric));
+            } else if show_names && body.width() > 30.0 {
                 labels.push((body, text::note_name(note.key)));
             }
         }
@@ -1588,4 +1727,15 @@ fn add_rect(mesh: &mut Mesh, rect: Rect, color: Color32) {
         pos2(rect.right().round(), rect.bottom().round()),
     );
     mesh.add_colored_rect(snapped, color);
+}
+
+/// A lyric as the piano roll shows it: as typed, or in romaji when the
+/// fonts cannot draw it (kana without a Japanese font on the computer).
+fn shown_lyric(ctx: &egui::Context, lyric: &str) -> String {
+    let font = FontId::proportional(size::SMALL);
+    if lyric.is_ascii() || ctx.fonts_mut(|f| f.has_glyphs(&font, lyric)) {
+        lyric.to_owned()
+    } else {
+        daw_model::lyrics::to_romaji(lyric)
+    }
 }

@@ -144,6 +144,20 @@ pub mod size {
 
 /// Installs the fonts and both themes' styles.
 pub fn install(ctx: &egui::Context) {
+    ctx.set_fonts(definitions(None));
+    install_styles(ctx);
+}
+
+/// Adds a font from the computer that draws what ours cannot (Japanese
+/// lyrics and voicebank names, decision 0027), after our own.
+pub fn use_fallback_font(ctx: &egui::Context, bytes: Vec<u8>, index: u32) {
+    let mut data = FontData::from_owned(bytes);
+    data.index = index;
+    ctx.set_fonts(definitions(Some(data)));
+}
+
+/// Our fonts, with a fallback for every family when there is one.
+fn definitions(fallback: Option<FontData>) -> FontDefinitions {
     let mut fonts = FontDefinitions::empty();
     let regular: &'static [u8] = include_bytes!("../../../assets/fonts/Go-Regular.ttf");
     let medium: &'static [u8] = include_bytes!("../../../assets/fonts/Go-Medium.ttf");
@@ -168,8 +182,19 @@ pub fn install(ctx: &egui::Context) {
         FontFamily::Name(MEDIUM.into()),
         vec!["go-medium".to_owned()],
     );
-    ctx.set_fonts(fonts);
+    if let Some(data) = fallback {
+        fonts
+            .font_data
+            .insert("fallback".to_owned(), Arc::new(data));
+        for family in fonts.families.values_mut() {
+            family.push("fallback".to_owned());
+        }
+    }
+    fonts
+}
 
+/// Both themes' styles.
+fn install_styles(ctx: &egui::Context) {
     for (theme, palette) in [(Theme::Dark, Palette::DARK), (Theme::Light, Palette::LIGHT)] {
         ctx.style_mut_of(theme, |style| {
             style.visuals = visuals(theme, &palette);
