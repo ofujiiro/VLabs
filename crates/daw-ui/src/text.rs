@@ -780,6 +780,16 @@ pub fn sfz_track(file: &str, reading: bool) -> String {
     }
 }
 
+/// A voice track's description: "Voice · Uta", while its voicebank is
+/// read "Voice · Uta · reading…".
+pub fn voice_track(voicebank: &str, reading: bool) -> String {
+    if reading {
+        format!("Voice · {voicebank} · reading…")
+    } else {
+        format!("Voice · {voicebank}")
+    }
+}
+
 /// The status line while instruments are read.
 pub fn reading_instruments(files: &[String]) -> String {
     match files {

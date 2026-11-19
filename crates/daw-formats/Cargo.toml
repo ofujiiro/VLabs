@@ -18,6 +18,8 @@ daw-ident.workspace = true
 lewton.workspace = true
 nanomp3.workspace = true
 daw-model.workspace = true
+# Voicebanks' Shift-JIS text and file names (decision 0027).
+encoding_rs.workspace = true
 quick-xml.workspace = true
 serde.workspace = true
 serde_json.workspace = true

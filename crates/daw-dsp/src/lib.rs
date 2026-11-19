@@ -12,6 +12,7 @@ pub mod sf2_writer;
 mod sine;
 mod soundfont;
 pub mod synth;
+pub mod voice;
 
 pub use click::Click;
 pub use instrument::{Instrument, InstrumentSettings, NoteEvent, SongPosition};

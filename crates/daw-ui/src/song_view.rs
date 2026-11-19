@@ -1820,6 +1820,9 @@ impl SongView {
                     .map_or_else(|| file.clone(), |n| n.to_string_lossy().into_owned()),
                 session.is_track_reading(track),
             ),
+            Instrument::Voice { voicebank } => {
+                text::voice_track(voicebank, session.is_track_reading(track))
+            }
         };
         child.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;

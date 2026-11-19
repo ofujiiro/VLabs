@@ -270,7 +270,8 @@ impl Session {
                 | Instrument::Audio
                 | Instrument::Synth(_)
                 | Instrument::Sfz { .. }
-                | Instrument::Kit { .. } => None,
+                | Instrument::Kit { .. }
+                | Instrument::Voice { .. } => None,
             });
         if current.is_none_or(|k| k == kit) {
             return;
@@ -293,7 +294,8 @@ impl Session {
             | Instrument::Audio
             | Instrument::Synth(_)
             | Instrument::Sfz { .. }
-            | Instrument::Kit { .. } => None,
+            | Instrument::Kit { .. }
+            | Instrument::Voice { .. } => None,
         }
     }
 

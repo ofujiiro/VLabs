@@ -313,6 +313,9 @@ impl Writer<'_> {
             Instrument::Synth(_) => ("synth", "Synth"),
             Instrument::Sfz { .. } => ("sfz", "SFZ instrument"),
             Instrument::Kit { .. } => ("kit", "Custom kit"),
+            // The voicebank goes by name in the state; lyrics have no place
+            // in DAWproject yet.
+            Instrument::Voice { .. } => ("voice", "Singing voice"),
         };
         let mut state = serde_json::to_value(instrument).unwrap_or_default();
         // A custom kit's sounds go in the file, named under `files`.

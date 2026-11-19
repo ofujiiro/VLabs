@@ -87,7 +87,8 @@ fn write_hum(folder: &std::path::Path) {
 /// a change, a swung beat, a tempo glide and a time-signature change;
 /// version 6 a track of the built-in synth with a lane for its cutoff;
 /// version 7 a track playing an SFZ instrument, and a custom kit whose pad
-/// plays the version 4 sample's sound; version 8 a bent tempo glide).
+/// plays the version 4 sample's sound; version 8 a bent tempo glide;
+/// version 9 a singing voice whose notes have lyrics).
 fn reference_project() -> Project {
     let mut project = Project::starter("Pattern 1", "Piano");
     let (_, pattern) = project.first_pattern().unwrap();
@@ -168,6 +169,7 @@ fn reference_project() -> Project {
         };
     }
     add_newer_instruments(&mut project);
+    add_voice(&mut project);
     let triplet = Ticks::note_value(1, 12);
     for (i, key) in [60_u8, 64, 67, 72].iter().enumerate() {
         project.add_note(
@@ -259,6 +261,7 @@ fn every_released_format_version_still_opens() {
         }
         check_newer_instruments(&project, version, &path);
         check_bent_glide(&project, version, &path);
+        check_voice(&project, version, &path);
         if version >= 5 {
             check_theory_and_rhythm(&project, &path);
         } else {
@@ -297,6 +300,59 @@ fn every_released_format_version_still_opens() {
         found >= FORMAT_VERSION as usize,
         "a sample file is missing for some format version (found {found})"
     );
+}
+
+/// The version 9 sample's voice: a track singing "ka sa ne".
+fn add_voice(project: &mut Project) {
+    let voice = project.add_track(
+        "Uta",
+        Instrument::Voice {
+            voicebank: "Uta".to_owned(),
+        },
+    );
+    let pattern = project.add_pattern_for(voice, "Verse", Ticks::WHOLE);
+    let mut lyrics = Vec::new();
+    for (i, lyric) in ["ka", "さ", "ne"].iter().enumerate() {
+        let id = project
+            .add_note(
+                pattern,
+                Note {
+                    id: NoteId(0),
+                    start: Ticks::QUARTER * i as i64,
+                    length: Ticks::QUARTER,
+                    key: 69 + i as u8,
+                    velocity: DEFAULT_VELOCITY,
+                    pitch_offset: 0.0,
+                },
+            )
+            .unwrap();
+        lyrics.push((id, (*lyric).to_owned()));
+    }
+    project.set_lyrics(pattern, &lyrics);
+    project.add_clip(voice, Ticks::ZERO, Ticks::WHOLE, pattern);
+}
+
+/// The version 9 sample's voice came back, lyrics and all (and older
+/// samples have none).
+fn check_voice(project: &Project, version: u32, path: &std::path::Path) {
+    let name = path.display();
+    let voice = project
+        .tracks
+        .iter()
+        .find(|t| t.instrument.voicebank().is_some());
+    if version < 9 {
+        assert!(voice.is_none(), "{name}: no voices before version 9");
+        return;
+    }
+    let voice = voice.unwrap_or_else(|| panic!("{name} lost its voice"));
+    assert_eq!(voice.instrument.voicebank(), Some("Uta"));
+    let pattern = project.pattern(voice.clips[0].pattern().unwrap()).unwrap();
+    let sung: Vec<&str> = pattern
+        .notes
+        .iter()
+        .map(|n| pattern.lyric(n.id).unwrap_or(""))
+        .collect();
+    assert_eq!(sung, ["ka", "さ", "ne"], "{name}");
 }
 
 /// The version 8 sample's bent glide came back; older glides are all

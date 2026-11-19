@@ -33,6 +33,7 @@ considered instead.
 | [0024](0024-sfz-instruments.md) | SFZ instruments: our own reader, a sampler, sounds loaded in the background | Accepted |
 | [0025](0025-custom-kits.md) | Custom kits: a drum kit of your own sounds, played from the step grid | Accepted |
 | [0026](0026-expressive-tempo.md) | Expressive tempo: shaped glides, and the tempo under the piano roll | Accepted |
+| [0027](0027-singing-voices.md) | Singing voices: voicebanks, lyrics on notes, a renderer of our own | Accepted |
 
 ## Writing a new record
 

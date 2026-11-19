@@ -199,6 +199,7 @@ impl Project {
             track: None,
             step: default_step(),
             swing: Swing::default(),
+            lyrics: std::collections::BTreeMap::new(),
         }));
         id
     }
@@ -224,18 +225,23 @@ impl Project {
     pub fn duplicate_pattern(&mut self, id: PatternId, name: &str) -> Option<PatternId> {
         let original = self.pattern(id)?.clone();
         let copy = PatternId(self.allocate_id());
+        let mut lyrics = std::collections::BTreeMap::new();
         let notes: Vec<Note> = original
             .notes
             .iter()
-            .map(|n| Note {
-                id: NoteId(self.allocate_id()),
-                ..*n
+            .map(|n| {
+                let id = NoteId(self.allocate_id());
+                if let Some(lyric) = original.lyric(n.id) {
+                    lyrics.insert(id, lyric.to_owned());
+                }
+                Note { id, ..*n }
             })
             .collect();
         self.patterns.push(Arc::new(Pattern {
             id: copy,
             name: name.to_owned(),
             notes,
+            lyrics,
             ..original
         }));
         Some(copy)
@@ -303,6 +309,17 @@ impl Project {
         let wanted = IdSet::new(ids);
         if let Some(pattern) = self.pattern_mut(pattern) {
             pattern.notes.retain(|n| !wanted.contains(n.id));
+            pattern.tidy_lyrics();
+        }
+    }
+
+    /// Sets the lyrics of notes (decision 0027); an empty lyric removes a
+    /// note's own.
+    pub fn set_lyrics(&mut self, pattern: PatternId, lyrics: &[(NoteId, String)]) {
+        if let Some(pattern) = self.pattern_mut(pattern) {
+            for (id, lyric) in lyrics {
+                pattern.set_lyric(*id, lyric);
+            }
         }
     }
 

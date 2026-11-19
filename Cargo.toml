@@ -56,6 +56,8 @@ eframe = { version = "0.37.0", default-features = false, features = [
 egui = { version = "0.37.0", default-features = false }
 # Interface tests: drives the real interface with simulated input, no window.
 egui_kittest = { version = "0.37.0", default-features = false }
+# Shift-JIS text, which UTAU voicebanks are written in (decision 0027).
+encoding_rs = "0.8.44"
 # Ogg Vorbis decoding, for importing .ogg files.
 lewton = "0.10.2"
 libc = "0.2.191"

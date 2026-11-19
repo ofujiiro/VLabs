@@ -21,7 +21,7 @@ use crate::atomic::write_atomically_with;
 /// The version of the file format this program writes. Every version ever
 /// released keeps sample files in `tests/data`, and a test proves they still
 /// open.
-pub const FORMAT_VERSION: u32 = 8;
+pub const FORMAT_VERSION: u32 = 9;
 
 /// The name of the song description inside the container.
 const PROJECT_ENTRY: &str = "project.json";
@@ -337,7 +337,9 @@ fn migrate(value: Value, from: u32) -> Result<Value, FileError> {
     // either.
     // Version 8 added the bend of a tempo glide (decision 0026); older
     // glides are straight, which is what the bend's default says.
-    // Each future format change adds a step here: `9 => migrate_8_to_9(value)`.
+    // Version 9 added singing voices and lyrics (decision 0027); older
+    // files have neither.
+    // Each future format change adds a step here: `10 => migrate_9_to_10(value)`.
     Ok(value)
 }
 
@@ -350,7 +352,10 @@ fn repair(project: &mut Project) {
     project.meter.repair();
     project.key.repair();
     for pattern in &mut project.patterns {
-        std::sync::Arc::make_mut(pattern).sort_notes();
+        let pattern = std::sync::Arc::make_mut(pattern);
+        pattern.sort_notes();
+        // Lyrics of notes that are not there are dropped.
+        pattern.tidy_lyrics();
     }
     // The synth's numbers stay in their ranges, whatever wrote them.
     for track in &mut project.tracks {

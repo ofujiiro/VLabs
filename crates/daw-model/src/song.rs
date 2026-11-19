@@ -2,6 +2,7 @@
 
 //! The parts of a song: notes, patterns, tracks, clips.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -111,6 +112,10 @@ pub struct Pattern {
     /// How the pattern swings as it plays (decision 0018).
     #[serde(default, skip_serializing_if = "Swing::is_straight")]
     pub swing: Swing,
+    /// What its notes sing, for a voice (decision 0027): only the notes
+    /// that have a lyric of their own, by note.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub lyrics: BTreeMap<NoteId, String>,
 }
 
 /// The step length of a new pattern: a sixteenth note.
@@ -212,6 +217,8 @@ pub struct PlayedNote {
     pub key: u8,
     /// How hard, from 0 to 1.
     pub velocity: f32,
+    /// The note of the pattern it comes from (for its lyric).
+    pub note: NoteId,
 }
 
 impl Pattern {
@@ -242,6 +249,7 @@ impl Pattern {
                         end,
                         key: note.key,
                         velocity: note.velocity,
+                        note: note.id,
                     });
                 }
             }
@@ -259,6 +267,31 @@ impl Pattern {
     /// A note by id.
     pub fn note(&self, id: NoteId) -> Option<&Note> {
         self.notes.iter().find(|n| n.id == id)
+    }
+
+    /// The lyric of a note (decision 0027), if it has one of its own.
+    pub fn lyric(&self, id: NoteId) -> Option<&str> {
+        self.lyrics.get(&id).map(String::as_str)
+    }
+
+    /// Sets a note's lyric; an empty one removes it (the note sings the
+    /// default). Ignored for a note the pattern does not have.
+    pub fn set_lyric(&mut self, id: NoteId, lyric: &str) {
+        let lyric = lyric.trim();
+        if lyric.is_empty() {
+            self.lyrics.remove(&id);
+        } else if self.note(id).is_some() {
+            self.lyrics.insert(id, lyric.to_owned());
+        }
+    }
+
+    /// Forgets the lyrics of notes that are gone.
+    pub fn tidy_lyrics(&mut self) {
+        if self.lyrics.is_empty() {
+            return;
+        }
+        let ids: std::collections::HashSet<NoteId> = self.notes.iter().map(|n| n.id).collect();
+        self.lyrics.retain(|id, _| ids.contains(id));
     }
 
     /// The span actually covered by notes, if there are any.
@@ -319,6 +352,13 @@ pub enum Instrument {
         /// Its pads, by key.
         #[serde(default)]
         pads: Vec<KitPad>,
+    },
+    /// A singing voice (decision 0027): a voicebank sings the notes'
+    /// lyrics.
+    Voice {
+        /// The voicebank, by the name of its folder among the installed
+        /// ones.
+        voicebank: String,
     },
 }
 
@@ -406,6 +446,14 @@ impl Instrument {
         }
     }
 
+    /// The voicebank, if this is a singing voice.
+    pub fn voicebank(&self) -> Option<&str> {
+        match self {
+            Self::Voice { voicebank } => Some(voicebank),
+            _ => None,
+        }
+    }
+
     /// The plugin, if this is a plugin instrument.
     pub fn plugin(&self) -> Option<&crate::plugin::PluginSetup> {
         match self {
@@ -443,7 +491,8 @@ impl Instrument {
             | Self::Plugin(_)
             | Self::Audio
             | Self::Synth(_)
-            | Self::Sfz { .. } => PadSetting::new(key),
+            | Self::Sfz { .. }
+            | Self::Voice { .. } => PadSetting::new(key),
         }
     }
 

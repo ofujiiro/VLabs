@@ -388,9 +388,10 @@ impl SoundLibrary {
             // The engine loads plugins itself (they have a main-thread half),
             // and builds custom kits from the song's audio files; an audio
             // track has no instrument (its clips are mixed in).
-            InstrumentSpec::Plugin(_) | InstrumentSpec::Audio | InstrumentSpec::Kit { .. } => {
-                (Box::new(crate::plugins::Silence), None)
-            }
+            InstrumentSpec::Plugin(_)
+            | InstrumentSpec::Audio
+            | InstrumentSpec::Kit { .. }
+            | InstrumentSpec::Voice { .. } => (Box::new(crate::plugins::Silence), None),
         }
     }
 }
@@ -472,7 +473,8 @@ pub(crate) fn instrument_settings(spec: &InstrumentSpec) -> Option<InstrumentSet
         | InstrumentSpec::Plugin(_)
         | InstrumentSpec::Audio
         | InstrumentSpec::Sfz { .. }
-        | InstrumentSpec::Kit { .. } => None,
+        | InstrumentSpec::Kit { .. }
+        | InstrumentSpec::Voice { .. } => None,
     }
 }
 
