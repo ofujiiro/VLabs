@@ -312,6 +312,14 @@ impl PianoRoll {
             self.tempo.ui(ui, session, layout.lane, &axis);
         }
         self.paint_overlay(ui, &layout, session);
+        if session.pitch_mode()
+            && !self.is_dragging()
+            && response
+                .hover_pos()
+                .is_some_and(|pos| layout.grid.contains(pos))
+        {
+            response.on_hover_text(text::PITCH_LINE_HINT);
+        }
         self.tempo.panel_ui(ui, session);
         self.pitch.panel_ui(ui, session);
         self.lyric_editor(ui, &layout, session);
