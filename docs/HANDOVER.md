@@ -108,59 +108,86 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   round, SFZ instruments, custom kits and the plugin fixes (November
   2026): everything works. That closes v1.
 
-- After v1, the owner's request: a new song starts on the whole song (the
-  song view), not on the drum step grid; opened and recovered songs
-  already did (`Session::starter` and `Session::new_song` no longer open
-  the beat; the interface tests use a `beat()` fixture for the step grid).
-  Checked: `cargo xtask ci`, and the program on the virtual screen opened
-  on the song view.
+## Merged after v1, not yet tried by the owner
 
-- Expressive tempo (decision 0026, the owner's request "make the tempo
-  able to change gradually, for piano compositions"), on branch
-  `expressive-tempo` (not merged yet): glides have a bend
+All on `main` (November 19, 2026; the two feature branches were
+fast-forwarded into `main` at the owner's request, without pull requests).
+
+- **New songs open on the whole song** (the owner's request):
+  `Session::starter` and `Session::new_song` no longer open the beat; the
+  interface tests use a `beat()` fixture for the step grid.
+- **Expressive tempo** (decision 0026, the owner's request "make the tempo
+  able to change gradually, for piano compositions"): glides have a bend
   (`TempoChange::curve`, file format 8) following
   `T0·[1 + (w^q − 1)x]^(1/q)` with closed forms both ways, shared by the
-  model and the engine (`daw_model::TempoPiece`); Early, Even and Late in a
-  glide's panel and a handle to drag; *rit.*/*accel.* labels; "Arrive
-  gradually" in a point's panel; the tempo line became a widget of its own
-  (`daw-ui::tempo_lane`), used by the song view's signature row and by the
-  piano roll, whose lane now switches between Velocity and Tempo; a point
-  added inside a glide glides on with the same bend. Checked: `cargo xtask
-  ci`; tests of the closed forms against the tempo they integrate, an
-  offline render of a bent ritardando, DAWproject and file round trips,
-  interface tests; and the program on the virtual screen (the song view's
-  bent glide, the piano roll's tempo lane, the glide's panel).
+  model and the engine (`daw_model::TempoPiece`, `curve_through`); Early,
+  Even and Late in a glide's panel and a handle to drag; *rit.*/*accel.*
+  labels; "Arrive gradually" in a point's panel; the tempo line is a widget
+  of its own (`daw-ui::tempo_lane`), used by the signature row and by the
+  piano roll, whose lane switches between Velocity and Tempo; a point added
+  inside a glide glides on with the same bend; DAWproject writes a bent
+  glide as straight sixteenth-note pieces.
+- **Singing voices, milestone 7a** (decision 0027): `daw_model::lyrics`
+  (kana, romaji, VCV/CV alias candidates), `Pattern::lyrics` (by note id)
+  and `Instrument::Voice` (file format 9), `daw_formats::utau` (reading
+  and installing voicebanks, Shift-JIS via `encoding_rs`), `daw_dsp::voice`
+  (YIN pitch, pitch marks, TD-PSOLA resampler, UTAU-style joins in
+  `sing_phrase`), `daw_engine::voices` (background voicebank reading and
+  phrase rendering on a worker thread, cached by a hash of everything that
+  shapes a phrase, played as audio spans instead of the track's notes; a
+  live "a" preview sampler in `library::voice_preview`), `daw-ui::voicebanks`
+  (the Voicebanks window), `session::voice` (voice tracks, `sing_from`,
+  `lyric_found`), lyric typing and "?" marks in the piano roll, Voices in
+  the instrument chooser, a Japanese font of the computer as fallback
+  (`theme::use_fallback_font`, found in `daw-app`'s `japanese_font`).
+- Checked by the development session: `cargo xtask ci` (Linux); for tempo,
+  the closed forms against the tempo they integrate, an offline render of
+  a bent ritardando, file and DAWproject round trips, interface tests, and
+  the program on the virtual screen; for singing, DSP tests (pitch found,
+  shifts of an octave within 1.5 %, levels, no clicks, notes on their
+  beats), voicebank tests (folder and Shift-JIS zip, terms, aliases, sung
+  pitches), an offline engine render, interface tests (lyrics typed
+  across notes, the Voicebanks window), and the real program played
+  through a virtual sound card: each note at its pitch (329, 393, 440 and
+  390 Hz against 330, 392, 440 and 392) with a harmonic-rich synthetic
+  voice.
 
-- Singing voices, milestone 7a (decision 0027), on branch `singing-voices`
-  (stacked on `expressive-tempo`, not merged): `daw_model::lyrics` (kana,
-  romaji, VCV/CV alias candidates), `Pattern::lyrics` and
-  `Instrument::Voice` (file format 9), `daw_formats::utau` (reading and
-  installing voicebanks, Shift-JIS via `encoding_rs`), `daw_dsp::voice`
-  (YIN pitch, pitch marks, TD-PSOLA resampler, UTAU-style joins),
-  `daw_engine::voices` (background reading and phrase rendering, played as
-  audio spans; a live "a" preview sampler), `daw-ui::voicebanks` (the
-  Voicebanks window), lyric typing and marks in the piano roll, Voices in
-  the instrument chooser, a system Japanese font as fallback
-  (`theme::use_fallback_font`). Checked: `cargo xtask ci`; DSP tests
-  (pitch found, shifts up and down an octave within 1.5 %, levels, no
-  clicks, notes on their beats), voicebank tests (folder and Shift-JIS zip,
-  terms, aliases, sung pitches), an offline engine render, interface tests
-  (lyrics typed across notes, the Voicebanks window); and the real program:
-  the piano roll with lyrics and a "?" mark, and the song played through a
-  virtual sound card, each note measured at its pitch (329, 393, 440 and
-  390 Hz against 330, 392, 440 and 392).
+## Next session: start here
 
-## Next
-
-- Open the pull requests for `expressive-tempo`, then `singing-voices`,
-  and their hands-on checks (ROADMAP.md, "Expressive tempo" and "7a").
-- Singing voices 7b: pitch curves and vibrato over the notes, envelopes,
-  flags, perhaps a WORLD-style vocoder (decision 0027).
-  Possible SFZ follow-ups: LFOs and pitch envelopes, streaming very large
-  instruments from the disk, previews in the library.
+1. Look at `main`'s CI run for the merge (commit `8392189` and the
+   handover commit after it): these changes have not run on Windows yet.
+   Fix anything it finds first.
+2. Ask the owner how the hands-on checks went (ROADMAP.md: "Expressive
+   tempo" and "7a: things to try", with a real Kasane Teto UTAU voicebank).
+   Real recordings are the big unknown: the renderer has only met
+   synthetic voices.
+3. Build **singing voices 7b, expression** (decision 0027) on a new
+   branch: pitch curves drawn over a voice track's notes and vibrato
+   (depth, rate, delay per note), loudness envelopes, UTAU-style flags
+   (breathiness, gender). Pointers:
+   - pitch today comes from `phrase_key` in `daw_dsp::voice` (each note's
+     key, an 80 ms glide between notes), handed to `resample` as an `hz`
+     closure: a curve or vibrato is another term in that closure;
+   - keep per-note expression beside the notes in `Pattern`, by note id,
+     like `lyrics` (a note stays `Copy`); file format 10 with its sample
+     (`WRITE_FORMAT_SAMPLE=1`) and migration check;
+   - include the new fields in `phrase_key`'s hash in `daw_engine::voices`
+     so edits render again;
+   - draw and edit them in the piano roll only on voice tracks (the lane
+     under the notes could gain a "Pitch" choice beside Velocity and
+     Tempo); a decision record for the screen, with rejected concepts.
+4. Small 7a gaps worth closing on the way: copying and pasting notes loses
+   their lyrics (the session clipboard holds `Note`s only); MIDI export
+   could write lyrics as lyric meta events; a fermata command for tempo.
 
 ## Not verified by the development session (say so if asked)
 
+- Expressive tempo and singing: listening (everything was measured, not
+  heard); Windows (no CI run yet); real UTAU voicebanks (none could be
+  downloaded in the development container); the Japanese font fallback on
+  a real Windows or Linux desktop; the Voicebanks window's file dialogs
+  (the test host answers them); typing a lyric by double-click (Enter is
+  tested; double-clicks cannot happen in the interface tests).
 - The installer and the AppImage on real machines. CI made the AppImage;
   the Windows installer's fix was merged without my checking its CI run. Running the
   downloaded build tools (appimagetool) or making a stand-in program for
@@ -211,6 +238,12 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   (COM order); DAWproject converts them at its edge, but a song saved on
   Windows and opened on Linux would not find the same VST3 plugin by id.
 
+- Expressive tempo: no fermatas, no tempo from a free performance, no
+  freehand drawing.
+- Singing 7a: no pitch curves, vibrato, envelopes or flags; no UST/USTX;
+  no DiffSinger/ENUNU; Japanese phonemes only; lyrics not carried by copy
+  and paste, nor exported to DAWproject or MIDI.
+
 ## Practical notes
 
 - `target/` grows past 20 GB and `dist/` holds a 55 MB program: keep both
@@ -220,3 +253,11 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   Linux too.
 - The Linux plugin CI job recompiles from scratch after a failure: expect
   ~15 minutes.
+- Interface tests: a dialog that grows settles for a few frames; clicks
+  sent meanwhile are lost (run `run_steps(8)` first). See CLAUDE.md.
+- The project file extension is a word the identity rule refuses in any
+  Rust file (it is also Kasane Teto's name): use other names in code and
+  tests.
+- Do not put AI model identifiers in commits (CLAUDE.md): no
+  Co-Authored-By trailer naming a model. Some earlier commits on `main`
+  carry one by mistake; history was left as it is.

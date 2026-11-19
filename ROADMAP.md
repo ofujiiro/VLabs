@@ -11,11 +11,11 @@ merged in pull request 7. The owner has tried every milestone build and
 the plugins round (November 2026): everything works, which closes v1.
 A new or opened song now starts on the whole song, not an instrument
 (the owner's request). Glides now have shapes, and the tempo shows under
-the piano roll too (decision 0026, on branch `expressive-tempo`). Singing
-voices have begun: milestone 7a, a first voice sung from classic UTAU
-voicebanks, is built (decision 0027, on branch `singing-voices`). Next:
-7b, expression (pitch curves, vibrato). The repository has been public since November 2026
-(the owner's decision).
+the piano roll too (decision 0026). Singing voices have begun: milestone
+7a, a first voice sung from classic UTAU voicebanks, is built (decision
+0027). Both are merged into `main` and await the owner's hands-on check.
+Next: 7b, expression (pitch curves, vibrato). The repository has been
+public since November 2026 (the owner's decision).
 
 ## Phase 0 — Foundations and risk spikes
 
@@ -623,8 +623,8 @@ request 4).
 
 ## After v1 — Expressive tempo (the owner's request, November 2026)
 
-Gradual tempo changes for piano writing (decision 0026), on branch
-`expressive-tempo`. Glides themselves came in phase 5; this round shapes
+Gradual tempo changes for piano writing (decision 0026), merged into
+`main` in November 2026. Glides themselves came in phase 5; this round shapes
 them and brings the tempo to the piano roll.
 
 - [x] A glide has a shape: **Early** (most of the change first), **Even**
@@ -676,8 +676,8 @@ them and brings the tempo to the piano roll.
 Sing from the piano roll: give notes lyrics and have a voicebank sing
 them, with the voice managed and tuned inside VLabs, in the spirit of
 OpenUtau (MIT-licensed, the open successor of UTAU). Designed in decision
-0027 as four milestones; **7a, a first voice, is built** (branch
-`singing-voices`, on top of `expressive-tempo`).
+0027 as four milestones; **7a, a first voice, is built** and merged
+into `main` (November 2026).
 
 ### 7a. A first voice (built)
 
