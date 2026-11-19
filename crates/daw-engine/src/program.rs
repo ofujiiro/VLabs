@@ -618,25 +618,34 @@ fn audio_spans(
         span.fade_out = fade_out;
         done.push(span);
     }
-    let mut reach = Vec::with_capacity(done.len());
+    let reach = reach_of(&done);
+    (done, reach)
+}
+
+/// For each span (sorted by start), the furthest end of it and those before
+/// it.
+fn reach_of(spans: &[AudioSpan]) -> Vec<i64> {
+    let mut reach = Vec::with_capacity(spans.len());
     let mut furthest = i64::MIN;
-    for span in &done {
+    for span in spans {
         furthest = furthest.max(span.end);
         reach.push(furthest);
     }
-    (done, reach)
+    reach
 }
 
 /// Compiles a project. `slot_of` gives the instrument slot of each track
 /// (tracks without one are left out), `effect_index` the effect table
 /// entry of each effect (effects without one are left out), `sound_of` the
-/// sound of each audio file (by stored name).
+/// sound of each audio file (by stored name), `voices` the rendered singing
+/// of each voice track (decision 0027), which plays instead of its notes.
 pub(crate) fn compile(
     project: &Project,
     sample_rate: u32,
     slot_of: impl Fn(TrackId) -> Option<usize>,
     effect_index: impl Fn(EffectId) -> Option<usize>,
     sound_of: impl Fn(&str) -> Option<Arc<AudioBuffer>>,
+    voices: &std::collections::HashMap<TrackId, Vec<AudioSpan>>,
 ) -> Program {
     let bpm = project.tempo.initial_bpm();
     let any_solo = project.tracks.iter().any(|t| t.strip.solo);
@@ -654,9 +663,11 @@ pub(crate) fn compile(
             let pan = track.strip.pan.clamp(-1.0, 1.0);
             // Each pattern clip repeats its pattern for its length, swung as
             // it plays (decision 0018).
+            let voice = voices.get(&track.id);
             let mut notes: Vec<NoteSpan> = track
                 .clips
                 .iter()
+                .filter(|_| voice.is_none())
                 .filter_map(|clip| Some((clip, project.pattern(clip.pattern()?)?)))
                 .flat_map(|(clip, pattern)| pattern.played_in(clip))
                 .map(|n| NoteSpan {
@@ -674,7 +685,10 @@ pub(crate) fn compile(
                     .iter()
                     .any(|l| matches!(l.target, LaneTarget::Synth { .. }))
             });
-            let (audio, audio_reach) = audio_spans(project, track, sample_rate, &sound_of);
+            let (audio, audio_reach) = match voice {
+                Some(spans) => (spans.clone(), reach_of(spans)),
+                None => audio_spans(project, track, sample_rate, &sound_of),
+            };
             Some(TrackProgram {
                 slot,
                 notes,
@@ -734,6 +748,7 @@ mod tests {
             |id| (id == track).then_some(0),
             |_| None,
             |_| None,
+            &std::collections::HashMap::new(),
         );
         let notes = &program.tracks[0].notes;
         assert_eq!(notes.len(), 8);
@@ -754,6 +769,7 @@ mod tests {
             |id| Some(usize::from(id != track)),
             |_| None,
             |_| None,
+            &std::collections::HashMap::new(),
         );
         assert_eq!(program.tracks[0].gain_left, 1.0);
         assert_eq!(program.tracks[1].gain_left, 0.0, "another track is soloed");
@@ -765,6 +781,7 @@ mod tests {
             |id| Some(usize::from(id != track)),
             |_| None,
             |_| None,
+            &std::collections::HashMap::new(),
         );
         assert_eq!(program.tracks[1].gain_right, 0.0, "muted");
     }
@@ -774,7 +791,14 @@ mod tests {
         let mut project = Project::starter("P", "T");
         let (track, _) = project.first_pattern().unwrap();
         project.track_mut(track).unwrap().strip.pan = 0.5;
-        let program = compile(&project, 48_000, |_| Some(0), |_| None, |_| None);
+        let program = compile(
+            &project,
+            48_000,
+            |_| Some(0),
+            |_| None,
+            |_| None,
+            &std::collections::HashMap::new(),
+        );
         assert_eq!(
             (program.tracks[0].gain_left, program.tracks[0].gain_right),
             (0.5, 1.0)
@@ -802,6 +826,7 @@ mod tests {
             |id| (id == track).then_some(0),
             |_| None,
             |_| None,
+            &std::collections::HashMap::new(),
         );
         let notes = &program.tracks[0].notes;
         assert_eq!(notes[0].start, Ticks::ZERO, "the beat stays");

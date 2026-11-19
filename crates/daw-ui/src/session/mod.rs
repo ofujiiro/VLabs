@@ -1492,12 +1492,17 @@ impl Session {
             .collect();
         self.engine.retain_audio(|name| wanted.contains(name));
         self.audio.retain(|name| wanted.contains(name));
-        // And its instruments' (decision 0024).
+        // And its instruments' (decisions 0024 and 0027).
         let instruments: HashSet<String> = self
             .project()
             .tracks
             .iter()
-            .filter_map(|t| t.instrument.sfz_file().map(str::to_owned))
+            .filter_map(|t| {
+                t.instrument
+                    .sfz_file()
+                    .or_else(|| t.instrument.voicebank())
+                    .map(str::to_owned)
+            })
             .collect();
         self.engine.retain_sounds(|file| instruments.contains(file));
         self.load_song_audio();

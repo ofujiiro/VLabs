@@ -19,6 +19,8 @@ use daw_model::{
 use daw_plugin_host::PluginInfo;
 
 use crate::Problem;
+use crate::voices::{VoiceReader, Voices};
+use daw_dsp::voice::VoiceBank;
 
 /// Reads an SFZ instrument and its sounds into a sampler bank. The engine
 /// cannot read sound files itself (decision 0003), so the program hands it
@@ -48,6 +50,8 @@ pub struct SoundLibrary {
     /// SFZ instruments are read on a thread of their own, and their tracks
     /// stay silent until they are ready (else building one waits).
     background: bool,
+    /// Singing voices: voicebanks and rendered phrases (decision 0027).
+    voices: Voices,
 }
 
 impl Default for SoundLibrary {
@@ -70,6 +74,7 @@ impl SoundLibrary {
             sfz_reader: None,
             sfz: Arc::new(Mutex::new(HashMap::new())),
             background: false,
+            voices: Voices::new(),
         }
     }
 
@@ -78,10 +83,23 @@ impl SoundLibrary {
         self.sfz_reader = Some(reader);
     }
 
-    /// Reads SFZ instruments in the background (the live engine), or waits
-    /// for them (offline rendering, tests).
+    /// Reads SFZ instruments and voicebanks, and renders singing, in the
+    /// background (the live engine), or waits for them (offline rendering,
+    /// tests).
     pub fn set_background_loading(&mut self, background: bool) {
         self.background = background;
+        self.voices.set_background(background);
+    }
+
+    /// Lets the library read voicebanks (decision 0027), by the name of
+    /// their folder among the installed ones.
+    pub fn set_voice_reader(&mut self, reader: VoiceReader) {
+        self.voices.set_reader(reader);
+    }
+
+    /// The singing voices.
+    pub(crate) fn voices(&self) -> &Voices {
+        &self.voices
     }
 
     /// The SFZ instrument in `file`, reading it the first time (on a thread
@@ -147,6 +165,9 @@ impl SoundLibrary {
 
     /// Whether an instrument's sounds are still being read.
     pub fn is_loading(&self, spec: &InstrumentSpec) -> bool {
+        if let InstrumentSpec::Voice { voicebank } = spec {
+            return self.voices.is_loading(voicebank);
+        }
         let InstrumentSpec::Sfz { file } = spec else {
             return false;
         };
@@ -388,10 +409,28 @@ impl SoundLibrary {
             // The engine loads plugins itself (they have a main-thread half),
             // and builds custom kits from the song's audio files; an audio
             // track has no instrument (its clips are mixed in).
-            InstrumentSpec::Plugin(_)
-            | InstrumentSpec::Audio
-            | InstrumentSpec::Kit { .. }
-            | InstrumentSpec::Voice { .. } => (Box::new(crate::plugins::Silence), None),
+            // A voice's notes, played live, sound at once as its "a" played
+            // faster or slower (the song plays its rendered singing).
+            InstrumentSpec::Voice { voicebank } => match self.voices.bank(voicebank) {
+                None => {
+                    *waiting = true;
+                    (Box::new(crate::plugins::Silence), None)
+                }
+                Some(Ok(bank)) => match voice_preview(&bank, sample_rate) {
+                    Some(sampler) => (Box::new(sampler), None),
+                    None => (Box::new(SineSynth::new(sample_rate)), None),
+                },
+                Some(Err(reason)) => (
+                    Box::new(crate::plugins::Silence),
+                    Some(Problem::UnreadableSound {
+                        sound: voicebank.clone(),
+                        reason,
+                    }),
+                ),
+            },
+            InstrumentSpec::Plugin(_) | InstrumentSpec::Audio | InstrumentSpec::Kit { .. } => {
+                (Box::new(crate::plugins::Silence), None)
+            }
         }
     }
 }
@@ -476,6 +515,56 @@ pub(crate) fn instrument_settings(spec: &InstrumentSpec) -> Option<InstrumentSet
         | InstrumentSpec::Kit { .. }
         | InstrumentSpec::Voice { .. } => None,
     }
+}
+
+/// What a voice plays live (decision 0027): its "a", from the end of the
+/// consonant to the end of the syllable, on every key, pitched from the
+/// pitch it was recorded at. None when the voicebank has no "a" it can
+/// read.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    reason = "keys, cents and frame positions are small"
+)]
+pub(crate) fn voice_preview(bank: &VoiceBank, sample_rate: u32) -> Option<Sampler> {
+    let entry = bank.find(
+        &daw_model::lyrics::alias_candidates(daw_model::lyrics::DEFAULT_LYRIC, None),
+        60,
+    )?;
+    let recording = bank.sample(&entry.file).ok()?;
+    let stretch = entry.stretch(recording.seconds());
+    let rate = f64::from(recording.rate());
+    let from = ((stretch.start + stretch.fixed) * rate) as usize;
+    let to = ((stretch.end * rate) as usize).min(recording.samples().len());
+    if to <= from + 64 {
+        return None;
+    }
+    let hz = recording.pitch_between(stretch.start + stretch.fixed, stretch.end)?;
+    let key = 69.0 + 12.0 * (hz / 440.0).log2();
+    let centre = key.round().clamp(0.0, 127.0);
+    let mut ampeg = EnvelopeSpec::amp();
+    ampeg.attack = 0.01;
+    ampeg.release = 0.08;
+    let mut bank = SamplerBank::default();
+    bank.samples.push(Sample {
+        sample_rate: recording.rate(),
+        left: recording.samples()[from..to].to_vec(),
+        right: Vec::new(),
+        file_loop: None,
+    });
+    bank.regions.push(Region {
+        sample: Some(0),
+        lokey: 0,
+        hikey: 127,
+        pitch_keycenter: centre as u8,
+        tune: ((centre - key) * 100.0) as f32,
+        amp_veltrack: 0.5,
+        loop_mode: Some(LoopMode::NoLoop),
+        ampeg,
+        ..Region::default()
+    });
+    Some(Sampler::new(Arc::new(bank), sample_rate))
 }
 
 /// A custom kit's sampler (decision 0025): each pad's sound (at the engine's

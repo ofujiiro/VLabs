@@ -7,6 +7,7 @@ mod messages;
 mod plugins;
 mod processor;
 mod program;
+mod voices;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
@@ -27,6 +28,7 @@ pub use messages::{CHUNK_FRAMES, EngineEvent, RecordedChunk};
 pub use plugins::PluginTarget;
 pub use processor::{EngineProcessor, MAX_EFFECTS, MAX_SLOTS};
 pub use program::PlaybackScope;
+pub use voices::VoiceReader;
 
 use messages::{
     Command, Garbage, LiveNote, NO_TARGET, Outgoing, RECORD_ACTIVE, RECORD_COUNT_IN, Shared,
@@ -295,6 +297,10 @@ pub struct Engine {
     preview_waiting: bool,
     /// Tracks whose instrument is being read (silent until it is ready).
     waiting: HashMap<TrackId, InstrumentSpec>,
+    /// Whether a voice track's phrases were still being rendered at the
+    /// last compile, and how many phrases had been rendered then.
+    voices_pending: bool,
+    voices_finished: u64,
     /// Tracks whose instrument is to be built again at the next sync (it
     /// has just been read).
     rebuild: HashSet<TrackId>,
@@ -349,6 +355,8 @@ impl Engine {
             preview_number: 0,
             preview_waiting: false,
             waiting: HashMap::new(),
+            voices_pending: false,
+            voices_finished: 0,
             rebuild: HashSet::new(),
             reported: HashSet::new(),
         };
@@ -449,6 +457,7 @@ impl Engine {
     /// plays. Cheap when neither `revision` nor `scope` has changed.
     pub fn sync(&mut self, project: &Project, revision: u64, scope: PlaybackScope) {
         self.take_ready_instruments();
+        self.take_ready_voices();
         if self.compiled == Some((revision, scope)) {
             return;
         }
@@ -535,6 +544,7 @@ impl Engine {
         });
 
         let view = program::scoped(project, scope);
+        let voices = self.sung_voices(&view);
         let slots = &self.slots;
         let effects = &self.effects;
         let library = &self.library;
@@ -552,6 +562,7 @@ impl Engine {
                     .position(|e| e.as_ref().is_some_and(|(e, _)| *e == id))
             },
             |name| library.audio(name).cloned(),
+            &voices,
         );
         self.send(Command::Program(Box::new(program)));
     }
@@ -689,6 +700,41 @@ impl Engine {
         }
     }
 
+    /// What the voice tracks sing, as far as it is rendered (decision
+    /// 0027); notes how much was rendered, and whether more is coming.
+    fn sung_voices(&mut self, view: &Project) -> HashMap<TrackId, Vec<program::AudioSpan>> {
+        self.voices_finished = self.library.voices().finished();
+        let mut voices = HashMap::new();
+        let mut pending = false;
+        for track in view
+            .tracks
+            .iter()
+            .filter(|t| t.instrument.voicebank().is_some())
+        {
+            let sung = self
+                .library
+                .voices()
+                .track(view, track, self.config.sample_rate);
+            pending |= sung.pending;
+            voices.insert(track.id, sung.spans);
+        }
+        self.voices_pending = pending;
+        voices
+    }
+
+    /// Plays phrases rendered since the last compile.
+    fn take_ready_voices(&mut self) {
+        if self.voices_pending && self.library.voices().finished() != self.voices_finished {
+            self.compiled = None;
+        }
+    }
+
+    /// Whether a voice track's singing is still being rendered (or its
+    /// voicebank read): it is silent where it is not ready.
+    pub fn is_rendering_voices(&self) -> bool {
+        self.voices_pending
+    }
+
     /// Says once what an SFZ instrument plays without, when it is ready.
     fn report_left_out(&mut self, spec: &InstrumentSpec) {
         let InstrumentSpec::Sfz { file } = spec else {
@@ -732,6 +778,7 @@ impl Engine {
     /// Forgets the SFZ instruments not in `keep` (another song was opened).
     pub fn retain_sounds(&mut self, keep: impl Fn(&str) -> bool) {
         self.library.retain_sfz(&keep);
+        self.library.voices().retain(&keep);
         self.reported.retain(|file| keep(file));
     }
 
