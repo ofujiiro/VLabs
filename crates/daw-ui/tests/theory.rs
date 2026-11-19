@@ -284,17 +284,48 @@ fn tempo_changes_are_added_moved_glided_and_removed() {
 
     s.set_tempo_glide(Ticks::ZERO, true);
     assert!(s.tempo_changes()[0].glide);
+    // The glide takes a shape (decision 0026); the same shape twice is no
+    // second undo step.
+    s.set_tempo_curve(Ticks::ZERO, 0.5);
+    s.set_tempo_curve(Ticks::ZERO, 0.5);
+    assert_eq!(s.tempo_changes()[0].curve, 0.5);
     let moved = s.move_tempo_change(bar5, Ticks::WHOLE * 2);
     assert_eq!(s.tempo_changes()[1].at, Ticks::WHOLE * 2);
     s.remove_tempo_change(moved);
     assert_eq!(s.tempo_changes().len(), 1);
     s.remove_tempo_change(Ticks::ZERO);
     assert_eq!(s.tempo_changes().len(), 1, "the start stays");
-    for _ in 0..6 {
+    for _ in 0..7 {
         s.undo();
     }
     assert_eq!(s.tempo_changes().len(), 1);
     assert_eq!(s.tempo_changes()[0].bpm, 120.0, "all undone");
+    assert_eq!(s.tempo_changes()[0].curve, 0.0, "the shape too");
+}
+
+#[test]
+fn a_change_added_inside_a_bent_glide_changes_nothing_until_moved() {
+    let (mut s, _processor) = new_song();
+    let bar5 = Ticks::WHOLE * 4;
+    s.add_tempo_change(bar5);
+    s.set_tempo_at(bar5, 60.0);
+    s.set_tempo_glide(Ticks::ZERO, true);
+    s.set_tempo_curve(Ticks::ZERO, 0.5);
+    let before = s.project().tempo.clone();
+    let at = s.add_tempo_change(Ticks::WHOLE * 2 + Ticks::QUARTER);
+    let added = s.tempo_changes()[1];
+    assert_eq!(added.at, at);
+    assert!(
+        added.glide && (added.curve - 0.5).abs() < 1e-12,
+        "it glides on, bent the same"
+    );
+    // Both halves follow the same curve: the song sounds the same (to the
+    // tenth of a BPM the new tempo is rounded to).
+    for quarters in [1.0, 6.0, 9.0, 12.0, 15.9, 18.0] {
+        let tick = Ticks::from_quarters_f64(quarters);
+        let drift = s.project().tempo.seconds_at(tick) - before.seconds_at(tick);
+        assert!(drift.abs() < 0.002, "{quarters} quarters: {drift} s");
+    }
 }
 
 #[test]

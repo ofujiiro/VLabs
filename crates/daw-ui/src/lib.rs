@@ -17,6 +17,7 @@ pub mod signature_row;
 pub mod song_view;
 pub mod step_grid;
 pub mod synth_ui;
+pub mod tempo_lane;
 pub mod text;
 pub mod theme;
 pub mod transport;

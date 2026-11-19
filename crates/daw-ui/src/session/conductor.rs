@@ -110,12 +110,24 @@ impl Session {
     }
 
     /// Adds a tempo change at `at`, at the tempo the song has there (so
-    /// nothing changes until it is moved); returns where it is.
+    /// nothing changes until it is moved); returns where it is. Inside a
+    /// glide, the new change glides on with the same bend: both halves of a
+    /// glide bent the same way follow the very same curve (decision 0026).
     pub fn add_tempo_change(&mut self, at: Ticks) -> Ticks {
         let at = at.max(Ticks::ZERO);
-        let bpm = (self.project().tempo.bpm_at(at) * 10.0).round() / 10.0;
+        let tempo = &self.project().tempo;
+        let bpm = (tempo.bpm_at(at) * 10.0).round() / 10.0;
+        let before = tempo.change_at(at);
+        let inside_glide =
+            before.glide && before.at != at && tempo.changes().iter().any(|c| c.at > at);
         self.doc.edit(text::EDIT_ADD_TEMPO_CHANGE, |p| {
-            p.change_tempo(|tempo| tempo.set(at, bpm));
+            p.change_tempo(|tempo| {
+                tempo.set(at, bpm);
+                if inside_glide {
+                    tempo.set_glide(at, true);
+                    tempo.set_curve(at, before.curve);
+                }
+            });
         });
         at
     }
@@ -151,6 +163,20 @@ impl Session {
         if present {
             self.doc.edit(text::EDIT_GLIDE, |p| {
                 p.change_tempo(|tempo| tempo.set_glide(at, glide));
+            });
+        }
+    }
+
+    /// Bends the glide that starts at `at` (decision 0026: −1 to 1, 0 is
+    /// straight, positive comes late).
+    pub fn set_tempo_curve(&mut self, at: Ticks, curve: f64) {
+        let present = self
+            .tempo_changes()
+            .iter()
+            .any(|c| c.at == at && (c.curve - curve).abs() > f64::EPSILON);
+        if present {
+            self.doc.edit(text::EDIT_GLIDE_SHAPE, |p| {
+                p.change_tempo(|tempo| tempo.set_curve(at, curve));
             });
         }
     }

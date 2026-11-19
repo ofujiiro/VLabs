@@ -19,6 +19,8 @@
 //! - with the song's key set, rows outside the key are shaded; "Keep notes
 //!   in the key" puts new and dragged notes on notes of the key; a chord
 //!   stamp ("Draw") shows its notes under the pointer and places them all.
+//! - the lane under the notes shows their velocity, or the song's tempo
+//!   where the pattern plays (decision 0026; `tempo_lane`), edited there.
 //!
 //! Only what is visible is drawn, and all notes go into one triangle mesh
 //! (from the phase 0 spike), so the cost per frame depends on what is on
@@ -29,10 +31,11 @@ use std::collections::HashSet;
 use daw_model::{MAX_KEY, MeterMap, Note, NoteId, Ticks};
 use egui::{
     Align2, Color32, CornerRadius, CursorIcon, FontId, Mesh, PointerButton, Pos2, Rect, Response,
-    Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2,
+    RichText, Sense, Shape, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2,
 };
 
 use crate::session::{Draw, Grid, Session};
+use crate::tempo_lane::{Axis, TempoLane};
 use crate::text;
 use crate::theme::{Palette, size};
 
@@ -116,6 +119,11 @@ pub struct PianoRoll {
     reveal: bool,
     /// Where the pattern ends (its handle on the ruler), this frame.
     pattern_end: Ticks,
+    /// Whether the lane under the notes shows the song's tempo (rather
+    /// than the notes' velocity).
+    shows_tempo: bool,
+    /// The tempo line, when the lane shows it.
+    tempo: TempoLane,
 }
 
 impl Default for PianoRoll {
@@ -132,6 +140,8 @@ impl Default for PianoRoll {
             hovered: None,
             reveal: false,
             pattern_end: Ticks::WHOLE,
+            shows_tempo: false,
+            tempo: TempoLane::with_panels_above(),
         }
     }
 }
@@ -223,18 +233,84 @@ impl PianoRoll {
         self.paint_keys(ui, &layout, session);
         self.paint_ruler(ui, &layout, session);
         self.paint_lane(ui, &layout, session);
+        self.lane_switch(ui, &layout);
+        if self.shows_tempo {
+            // The song's tempo where the pattern's start plays.
+            let placement = session.placement();
+            let zero = (placement.start - placement.offset).0 as f64;
+            let axis = Axis {
+                left: layout.grid.left(),
+                left_tick: self.left_tick + zero,
+                ticks_per_point: self.ticks_per_point,
+            };
+            self.tempo.ui(ui, session, layout.lane, &axis);
+        }
         self.paint_overlay(ui, &layout, session);
+        self.tempo.panel_ui(ui, session);
     }
 
-    /// Whether a drag is in progress.
+    /// The buttons left of the lane: what it shows.
+    fn lane_switch(&mut self, ui: &mut Ui, layout: &Layout) {
+        let area = layout.lane_label.shrink2(vec2(3.0, 8.0));
+        ui.scope_builder(UiBuilder::new().max_rect(area), |ui| {
+            // One line each: the column is narrow.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            ui.spacing_mut().button_padding.x = 3.0;
+            ui.spacing_mut().item_spacing.y = 4.0;
+            ui.vertical(|ui| {
+                let velocity = ui
+                    .selectable_label(!self.shows_tempo, RichText::new(text::VELOCITY).small())
+                    .on_hover_text(text::SHOW_VELOCITY);
+                let showing = !self.shows_tempo;
+                velocity.widget_info(|| {
+                    egui::WidgetInfo::selected(
+                        egui::Role::Button,
+                        true,
+                        showing,
+                        text::LANE_VELOCITY,
+                    )
+                });
+                if velocity.clicked() {
+                    self.shows_tempo = false;
+                    self.tempo.close_panel();
+                }
+                let tempo = ui
+                    .selectable_label(self.shows_tempo, RichText::new(text::TEMPO_LANE).small())
+                    .on_hover_text(text::SHOW_TEMPO);
+                let showing = self.shows_tempo;
+                tempo.widget_info(|| {
+                    egui::WidgetInfo::selected(egui::Role::Button, true, showing, text::LANE_TEMPO)
+                });
+                if tempo.clicked() {
+                    self.shows_tempo = true;
+                }
+            });
+        });
+    }
+
+    /// Whether a drag is in progress (on the notes or on the tempo line).
     pub fn is_dragging(&self) -> bool {
+        self.note_drag() || self.tempo.is_dragging()
+    }
+
+    /// Whether a drag of the editor's own is in progress.
+    fn note_drag(&self) -> bool {
         !matches!(self.drag, Drag::None)
+    }
+
+    /// Closes the tempo line's panel, if one is open (Escape); returns
+    /// whether one was.
+    pub fn close_popups(&mut self) -> bool {
+        self.tempo.close_panel()
     }
 
     /// Abandons the drag in progress, putting everything back. Returns
     /// whether there was one.
     pub fn cancel_drag(&mut self, session: &mut Session) -> bool {
-        if !self.is_dragging() {
+        if self.tempo.cancel_drag(session) {
+            return true;
+        }
+        if !self.note_drag() {
             return false;
         }
         self.drag = Drag::None;
@@ -445,7 +521,7 @@ impl PianoRoll {
 
     fn follow_playhead(&mut self, ui: &Ui, session: &Session, layout: &Layout) {
         let time = ui.input(|i| i.time);
-        if !session.is_playing() || self.is_dragging() || time - self.scrolled_at < 1.5 {
+        if !session.is_playing() || self.note_drag() || time - self.scrolled_at < 1.5 {
             return;
         }
         let x = self.tick_to_x(layout.grid, session.position());
@@ -495,13 +571,15 @@ impl PianoRoll {
             .and_then(|p| self.note_at(notes, grid, p));
 
         // Starting a drag.
-        if !self.is_dragging()
+        if !self.note_drag()
             && response.hovered()
             && let Some(pos) = pos
         {
             if middle_pressed {
                 self.drag = Drag::Pan;
-            } else if secondary_pressed && (grid.contains(pos) || layout.lane.contains(pos)) {
+            } else if secondary_pressed
+                && (grid.contains(pos) || (layout.lane.contains(pos) && !self.shows_tempo))
+            {
                 session
                     .document_mut()
                     .begin_gesture(text::EDIT_DELETE_NOTES);
@@ -797,7 +875,7 @@ impl PianoRoll {
         any_down: bool,
         session: &mut Session,
     ) {
-        if self.is_dragging() && !any_down {
+        if self.note_drag() && !any_down {
             self.drag = Drag::None;
             session.document_mut().end_gesture();
             session.pointer_off();
@@ -834,6 +912,10 @@ impl PianoRoll {
             return;
         }
         if layout.lane.contains(pos) {
+            if self.shows_tempo {
+                // The tempo line takes it.
+                return;
+            }
             if let Some(note) = self.stalk_at(notes, layout, pos, session) {
                 if !session.is_selected(note.id) {
                     session.select_only([note.id]);
@@ -957,7 +1039,7 @@ impl PianoRoll {
         pos: Pos2,
         modifiers: egui::Modifiers,
     ) {
-        if !response.hovered() && !self.is_dragging() {
+        if !response.hovered() && !self.note_drag() {
             return;
         }
         let icon = match &self.drag {
@@ -1181,7 +1263,7 @@ impl PianoRoll {
     /// when that is not simply the row under the pointer (a chord stamp, or
     /// a note kept in the key), with the chord's name.
     fn paint_stamp(&self, ui: &Ui, layout: &Layout, session: &Session) {
-        if self.is_dragging() || self.hovered.is_some() {
+        if self.note_drag() || self.hovered.is_some() {
             return;
         }
         let Some(pos) = ui.input(|i| i.pointer.hover_pos()) else {
@@ -1408,15 +1490,11 @@ impl PianoRoll {
             whole_lane.top() + 0.5,
             Stroke::new(1.0, p.divider),
         );
-        ui.painter().text(
-            pos2(layout.lane_label.left() + 8.0, layout.lane_label.center().y),
-            Align2::LEFT_CENTER,
-            text::VELOCITY,
-            FontId::proportional(size::SMALL),
-            p.text_weak,
-        );
         let painter = ui.painter_at(lane);
         painter.rect_filled(lane.shrink2(vec2(0.0, 2.0)), CornerRadius::ZERO, p.grid);
+        if self.shows_tempo {
+            return;
+        }
         let notes = &session.pattern().notes;
         let range = self.visible_range(notes, layout.grid);
         let usable = lane.height() - 10.0;
@@ -1441,7 +1519,7 @@ impl PianoRoll {
     }
 
     fn paint_overlay(&self, ui: &Ui, layout: &Layout, session: &Session) {
-        if !session.pattern().notes.is_empty() || self.is_dragging() || session.is_recording() {
+        if !session.pattern().notes.is_empty() || self.note_drag() || session.is_recording() {
             return;
         }
         let p = Palette::of(ui.ctx());

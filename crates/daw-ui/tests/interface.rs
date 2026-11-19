@@ -1760,6 +1760,103 @@ fn the_tempo_line_takes_changes_that_are_dragged_and_removed() {
     assert_eq!(f.session().tempo_changes().len(), 1);
 }
 
+fn escape(f: &mut Fixture) {
+    f.key(Key::Escape, Key::Escape, true, Modifiers::NONE);
+    f.key(Key::Escape, Key::Escape, false, Modifiers::NONE);
+    f.harness.run_steps(2);
+}
+
+#[test]
+fn a_ritardando_arrives_gradually_and_takes_a_shape() {
+    let mut f = song_with_signatures();
+    let strip = f.harness.get_by_label(text::TEMPO_LINE).rect();
+    let bar5 = Ticks::WHOLE * 4;
+    let spot = Pos2::new(f.song_x(bar5) + 1.0, strip.center().y + 14.0);
+    f.click(spot, Modifiers::NONE);
+    escape(&mut f);
+    // Dragged down, the new tempo is slower.
+    let point = f
+        .harness
+        .get_by_label(&text::tempo_point(120.0, 4))
+        .rect()
+        .center();
+    f.drag(point, point + vec2(0.0, 16.0), Modifiers::NONE);
+    let slower = f.session().tempo_changes()[1].bpm;
+    assert!(slower < 120.0, "now {slower}");
+    // Its panel makes the tempo arrive there gradually: a ritardando.
+    let point = f
+        .harness
+        .get_by_label(&text::tempo_point(slower, 4))
+        .rect()
+        .center();
+    f.click(point, Modifiers::NONE);
+    f.harness.get_by_label(text::ARRIVE_GRADUALLY).click();
+    f.harness.run_steps(2);
+    assert!(
+        f.session().tempo_changes()[0].glide,
+        "the start glides to it"
+    );
+    escape(&mut f);
+    // The glide's handle opens its shapes: Late holds the tempo back.
+    let label = text::glide_handle(true, 0, 4);
+    let handle = f.harness.get_by_label(&label).rect().center();
+    f.click(handle, Modifiers::NONE);
+    f.harness.get_by_label(&text::glide_tempos(120.0, slower));
+    f.harness.get_by_label(text::GLIDE_LATE).click();
+    f.harness.run_steps(2);
+    assert_eq!(f.session().tempo_changes()[0].curve, 0.5);
+    let middle = f.session().project().tempo.bpm_at(Ticks::WHOLE * 2);
+    assert!(middle > f64::midpoint(120.0, slower), "held back: {middle}");
+    escape(&mut f);
+    assert!(
+        f.harness.query_by_label(text::GLIDE_LATE).is_none(),
+        "closed"
+    );
+    // Dragged down, the handle bends it the other way, in one undo step.
+    let handle = f.harness.get_by_label(&label).rect().center();
+    f.drag(handle, handle + vec2(0.0, 12.0), Modifiers::NONE);
+    let bent = f.session().tempo_changes()[0].curve;
+    assert!(bent < 0.5, "now {bent}");
+    f.workspace_mut().session_mut().undo();
+    assert_eq!(f.session().tempo_changes()[0].curve, 0.5, "undone at once");
+    // Right-clicked, the handle makes the change sudden again.
+    let handle = f.harness.get_by_label(&label).rect().center();
+    f.right_click(handle);
+    assert!(!f.session().tempo_changes()[0].glide);
+}
+
+#[test]
+fn the_piano_roll_shows_the_tempo_under_its_notes() {
+    let mut f = fixture();
+    assert!(
+        f.harness.query_by_label(text::TEMPO_LINE).is_none(),
+        "the lane shows velocity first"
+    );
+    f.harness.get_by_label(text::LANE_TEMPO).click();
+    f.harness.run_steps(2);
+    let strip = f.harness.get_by_label(text::TEMPO_LINE).rect();
+    // A click on the line adds a tempo change where the pattern plays; its
+    // panel opens above the lane, which is at the bottom of the window.
+    let spot = Pos2::new(strip.left() + strip.width() * 0.5, strip.center().y + 10.0);
+    f.click(spot, Modifiers::NONE);
+    let changes = f.session().tempo_changes().to_vec();
+    assert_eq!(changes.len(), 2, "a tempo change");
+    let placement = f.session().placement();
+    assert!(changes[1].at > placement.start && changes[1].at < placement.start + placement.length);
+    assert!(f.notes().is_empty(), "no note was placed");
+    let glide = f.harness.get_by_label(text::GLIDE).rect();
+    assert!(glide.bottom() <= strip.top(), "above the lane");
+    escape(&mut f);
+    assert!(
+        f.harness.query_by_label(text::GLIDE).is_none(),
+        "Escape closes it"
+    );
+    // It is the song's tempo: the song view shows the same change.
+    f.harness.get_by_label(text::LANE_VELOCITY).click();
+    f.harness.run_steps(2);
+    assert!(f.harness.query_by_label(text::TEMPO_LINE).is_none());
+}
+
 #[test]
 fn panels_and_menus_take_clicks_that_last_several_frames() {
     // A person's click lasts longer than a frame: the press must not close

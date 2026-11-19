@@ -809,7 +809,7 @@ impl Workspace {
             Command::Duplicate => s.duplicate(),
             Command::Delete => s.delete_selected(),
             Command::Deselect => {
-                if !self.cancel_drag() {
+                if !self.roll.close_popups() && !self.cancel_drag() {
                     self.session.deselect();
                 }
             }

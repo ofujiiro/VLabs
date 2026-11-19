@@ -659,7 +659,7 @@ impl Writer<'_> {
     /// The tempo changes: a sudden change holds, a straight glide is linear,
     /// and a bent glide (decision 0026), which DAWproject cannot describe,
     /// is written as straight pieces a sixteenth note long (at most 64),
-    /// close to what VLabs plays.
+    /// close to what plays here.
     fn tempo_automation(&mut self, tempo_id: &str) -> Element {
         let mut automation = Element::new("TempoAutomation")
             .attr("id", self.id())

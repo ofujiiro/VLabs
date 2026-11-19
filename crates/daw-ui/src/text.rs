@@ -157,6 +157,11 @@ pub const KEYBOARD_HINT: &str = "Play with your computer keyboard: the two rows 
 pub const OCTAVE_DOWN: &str = "Octave down";
 pub const OCTAVE_UP: &str = "Octave up";
 pub const VELOCITY: &str = "Velocity";
+/// The buttons beside the lane under the piano roll, for screen readers.
+pub const LANE_VELOCITY: &str = "Velocity lane";
+pub const LANE_TEMPO: &str = "Tempo lane";
+pub const SHOW_VELOCITY: &str = "Show the notes' velocity under the piano roll";
+pub const SHOW_TEMPO: &str = "Show the song's tempo under the piano roll, where this pattern plays";
 pub const PIANO_ROLL: &str = "Piano roll";
 pub const SHOW_KEYBOARD: &str = "Show the keyboard";
 pub const HIDE_KEYBOARD: &str = "Hide the keyboard";
@@ -1711,6 +1716,7 @@ pub const EDIT_ADD_TEMPO_CHANGE: &str = "add tempo change";
 pub const EDIT_REMOVE_TEMPO_CHANGE: &str = "remove tempo change";
 pub const EDIT_MOVE_TEMPO_CHANGE: &str = "move tempo change";
 pub const EDIT_GLIDE: &str = "change tempo glide";
+pub const EDIT_GLIDE_SHAPE: &str = "bend tempo glide";
 pub const EDIT_MOVE_SIGNATURE: &str = "move signature change";
 pub const EDIT_REMOVE_SIGNATURE: &str = "remove signature change";
 
@@ -1998,13 +2004,32 @@ pub const TEMPO_LANE: &str = "Tempo";
 pub const SIGNATURE_TAGS: &str = "Time-signature and key changes";
 pub const TEMPO_LINE: &str = "Tempo changes";
 pub const TEMPO_LANE_HINT: &str = "Click to add a tempo change; drag a point to change it, \
-     click it for its exact tempo, right-click it to remove it";
+     click it for more, right-click it to remove it. Drag the handle in the middle of a glide \
+     to bend it";
 pub const SHOW_SIGNATURES: &str = "Show tempo and signature changes";
 pub const HIDE_SIGNATURES: &str = "Hide tempo and signature changes";
 pub const SAME_AS_BEFORE: &str = "Same as before";
 pub const REMOVE_CHANGES: &str = "Remove these changes";
 pub const GLIDE: &str = "Glide to the next tempo";
 pub const GLIDE_HINT: &str = "Speed up or slow down gradually until the next tempo change";
+pub const ARRIVE_GRADUALLY: &str = "Arrive gradually";
+pub const ARRIVE_GRADUALLY_HINT: &str =
+    "Speed up or slow down gradually from the previous tempo change to this one";
+/// Over a glide that slows down, as a score writes it.
+pub const RIT: &str = "rit.";
+/// Over a glide that speeds up.
+pub const ACCEL: &str = "accel.";
+pub const GLIDE_SHAPE: &str = "Shape";
+pub const GLIDE_EARLY: &str = "Early";
+pub const GLIDE_EARLY_HINT: &str =
+    "Most of the change comes first, then the tempo settles into the new one";
+pub const GLIDE_EVEN: &str = "Even";
+pub const GLIDE_EVEN_HINT: &str = "The tempo moves by the same amount on every beat";
+pub const GLIDE_LATE: &str = "Late";
+pub const GLIDE_LATE_HINT: &str = "The tempo holds back, then changes more and more towards the \
+     end: a ritardando that gathers, the way a runner slows to a stop";
+pub const GLIDE_SHAPE_HINT: &str = "Or drag the handle in the middle of the glide up or down";
+pub const MAKE_SUDDEN: &str = "Change suddenly instead";
 pub const REMOVE_TEMPO_CHANGE: &str = "Remove this tempo change";
 pub const TEMPO_CHANGE: &str = "Tempo change";
 
@@ -2025,6 +2050,21 @@ pub fn from_bar(bar: u32) -> String {
 /// The label of a signature tag, for screen readers: "Bar 9: 7/8, A minor".
 pub fn signature_tag(bar: u32, what: &str) -> String {
     format!("Bar {}: {what}", bar + 1)
+}
+
+/// The handle of a glide, and the title of its panel: "rit., bars 5 to 9".
+pub fn glide_handle(slows: bool, from_bar: u32, to_bar: u32) -> String {
+    let word = if slows { RIT } else { ACCEL };
+    if from_bar == to_bar {
+        format!("{word}, bar {}", from_bar + 1)
+    } else {
+        format!("{word}, bars {} to {}", from_bar + 1, to_bar + 1)
+    }
+}
+
+/// The tempos a glide goes between: "100 → 60 BPM".
+pub fn glide_tempos(bpm: f64, next_bpm: f64) -> String {
+    format!("{} → {} {BPM}", self::bpm(bpm), self::bpm(next_bpm))
 }
 
 /// The label of a tempo point, for screen readers: "Tempo 96 at bar 5".
