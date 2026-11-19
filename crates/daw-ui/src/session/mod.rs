@@ -179,6 +179,23 @@ impl Placement {
     }
 }
 
+/// A note copied, with what it sings and how (decisions 0027 and 0028),
+/// so pasting a voice's notes keeps their lyrics and expression. In the
+/// clipboard's text the note's own fields stay at the top, so text from
+/// an older copy of the program pastes as notes that sing the plain way.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CopiedNote {
+    /// The note (its start counted from the first copied note's).
+    #[serde(flatten)]
+    pub note: Note,
+    /// Its own lyric, if it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lyric: Option<String>,
+    /// How it is sung, if some other way than the plain one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expression: Option<daw_model::expression::NoteExpression>,
+}
+
 /// One recording pass that is still running.
 #[derive(Clone, Copy, Debug)]
 struct Take {
@@ -232,7 +249,7 @@ pub struct Session {
     chord_held: Vec<u8>,
     /// The length of new notes.
     pub note_length: Ticks,
-    clipboard: Vec<Note>,
+    clipboard: Vec<CopiedNote>,
     clipboard_span: Ticks,
     paste_at: Option<Ticks>,
     keyboard_base: u8,
@@ -1164,18 +1181,34 @@ impl Session {
         self.selection.clear();
     }
 
-    /// Copies the selected notes.
+    /// The selected notes with their lyrics and expression, as copied.
+    fn selected_copies(&self) -> Vec<CopiedNote> {
+        let pattern = self.pattern();
+        self.selected_notes()
+            .into_iter()
+            .map(|note| CopiedNote {
+                note,
+                lyric: pattern.lyric(note.id).map(str::to_owned),
+                expression: pattern.expression(note.id).cloned(),
+            })
+            .collect()
+    }
+
+    /// Copies the selected notes (with their lyrics and expression).
     pub fn copy(&mut self) -> bool {
-        let notes = self.selected_notes();
-        let Some(first) = notes.iter().map(|n| n.start).min() else {
+        let copies = self.selected_copies();
+        let Some(first) = copies.iter().map(|c| c.note.start).min() else {
             return false;
         };
-        let end = notes.iter().map(Note::end).max().unwrap_or(first);
-        self.clipboard = notes
-            .iter()
-            .map(|n| Note {
-                start: n.start - first,
-                ..*n
+        let end = copies.iter().map(|c| c.note.end()).max().unwrap_or(first);
+        self.clipboard = copies
+            .into_iter()
+            .map(|c| CopiedNote {
+                note: Note {
+                    start: c.note.start - first,
+                    ..c.note
+                },
+                ..c
             })
             .collect();
         self.clipboard_span = self.span_of(first, end);
@@ -1193,13 +1226,17 @@ impl Session {
     }
 
     /// The copied notes, relative to the first one's start.
-    pub fn clipboard(&self) -> &[Note] {
+    pub fn clipboard(&self) -> &[CopiedNote] {
         &self.clipboard
     }
 
-    /// Replaces the copied notes (from another program's clipboard).
-    pub fn set_clipboard(&mut self, notes: Vec<Note>) {
-        let end = notes.iter().map(Note::end).max().unwrap_or(Ticks::ZERO);
+    /// Replaces the copied notes (from the system's clipboard).
+    pub fn set_clipboard(&mut self, notes: Vec<CopiedNote>) {
+        let end = notes
+            .iter()
+            .map(|c| c.note.end())
+            .max()
+            .unwrap_or(Ticks::ZERO);
         self.clipboard_span = self.span_of(Ticks::ZERO, end);
         self.clipboard = notes;
     }
@@ -1211,41 +1248,63 @@ impl Session {
             return;
         }
         let at = self.paste_at.unwrap_or(Ticks::ZERO);
-        let notes: Vec<Note> = self
+        let copies: Vec<CopiedNote> = self
             .clipboard
             .iter()
-            .map(|n| Note {
-                start: n.start + at,
-                ..*n
+            .map(|c| CopiedNote {
+                note: Note {
+                    start: c.note.start + at,
+                    ..c.note
+                },
+                ..c.clone()
             })
             .collect();
-        self.insert_notes(text::EDIT_PASTE, &notes);
+        self.insert_notes(text::EDIT_PASTE, &copies);
         self.paste_at = Some(at + self.clipboard_span);
     }
 
-    /// Puts a copy of the selected notes right after them.
+    /// Puts a copy of the selected notes right after them (with their
+    /// lyrics and expression).
     pub fn duplicate(&mut self) {
-        let notes = self.selected_notes();
-        let Some(first) = notes.iter().map(|n| n.start).min() else {
+        let copies = self.selected_copies();
+        let Some(first) = copies.iter().map(|c| c.note.start).min() else {
             return;
         };
-        let end = notes.iter().map(Note::end).max().unwrap_or(first);
+        let end = copies.iter().map(|c| c.note.end()).max().unwrap_or(first);
         let span = self.span_of(first, end);
-        let copies: Vec<Note> = notes
-            .iter()
-            .map(|n| Note {
-                start: n.start + span,
-                ..*n
+        let copies: Vec<CopiedNote> = copies
+            .into_iter()
+            .map(|c| CopiedNote {
+                note: Note {
+                    start: c.note.start + span,
+                    ..c.note
+                },
+                ..c
             })
             .collect();
         self.insert_notes(text::EDIT_DUPLICATE, &copies);
     }
 
-    fn insert_notes(&mut self, label: &str, notes: &[Note]) {
+    /// Adds copies of notes, their lyrics and expression with them, as one
+    /// edit; selects them.
+    fn insert_notes(&mut self, label: &str, copies: &[CopiedNote]) {
+        let notes: Vec<Note> = copies.iter().map(|c| c.note).collect();
         let end = notes.iter().map(Note::end).max().unwrap_or(Ticks::ZERO);
         let (track, pattern) = (self.track, self.pattern);
         let ids = self.doc.edit(label, |p| {
-            let ids = p.add_notes(pattern, notes);
+            let ids = p.add_notes(pattern, &notes);
+            let lyrics: Vec<(NoteId, String)> = ids
+                .iter()
+                .zip(copies)
+                .filter_map(|(id, c)| Some((*id, c.lyric.clone()?)))
+                .collect();
+            p.set_lyrics(pattern, &lyrics);
+            let sung: Vec<(NoteId, daw_model::expression::NoteExpression)> = ids
+                .iter()
+                .zip(copies)
+                .filter_map(|(id, c)| Some((*id, c.expression.clone()?)))
+                .collect();
+            p.set_expressions(pattern, &sung);
             grow_to_fit(p, track, pattern, end);
             ids
         });

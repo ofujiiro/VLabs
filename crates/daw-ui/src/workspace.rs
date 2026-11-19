@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use daw_engine::PluginKind;
-use daw_model::{EffectId, Note, PatternId, Project, TrackId};
+use daw_model::{EffectId, PatternId, Project, TrackId};
 use egui::{Button, Event, Key, Modal, Panel, RichText, ThemePreference, Ui, ViewportCommand};
 
 use crate::effect_ui::EffectWindows;
@@ -21,7 +21,7 @@ use crate::library_panel::{self, LibraryAction, LibraryPanel};
 use crate::mixer::{MIXER_HEIGHT, MixerPanel, format_name};
 use crate::piano_roll::PianoRoll;
 use crate::plugin_manager::{PluginJobDone, PluginPlaces, PluginsWindow};
-use crate::session::{Session, View};
+use crate::session::{CopiedNote, Session, View};
 use crate::settings::{LabelChoice, Settings, ThemeChoice};
 use crate::song_view::SongView;
 use crate::step_grid::StepGrid;
@@ -1897,8 +1897,9 @@ fn bind_error_text(error: BindError, shortcut: Shortcut) -> String {
 }
 
 /// The clipboard text for notes: a header line naming the program, then
-/// the notes as JSON, so notes can be pasted into another window of it.
-pub fn notes_to_text(notes: &[Note]) -> String {
+/// the notes as JSON (with their lyrics and expression), so notes can be
+/// pasted into another window of it.
+pub fn notes_to_text(notes: &[CopiedNote]) -> String {
     format!(
         "{}\n{}",
         clipboard_header(),
@@ -1906,8 +1907,9 @@ pub fn notes_to_text(notes: &[Note]) -> String {
     )
 }
 
-/// Notes from clipboard text written by [`notes_to_text`].
-pub fn notes_from_text(text: &str) -> Option<Vec<Note>> {
+/// Notes from clipboard text written by [`notes_to_text`] (or by an older
+/// copy of the program, whose notes have no lyrics).
+pub fn notes_from_text(text: &str) -> Option<Vec<CopiedNote>> {
     let (header, json) = text.split_once('\n')?;
     if header.trim() != clipboard_header() {
         return None;

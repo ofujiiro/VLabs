@@ -3222,3 +3222,83 @@ fn vibrato_colour_and_breath_shape_the_selected_notes() {
     assert!((f.expression(c4).colour - colour).abs() < 1e-6);
     std::fs::remove_dir_all(folder).ok();
 }
+
+#[test]
+fn copied_notes_keep_their_lyrics_and_expression() {
+    let (mut f, folder, [c4, e4]) = singing();
+    let bent = daw_model::expression::NoteExpression {
+        pitch: vec![
+            daw_model::expression::PitchPoint::new(-40.0, 0.0),
+            daw_model::expression::PitchPoint::new(80.0, 30.0),
+        ],
+        breath: 0.4,
+        ..daw_model::expression::NoteExpression::default()
+    };
+    {
+        let session = f.workspace_mut().session_mut();
+        session.sing_from(c4, "ka sa");
+        session.select_only([e4]);
+        session.change_expression("test", &[e4], |_, e| *e = bent.clone());
+        session.select_all();
+    }
+    // Copied through the clipboard's text and pasted back.
+    f.harness.event(Event::Copy);
+    f.harness.step();
+    let copied = f
+        .harness
+        .output()
+        .platform_output
+        .commands
+        .iter()
+        .find_map(|c| match c {
+            egui::OutputCommand::CopyText(text) => Some(text.clone()),
+            _ => None,
+        })
+        .expect("copying puts text on the clipboard");
+    f.harness.event(Event::Paste(copied));
+    f.harness.run_steps(2);
+    let pattern = f.session().pattern().clone();
+    assert_eq!(pattern.notes.len(), 4);
+    let sung: Vec<(&str, bool)> = pattern
+        .notes
+        .iter()
+        .map(|n| {
+            (
+                pattern.lyric(n.id).unwrap_or(""),
+                pattern.expression(n.id) == Some(&bent),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sung,
+        [("ka", false), ("sa", true), ("ka", false), ("sa", true)]
+    );
+    // One undo takes the pasted notes, lyrics and all.
+    f.workspace_mut().session_mut().undo();
+    assert_eq!(f.session().pattern().lyrics.len(), 2);
+    assert_eq!(f.session().pattern().expression.len(), 1);
+    // Duplicated notes keep them too.
+    f.workspace_mut().session_mut().select_only([e4]);
+    f.key(Key::D, Key::D, true, Modifiers::CTRL);
+    f.key(Key::D, Key::D, false, Modifiers::CTRL);
+    let pattern = f.session().pattern().clone();
+    let copy = pattern
+        .notes
+        .iter()
+        .find(|n| n.id != c4 && n.id != e4)
+        .unwrap();
+    assert_eq!(pattern.lyric(copy.id), Some("sa"));
+    assert_eq!(pattern.expression(copy.id), Some(&bent));
+    // Notes copied by an older copy of the program paste, singing "a".
+    let old = format!(
+        "{} notes 1\n[{{\"id\":1,\"start\":0,\"length\":{},\"key\":67,\"velocity\":0.8}}]",
+        daw_ident::PRODUCT_NAME,
+        Ticks::QUARTER.0
+    );
+    f.harness.event(Event::Paste(old));
+    f.harness.run_steps(2);
+    let pattern = f.session().pattern().clone();
+    let pasted = pattern.notes.iter().find(|n| n.key == 67).unwrap();
+    assert_eq!(pattern.lyric(pasted.id), None);
+    std::fs::remove_dir_all(folder).ok();
+}
