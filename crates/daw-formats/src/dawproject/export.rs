@@ -656,22 +656,40 @@ impl Writer<'_> {
         Some(points)
     }
 
-    /// The tempo changes: a sudden change holds, a glide is linear.
+    /// The tempo changes: a sudden change holds, a straight glide is linear,
+    /// and a bent glide (decision 0026), which DAWproject cannot describe,
+    /// is written as straight pieces a sixteenth note long (at most 64),
+    /// close to what VLabs plays.
     fn tempo_automation(&mut self, tempo_id: &str) -> Element {
         let mut automation = Element::new("TempoAutomation")
             .attr("id", self.id())
             .attr("unit", "bpm")
             .child(Element::new("Target").attr("parameter", tempo_id));
-        for change in self.project.tempo.changes() {
-            automation.push(
-                Element::new("RealPoint")
-                    .number("time", beats(change.at))
-                    .number("value", change.bpm)
-                    .attr(
-                        "interpolation",
-                        if change.glide { "linear" } else { "hold" },
-                    ),
-            );
+        let point = |at: Ticks, bpm: f64, interpolation: &str| {
+            Element::new("RealPoint")
+                .number("time", beats(at))
+                .number("value", bpm)
+                .attr("interpolation", interpolation)
+        };
+        let tempo = &self.project.tempo;
+        let changes = tempo.changes();
+        for (index, change) in changes.iter().enumerate() {
+            match changes.get(index + 1) {
+                Some(next) if change.glide && change.curve != 0.0 => {
+                    let length = next.at - change.at;
+                    let step = Ticks::note_value(1, 16).max(Ticks((length.0 + 63) / 64));
+                    let mut at = change.at;
+                    while at < next.at {
+                        automation.push(point(at, tempo.bpm_at(at), "linear"));
+                        at += step;
+                    }
+                }
+                _ => automation.push(point(
+                    change.at,
+                    change.bpm,
+                    if change.glide { "linear" } else { "hold" },
+                )),
+            }
         }
         automation
     }

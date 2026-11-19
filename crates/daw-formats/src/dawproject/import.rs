@@ -242,9 +242,8 @@ impl<R: Read + Seek> Importer<'_, R> {
             self.project.tempo = TempoMap::from_changes(changes.clone());
             let at = self.ticks(time, unit);
             changes.push(TempoChange {
-                at,
-                bpm,
                 glide: point.attr("interpolation") == Some("linear"),
+                ..TempoChange::new(at, bpm)
             });
         }
         if !changes.is_empty() {

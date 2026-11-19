@@ -87,7 +87,7 @@ fn write_hum(folder: &std::path::Path) {
 /// a change, a swung beat, a tempo glide and a time-signature change;
 /// version 6 a track of the built-in synth with a lane for its cutoff;
 /// version 7 a track playing an SFZ instrument, and a custom kit whose pad
-/// plays the version 4 sample's sound).
+/// plays the version 4 sample's sound; version 8 a bent tempo glide).
 fn reference_project() -> Project {
     let mut project = Project::starter("Pattern 1", "Piano");
     let (_, pattern) = project.first_pattern().unwrap();
@@ -154,6 +154,10 @@ fn reference_project() -> Project {
     project.tempo.set(Ticks::quarters(8), 90.0);
     project.tempo.set(Ticks::quarters(16), 100.0);
     project.tempo.set_glide(Ticks::quarters(8), true);
+    // Version 8: a ritardando that gathers (decision 0026).
+    project.tempo.set(Ticks::quarters(24), 70.0);
+    project.tempo.set_glide(Ticks::quarters(16), true);
+    project.tempo.set_curve(Ticks::quarters(16), 0.5);
     project.key.set(0, Some(Scale::new(9, ScaleKind::Minor)));
     project.key.set(4, Some(Scale::new(0, ScaleKind::Major)));
     project.meter.set(8, TimeSignature::new(7, 8).unwrap());
@@ -254,6 +258,7 @@ fn every_released_format_version_still_opens() {
             );
         }
         check_newer_instruments(&project, version, &path);
+        check_bent_glide(&project, version, &path);
         if version >= 5 {
             check_theory_and_rhythm(&project, &path);
         } else {
@@ -292,6 +297,29 @@ fn every_released_format_version_still_opens() {
         found >= FORMAT_VERSION as usize,
         "a sample file is missing for some format version (found {found})"
     );
+}
+
+/// The version 8 sample's bent glide came back; older glides are all
+/// straight.
+fn check_bent_glide(project: &Project, version: u32, path: &std::path::Path) {
+    let name = path.display();
+    let changes = project.tempo.changes();
+    if version >= 8 {
+        let rit = changes
+            .iter()
+            .find(|c| c.at == Ticks::quarters(16))
+            .unwrap_or_else(|| panic!("{name} lost its ritardando"));
+        assert!(
+            rit.glide && (rit.curve - 0.5).abs() < 1e-12,
+            "{name}: {rit:?}"
+        );
+        // Bent late, the middle of the glide is at about 89.8 BPM, where a
+        // straight glide would be at 85.
+        let middle = project.tempo.bpm_at(Ticks::quarters(20));
+        assert!((middle - 89.8).abs() < 0.1, "{name}: {middle}");
+    } else {
+        assert!(changes.iter().all(|c| c.curve == 0.0), "{name}: straight");
+    }
 }
 
 /// The version 7 sample's SFZ track and custom kit came back (and older

@@ -228,11 +228,17 @@ pub struct TempoChange {
     pub at: Ticks,
     /// Quarter notes per minute.
     pub bpm: f64,
-    /// Whether the tempo glides from here to the next change's tempo, in a
-    /// straight line over the ticks between them (decision 0018). The last
-    /// change holds its tempo either way.
+    /// Whether the tempo glides from here to the next change's tempo
+    /// (decision 0018). The last change holds its tempo either way.
     #[serde(default, skip_serializing_if = "is_false")]
     pub glide: bool,
+    /// How the glide bends (decision 0026), from −1 to 1: 0 is a straight
+    /// line over the ticks; a positive bend holds the tempo back and changes
+    /// it more and more towards the end (a ritardando that gathers); a
+    /// negative one makes most of the change first, then settles. Kept when
+    /// the glide is turned off, so turning it on again brings it back.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub curve: f64,
 }
 
 #[allow(
@@ -243,6 +249,14 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes a reference"
+)]
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
+}
+
 impl TempoChange {
     /// A sudden change of tempo at `at`.
     pub fn new(at: Ticks, bpm: f64) -> Self {
@@ -250,48 +264,218 @@ impl TempoChange {
             at,
             bpm,
             glide: false,
+            curve: 0.0,
         }
     }
 }
 
-/// How long the ticks from `from` to `to` last within one piece of a tempo
-/// map: from `start` at `bpm`, gliding to `next_bpm` at `end` if `glide`.
-/// A glide's tempo is a straight line in ticks, so its seconds are a
-/// logarithm (worked out with `ln_1p` to stay exact for small glides).
-#[allow(clippy::cast_precision_loss, reason = "tick counts are far below 2^52")]
-pub fn piece_seconds(start: f64, bpm: f64, end: f64, next_bpm: f64, from: f64, to: f64) -> f64 {
-    let quarter = TICKS_PER_QUARTER as f64;
-    let slope = if end > start {
-        (next_bpm - bpm) / (end - start)
+/// How far a bend of 1 moves a glide's exponent from the straight line's 1
+/// (decision 0026).
+const BEND: f64 = 8.0;
+
+/// Below this, an exponent or a rate counts as zero (where the closed forms
+/// have their limits).
+const TINY: f64 = 1e-12;
+
+/// Keeps a bend in range, whatever a file or a drag said.
+fn clamp_curve(curve: f64) -> f64 {
+    if curve.is_finite() {
+        curve.clamp(-1.0, 1.0)
     } else {
         0.0
-    };
-    let at = |tick: f64| {
-        let ticks = tick - start;
-        if slope.abs() < 1e-15 {
-            ticks * 60.0 / (bpm * quarter)
+    }
+}
+
+/// One piece of a tempo map (decisions 0018 and 0026): from `start` at
+/// `bpm` to `end` (infinitely far for the last piece), arriving at
+/// `next_bpm` there if it glides (the same tempo if it does not), bent by
+/// `curve`.
+///
+/// Within a glide, with `x` the fraction passed and `w = next_bpm / bpm`,
+/// the tempo is `bpm · [1 + (w^q − 1)·x]^(1/q)`, where `q = 1 ± 8·curve`
+/// (plus when the tempo slows, minus when it speeds up, so a positive bend
+/// always comes late). Seconds have closed forms both ways for every `q`,
+/// so the model and the audio thread agree exactly, without steps.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TempoPiece {
+    /// Where the piece starts, in ticks.
+    pub start: f64,
+    /// Where it ends, in ticks (infinite for the last piece).
+    pub end: f64,
+    /// The tempo at the start.
+    pub bpm: f64,
+    /// The tempo at the end (the same as `bpm` unless it glides).
+    pub next_bpm: f64,
+    /// The glide's bend, −1 to 1.
+    pub curve: f64,
+}
+
+#[allow(clippy::cast_precision_loss, reason = "a constant")]
+fn quarter() -> f64 {
+    TICKS_PER_QUARTER as f64
+}
+
+impl TempoPiece {
+    /// A piece that holds `bpm` from `start` to `end`.
+    pub fn steady(start: f64, end: f64, bpm: f64) -> Self {
+        Self {
+            start,
+            end,
+            bpm,
+            next_bpm: bpm,
+            curve: 0.0,
+        }
+    }
+
+    /// Whether the tempo moves within the piece.
+    pub fn glides(&self) -> bool {
+        self.end.is_finite()
+            && self.end > self.start
+            && (self.next_bpm - self.bpm).abs() > TINY * self.bpm
+    }
+
+    /// The exponent of the glide's shape: 1 is a straight line.
+    fn exponent(&self) -> f64 {
+        let direction = if self.next_bpm < self.bpm { 1.0 } else { -1.0 };
+        1.0 + BEND * clamp_curve(self.curve) * direction
+    }
+
+    /// `ln(next_bpm / bpm)`.
+    fn log_ratio(&self) -> f64 {
+        (self.next_bpm / self.bpm).ln()
+    }
+
+    /// `ln(1 + (w^q − 1)·x)` for a glide's exponent `q` (not 0), accurate
+    /// at both ends: near the start through `ln_1p`, near the end (where a
+    /// strong bend between far-apart tempos makes it the log of a tiny
+    /// number) as `ln((1 − x) + w^q·x)`, which does not cancel.
+    fn log_base(q: f64, ln_w: f64, x: f64) -> f64 {
+        let cx = (q * ln_w).exp_m1() * x;
+        if cx.abs() < 0.5 {
+            cx.ln_1p()
         } else {
-            60.0 / quarter * (slope * ticks / bpm).ln_1p() / slope
+            ((1.0 - x) + (q * ln_w).exp() * x).ln()
         }
-    };
-    at(to) - at(from)
+    }
+
+    /// The tempo at `tick` (held outside the piece).
+    pub fn bpm_at(&self, tick: f64) -> f64 {
+        if !self.glides() {
+            return self.bpm;
+        }
+        let x = ((tick - self.start) / (self.end - self.start)).clamp(0.0, 1.0);
+        let q = self.exponent();
+        let ln_w = self.log_ratio();
+        let bpm = if q.abs() < TINY {
+            self.bpm * (x * ln_w).exp()
+        } else {
+            self.bpm * (Self::log_base(q, ln_w, x) / q).exp()
+        };
+        // (Never past either tempo, even by a rounding error.)
+        bpm.clamp(self.bpm.min(self.next_bpm), self.bpm.max(self.next_bpm))
+    }
+
+    /// Seconds from the start of the piece to `tick` (within the piece).
+    #[allow(
+        clippy::many_single_char_names,
+        reason = "the letters of the formula in decision 0026"
+    )]
+    pub fn seconds_to(&self, tick: f64) -> f64 {
+        let seconds_per_tick = 60.0 / (self.bpm * quarter());
+        let ticks = tick - self.start;
+        if !self.glides() {
+            return ticks * seconds_per_tick;
+        }
+        let length = self.end - self.start;
+        let x = ticks / length;
+        let q = self.exponent();
+        let ln_w = self.log_ratio();
+        // The integral of bpm / tempo over the fraction passed.
+        let integral = if q.abs() < TINY {
+            // The tempo grows by the same ratio all along: w^x.
+            -(-x * ln_w).exp_m1() / ln_w
+        } else {
+            let c = (q * ln_w).exp_m1();
+            let p = 1.0 - 1.0 / q;
+            let y = Self::log_base(q, ln_w, x);
+            if p.abs() < TINY {
+                y / c
+            } else {
+                (p * y).exp_m1() / (c * p)
+            }
+        };
+        integral * length * seconds_per_tick
+    }
+
+    /// The tick reached `seconds` after the start of the piece (the inverse
+    /// of [`Self::seconds_to`]).
+    #[allow(
+        clippy::many_single_char_names,
+        reason = "the letters of the formula in decision 0026"
+    )]
+    pub fn tick_after(&self, seconds: f64) -> f64 {
+        let seconds_per_tick = 60.0 / (self.bpm * quarter());
+        if !self.glides() {
+            return self.start + seconds / seconds_per_tick;
+        }
+        let length = self.end - self.start;
+        let integral = seconds / (seconds_per_tick * length);
+        let q = self.exponent();
+        let ln_w = self.log_ratio();
+        // (Arguments of ln_1p stay above −1 even a hair past the end.)
+        let floor = -1.0 + f64::EPSILON;
+        let x = if q.abs() < TINY {
+            -(-integral * ln_w).max(floor).ln_1p() / ln_w
+        } else {
+            let c = (q * ln_w).exp_m1();
+            let p = 1.0 - 1.0 / q;
+            if p.abs() < TINY {
+                (c * integral).exp_m1() / c
+            } else {
+                ((c * p * integral).max(floor).ln_1p() / p).exp_m1() / c
+            }
+        };
+        self.start + x * length
+    }
+
+    /// How long the whole piece lasts, in seconds (infinite for the last).
+    pub fn seconds(&self) -> f64 {
+        if self.end.is_finite() {
+            self.seconds_to(self.end)
+        } else {
+            f64::INFINITY
+        }
+    }
 }
 
-/// The tick reached `seconds` after `start` within one piece of a tempo map
-/// (the inverse of [`piece_seconds`] from the piece's start).
-#[allow(clippy::cast_precision_loss, reason = "tick counts are far below 2^52")]
-pub fn piece_ticks(start: f64, bpm: f64, end: f64, next_bpm: f64, seconds: f64) -> f64 {
-    let quarter = TICKS_PER_QUARTER as f64;
-    let slope = if end > start {
-        (next_bpm - bpm) / (end - start)
-    } else {
-        0.0
+/// The bend that makes a glide from `bpm` to `next_bpm` pass through
+/// `middle_bpm` half-way (decision 0026: what dragging the glide's handle
+/// does). A middle outside the two tempos gives the strongest bend that
+/// way; a glide that does not move has no bend.
+pub fn curve_through(bpm: f64, next_bpm: f64, middle_bpm: f64) -> f64 {
+    let piece = |curve: f64| TempoPiece {
+        start: 0.0,
+        end: 2.0,
+        bpm,
+        next_bpm,
+        curve,
     };
-    if slope.abs() < 1e-15 {
-        start + seconds * bpm * quarter / 60.0
-    } else {
-        start + bpm * (seconds * slope * quarter / 60.0).exp_m1() / slope
+    if !piece(0.0).glides() || !middle_bpm.is_finite() {
+        return 0.0;
     }
+    // The middle tempo moves one way as the bend grows: find which.
+    let at = |curve: f64| piece(curve).bpm_at(1.0);
+    let rising = at(1.0) > at(-1.0);
+    let (mut low, mut high) = (-1.0_f64, 1.0_f64);
+    for _ in 0..60 {
+        let mid = f64::midpoint(low, high);
+        if (at(mid) < middle_bpm) == rising {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    f64::midpoint(low, high)
 }
 
 /// The tempo over the whole song: a tempo at the start, and changes.
@@ -321,6 +505,7 @@ impl TempoMap {
                 at: c.at.max(Ticks::ZERO),
                 bpm: clamp_tempo(c.bpm),
                 glide: c.glide,
+                curve: clamp_curve(c.curve),
             })
             .collect();
         sorted.sort_by_key(|c| c.at);
@@ -374,30 +559,35 @@ impl TempoMap {
         self.changes[self.index_at(at)]
     }
 
-    /// One piece of the map: (start tick, tempo, end tick, tempo at the
-    /// end); the end of the last piece is infinitely far.
+    /// One piece of the map: from a change to the next (infinitely far
+    /// for the last).
     #[allow(clippy::cast_precision_loss, reason = "tick counts are far below 2^52")]
-    fn piece(&self, index: usize) -> (f64, f64, f64, f64) {
+    pub fn piece(&self, index: usize) -> TempoPiece {
         let change = self.changes[index];
+        let start = change.at.0 as f64;
         match self.changes.get(index + 1) {
-            Some(next) if change.glide => {
-                (change.at.0 as f64, change.bpm, next.at.0 as f64, next.bpm)
-            }
-            Some(next) => (change.at.0 as f64, change.bpm, next.at.0 as f64, change.bpm),
-            None => (change.at.0 as f64, change.bpm, f64::INFINITY, change.bpm),
+            Some(next) if change.glide => TempoPiece {
+                start,
+                end: next.at.0 as f64,
+                bpm: change.bpm,
+                next_bpm: next.bpm,
+                curve: change.curve,
+            },
+            Some(next) => TempoPiece::steady(start, next.at.0 as f64, change.bpm),
+            None => TempoPiece::steady(start, f64::INFINITY, change.bpm),
         }
+    }
+
+    /// The pieces of the map, in order.
+    pub fn pieces(&self) -> impl Iterator<Item = TempoPiece> + '_ {
+        (0..self.changes.len()).map(|index| self.piece(index))
     }
 
     /// The tempo at `at`: the change in effect, or on a glide the tempo
     /// reached so far.
     #[allow(clippy::cast_precision_loss, reason = "tick counts are far below 2^52")]
     pub fn bpm_at(&self, at: Ticks) -> f64 {
-        let (start, bpm, end, next_bpm) = self.piece(self.index_at(at));
-        if end.is_finite() && end > start {
-            bpm + (next_bpm - bpm) * ((at.0 as f64 - start) / (end - start)).clamp(0.0, 1.0)
-        } else {
-            bpm
-        }
+        self.piece(self.index_at(at)).bpm_at(at.0 as f64)
     }
 
     /// Sets the tempo from `at` onwards (replacing the tempo of a change at
@@ -416,6 +606,14 @@ impl TempoMap {
     pub fn set_glide(&mut self, at: Ticks, glide: bool) {
         if let Some(change) = self.changes.iter_mut().find(|c| c.at == at) {
             change.glide = glide;
+        }
+    }
+
+    /// Bends the glide that starts at `at` (decision 0026; −1 to 1, 0 is
+    /// straight).
+    pub fn set_curve(&mut self, at: Ticks, curve: f64) {
+        if let Some(change) = self.changes.iter_mut().find(|c| c.at == at) {
+            change.curve = clamp_curve(curve);
         }
     }
 
@@ -445,12 +643,16 @@ impl TempoMap {
     pub fn seconds_at(&self, at: Ticks) -> f64 {
         let at = at.0 as f64;
         let mut seconds = 0.0;
-        for index in 0..self.changes.len() {
-            let (start, bpm, end, next_bpm) = self.piece(index);
-            if start >= at {
+        for piece in self.pieces() {
+            if piece.start >= at {
                 break;
             }
-            seconds += piece_seconds(start, bpm, end, next_bpm, start, end.min(at));
+            if piece.end < at {
+                seconds += piece.seconds();
+            } else {
+                seconds += piece.seconds_to(at);
+                break;
+            }
         }
         seconds
     }
@@ -458,17 +660,12 @@ impl TempoMap {
     /// The position reached after `seconds`, as fractional ticks.
     pub fn ticks_at(&self, seconds: f64) -> f64 {
         let mut elapsed = 0.0;
-        for index in 0..self.changes.len() {
-            let (start, bpm, end, next_bpm) = self.piece(index);
-            if end.is_finite() {
-                let span = piece_seconds(start, bpm, end, next_bpm, start, end);
-                if elapsed + span > seconds {
-                    return piece_ticks(start, bpm, end, next_bpm, seconds - elapsed);
-                }
-                elapsed += span;
-            } else {
-                return piece_ticks(start, bpm, end, next_bpm, seconds - elapsed);
+        for piece in self.pieces() {
+            let span = piece.seconds();
+            if elapsed + span > seconds {
+                return piece.tick_after(seconds - elapsed);
             }
+            elapsed += span;
         }
         0.0
     }
@@ -865,6 +1062,170 @@ mod tests {
         flat.set(Ticks::quarters(4), 100.000_001);
         flat.set_glide(Ticks::ZERO, true);
         assert!((flat.seconds_at(Ticks::quarters(4)) - 2.4).abs() < 1e-6);
+    }
+
+    /// A glide of `quarters` quarter notes from `bpm` to `next_bpm`.
+    fn glide(bpm: f64, next_bpm: f64, quarters: f64, curve: f64) -> TempoPiece {
+        TempoPiece {
+            start: 1000.0,
+            end: 1000.0 + quarters * quarter(),
+            bpm,
+            next_bpm,
+            curve,
+        }
+    }
+
+    /// How fast the seconds of a piece grow at `tick`, by a central
+    /// difference of its closed form: it must match 60 / (tempo × ticks per
+    /// quarter), the time one tick takes at the tempo there.
+    fn seconds_rate(piece: &TempoPiece, tick: f64) -> f64 {
+        let h = 1e-6 * (piece.end - piece.start);
+        (piece.seconds_to(tick + h) - piece.seconds_to(tick - h)) / (2.0 * h)
+    }
+
+    #[test]
+    fn shaped_glides_are_exact_both_ways() {
+        // Bends where the exponent crosses 0 (±0.125) and 1 (0) included.
+        let curves = [-1.0, -0.5, -0.125, -0.05, 0.0, 0.05, 0.125, 0.3, 0.5, 1.0];
+        let tempos = [
+            (100.0, 60.0),
+            (60.0, 100.0),
+            (20.0, 999.0),
+            (999.0, 20.0),
+            (120.0, 120.000_000_1),
+        ];
+        for curve in curves {
+            for (bpm, next_bpm) in tempos {
+                let piece = glide(bpm, next_bpm, 7.0, curve);
+                let what = format!("{bpm} to {next_bpm}, bend {curve}");
+                assert_eq!(piece.seconds_to(piece.start), 0.0, "{what}: starts at 0 s");
+                for fraction in [0.0, 0.1, 0.37, 0.5, 0.9, 1.0] {
+                    let tick = piece.start + fraction * (piece.end - piece.start);
+                    let seconds = piece.seconds_to(tick);
+                    let back = piece.tick_after(seconds);
+                    assert!(
+                        (back - tick).abs() < 1e-4,
+                        "{what}: {fraction} comes back ({back} for {tick})"
+                    );
+                    if fraction > 0.0 && fraction < 1.0 {
+                        // The closed form is the integral of the tempo's
+                        // time per tick: its slope is that time.
+                        let expected = 60.0 / (piece.bpm_at(tick) * quarter());
+                        let rate = seconds_rate(&piece, tick);
+                        assert!(
+                            (rate - expected).abs() < 1e-5 * expected,
+                            "{what}: at {fraction}, {rate} s per tick, not {expected}"
+                        );
+                    }
+                }
+                // The tempo moves one way only, from one tempo to the other.
+                let (low, high) = (bpm.min(next_bpm), bpm.max(next_bpm));
+                let mut last = piece.bpm_at(piece.start);
+                assert!(
+                    (last - bpm).abs() < 1e-9 * bpm,
+                    "{what}: starts at its tempo"
+                );
+                for i in 1..=50 {
+                    let tick = piece.start + f64::from(i) / 50.0 * (piece.end - piece.start);
+                    let now = piece.bpm_at(tick);
+                    assert!(now >= low && now <= high, "{what}: in range");
+                    assert!(
+                        (now - last) * (next_bpm - bpm).signum() >= -1e-9 * high,
+                        "{what}: never turns back"
+                    );
+                    last = now;
+                }
+                assert!((last - next_bpm).abs() < 1e-6 * next_bpm, "{what}: arrives");
+            }
+        }
+    }
+
+    #[test]
+    fn half_way_a_glide_is_at_the_power_mean_of_its_tempos() {
+        let middle = |piece: &TempoPiece| piece.bpm_at(f64::midpoint(piece.start, piece.end));
+        // Straight: the arithmetic mean, as before (decision 0018).
+        assert!((middle(&glide(100.0, 60.0, 4.0, 0.0)) - 80.0).abs() < 1e-9);
+        // A slowing exponent of 0 (bend −0.125): the geometric mean.
+        let geometric = (100.0_f64 * 60.0).sqrt();
+        assert!((middle(&glide(100.0, 60.0, 4.0, -0.125)) - geometric).abs() < 1e-9);
+        // Exponent −1 (bend −0.25 when slowing): the harmonic mean.
+        let harmonic = 2.0 * 100.0 * 60.0 / 160.0;
+        assert!((middle(&glide(100.0, 60.0, 4.0, -0.25)) - harmonic).abs() < 1e-9);
+        // Late and Early on a ritardando from 100 to 60 (decision 0026).
+        let late = middle(&glide(100.0, 60.0, 4.0, 0.5));
+        let early = middle(&glide(100.0, 60.0, 4.0, -0.5));
+        assert!((late - 88.37).abs() < 0.01, "late: {late}");
+        assert!((early - 70.82).abs() < 0.01, "early: {early}");
+        // A positive bend comes late whichever way the tempo goes.
+        let late_up = middle(&glide(60.0, 100.0, 4.0, 0.5));
+        let early_up = middle(&glide(60.0, 100.0, 4.0, -0.5));
+        assert!(late_up < 80.0 && early_up > 80.0, "{late_up} {early_up}");
+    }
+
+    #[test]
+    fn the_bend_through_a_middle_tempo_is_found() {
+        for (bpm, next_bpm) in [(100.0, 60.0), (60.0, 100.0), (30.0, 400.0)] {
+            for curve in [-1.0, -0.6, -0.125, 0.0, 0.2, 0.5, 0.97] {
+                let piece = glide(bpm, next_bpm, 4.0, curve);
+                let middle = piece.bpm_at(f64::midpoint(piece.start, piece.end));
+                let found = curve_through(bpm, next_bpm, middle);
+                assert!(
+                    (found - curve).abs() < 1e-6,
+                    "{bpm} {next_bpm} {curve}: {found}"
+                );
+            }
+        }
+        // Beyond the strongest bend, the strongest bend that way.
+        assert!((curve_through(100.0, 60.0, 99.9) - 1.0).abs() < 1e-6);
+        assert!((curve_through(100.0, 60.0, 60.1) + 1.0).abs() < 1e-6);
+        assert!((curve_through(60.0, 100.0, 60.1) - 1.0).abs() < 1e-6);
+        // A glide that does not move has nothing to bend.
+        assert_eq!(curve_through(90.0, 90.0, 120.0), 0.0);
+    }
+
+    #[test]
+    fn a_bent_glide_shapes_the_map_and_survives_repairs() {
+        let mut map = TempoMap::constant(100.0);
+        map.set(Ticks::quarters(8), 60.0);
+        map.set_glide(Ticks::ZERO, true);
+        let straight = map.seconds_at(Ticks::quarters(8));
+        map.set_curve(Ticks::ZERO, 0.5);
+        let late = map.seconds_at(Ticks::quarters(8));
+        // Holding the tempo back for longer makes the ritardando shorter.
+        assert!(late < straight, "{late} < {straight}");
+        assert!(map.bpm_at(Ticks::quarters(4)) > 80.0);
+        for quarters in [0.5, 3.0, 7.9, 8.0, 11.0] {
+            let tick = Ticks::from_quarters_f64(quarters);
+            let back = map.ticks_at(map.seconds_at(tick));
+            assert!((back - tick.0 as f64).abs() < 1e-3, "{quarters} comes back");
+        }
+        // Past the glide the tempo holds at 60: four quarters, four seconds.
+        let after = map.seconds_at(Ticks::quarters(12)) - map.seconds_at(Ticks::quarters(8));
+        assert!((after - 4.0).abs() < 1e-9);
+        // Bends stay in range and travel with their change.
+        map.set_curve(Ticks::ZERO, 7.0);
+        assert_eq!(map.changes()[0].curve, 1.0);
+        map.set(Ticks::quarters(16), 90.0);
+        map.set_glide(Ticks::quarters(8), true);
+        map.set_curve(Ticks::quarters(8), -0.4);
+        map.move_change(Ticks::quarters(8), Ticks::quarters(10));
+        assert_eq!(
+            map.changes()[1].curve,
+            -0.4,
+            "a moved change keeps its bend"
+        );
+        let repaired = TempoMap::from_changes([TempoChange {
+            curve: f64::NAN,
+            glide: true,
+            ..TempoChange::new(Ticks::ZERO, 100.0)
+        }]);
+        assert_eq!(repaired.changes()[0].curve, 0.0);
+        // A straight change writes no bend; a bent one does.
+        let plain = serde_json::to_string(&TempoChange::new(Ticks::ZERO, 100.0)).unwrap();
+        assert!(!plain.contains("curve"), "{plain}");
+        let bent: TempoChange =
+            serde_json::from_str(&serde_json::to_string(&map.changes()[1]).unwrap()).unwrap();
+        assert_eq!(bent, map.changes()[1]);
     }
 
     #[test]

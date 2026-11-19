@@ -32,6 +32,7 @@ considered instead.
 | [0023](0023-plugin-manager-and-libraries.md) | Plugins and sound libraries: a Plugins window, plugins added from anywhere, Windows plugins on Linux, a sound library, SoundFonts | Accepted |
 | [0024](0024-sfz-instruments.md) | SFZ instruments: our own reader, a sampler, sounds loaded in the background | Accepted |
 | [0025](0025-custom-kits.md) | Custom kits: a drum kit of your own sounds, played from the step grid | Accepted |
+| [0026](0026-expressive-tempo.md) | Expressive tempo: shaped glides, and the tempo under the piano roll | Accepted |
 
 ## Writing a new record
 

@@ -674,6 +674,38 @@ fn another_programs_project_is_read_with_what_was_left_out() {
 }
 
 #[test]
+fn a_bent_glide_goes_out_as_straight_pieces_close_to_it() {
+    // A ritardando from 100 to 60 over two bars, bent late (decision 0026):
+    // DAWproject has straight tempo points only, so it goes out as pieces a
+    // sixteenth long, and comes back sounding the same to the millisecond.
+    let folder = scratch("bent-glide");
+    let sounds = folder.join("sounds");
+    std::fs::create_dir_all(&sounds).unwrap();
+    let mut original = Project::starter("Melody", "Piano");
+    original.tempo = daw_model::TempoMap::constant(100.0);
+    original.tempo.set(Ticks::WHOLE * 2, 60.0);
+    original.tempo.set_glide(Ticks::ZERO, true);
+    original.tempo.set_curve(Ticks::ZERO, 0.5);
+    let file = folder.join("song.dawproject");
+    dawproject::export(&original, &sounds, &file).unwrap();
+    let opened = folder.join("opened");
+    let back = dawproject::import(&file, &opened, &names())
+        .unwrap()
+        .project;
+    let changes = back.tempo.changes();
+    assert_eq!(changes.len(), 33, "32 sixteenths, then the slower tempo");
+    assert!(changes[..32].iter().all(|c| c.glide && c.curve == 0.0));
+    for quarters in [1.0, 3.5, 6.0, 7.75, 8.0, 10.0] {
+        let at = Ticks::from_quarters_f64(quarters);
+        let drift = back.tempo.seconds_at(at) - original.tempo.seconds_at(at);
+        assert!(drift.abs() < 0.001, "{quarters} quarters: {drift} s apart");
+        let bpm = back.tempo.bpm_at(at) - original.tempo.bpm_at(at);
+        assert!(bpm.abs() < 0.3, "{quarters} quarters: {bpm} BPM apart");
+    }
+    std::fs::remove_dir_all(folder).ok();
+}
+
+#[test]
 fn damaged_projects_are_refused() {
     let folder = scratch("damaged");
     let opened = folder.join("opened");

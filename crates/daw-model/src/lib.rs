@@ -39,5 +39,5 @@ pub use theory::{
 };
 pub use time::{
     BarPosition, MeterChange, MeterMap, Region, TEMPO_RANGE, TICKS_PER_QUARTER, TICKS_PER_WHOLE,
-    TempoChange, TempoMap, Ticks, TimeSignature, piece_seconds, piece_ticks, seconds_per_tick,
+    TempoChange, TempoMap, TempoPiece, Ticks, TimeSignature, curve_through, seconds_per_tick,
 };

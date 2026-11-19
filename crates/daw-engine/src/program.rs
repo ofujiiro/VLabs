@@ -9,8 +9,7 @@ use daw_dsp::effects::{
 };
 use daw_model::{
     AutomationTarget, Clip, ClipContent, ClipId, DelayTime, Effect, EffectId, EffectKind, MeterMap,
-    PatternId, Project, Region, TempoMap, Ticks, TrackId, piece_seconds, piece_ticks,
-    seconds_per_tick,
+    PatternId, Project, Region, TempoMap, TempoPiece, Ticks, TrackId, seconds_per_tick,
 };
 use std::sync::Arc;
 
@@ -260,46 +259,29 @@ pub(crate) fn pan_gains(gain: f32, pan: f32) -> (f32, f32) {
 }
 
 /// Converts between ticks and seconds quickly, for a tempo map with changes
-/// and glides (decision 0018): the same formulas as the model's tempo map,
-/// with the seconds at the start of each piece worked out in advance.
+/// and shaped glides (decisions 0018 and 0026): the model's own arithmetic
+/// (`TempoPiece`), with the seconds at the start of each piece worked out in
+/// advance.
 #[derive(Clone, Debug)]
 pub(crate) struct TempoTable {
     segments: Vec<TempoSegment>,
 }
 
-/// One piece of the tempo map: from `start` (at `seconds`) at `bpm`, to
-/// `end` at `next_bpm` (the same tempo unless it glides).
+/// One piece of the tempo map, and the seconds at its start.
 #[derive(Clone, Copy, Debug)]
 struct TempoSegment {
-    start: f64,
+    piece: TempoPiece,
     seconds: f64,
-    bpm: f64,
-    end: f64,
-    next_bpm: f64,
 }
 
 impl TempoTable {
-    #[allow(clippy::cast_precision_loss, reason = "tick counts are far below 2^52")]
     pub fn new(map: &TempoMap) -> Self {
-        let changes = map.changes();
-        let mut segments = Vec::with_capacity(changes.len());
+        let mut segments = Vec::with_capacity(map.changes().len());
         let mut seconds = 0.0;
-        for (index, change) in changes.iter().enumerate() {
-            let start = change.at.0 as f64;
-            let (end, next_bpm) = match changes.get(index + 1) {
-                Some(next) if change.glide => (next.at.0 as f64, next.bpm),
-                Some(next) => (next.at.0 as f64, change.bpm),
-                None => (f64::INFINITY, change.bpm),
-            };
-            segments.push(TempoSegment {
-                start,
-                seconds,
-                bpm: change.bpm,
-                end,
-                next_bpm,
-            });
-            if end.is_finite() {
-                seconds += piece_seconds(start, change.bpm, end, next_bpm, start, end);
+        for piece in map.pieces() {
+            segments.push(TempoSegment { piece, seconds });
+            if piece.end.is_finite() {
+                seconds += piece.seconds();
             }
         }
         Self { segments }
@@ -308,18 +290,18 @@ impl TempoTable {
     fn segment_for_tick(&self, tick: f64) -> TempoSegment {
         let index = self
             .segments
-            .partition_point(|s| s.start <= tick)
+            .partition_point(|s| s.piece.start <= tick)
             .saturating_sub(1);
         self.segments[index]
     }
 
     pub fn seconds_at(&self, tick: f64) -> f64 {
         let s = self.segment_for_tick(tick);
-        if tick < s.start {
+        if tick < s.piece.start {
             // Before the song (a count-in): the first tempo carries on.
-            return s.seconds + (tick - s.start) * 60.0 / (s.bpm * quarter());
+            return s.seconds + (tick - s.piece.start) * 60.0 / (s.piece.bpm * quarter());
         }
-        s.seconds + piece_seconds(s.start, s.bpm, s.end, s.next_bpm, s.start, tick)
+        s.seconds + s.piece.seconds_to(tick)
     }
 
     pub fn ticks_at(&self, seconds: f64) -> f64 {
@@ -329,9 +311,9 @@ impl TempoTable {
             .saturating_sub(1);
         let s = self.segments[index];
         if seconds < s.seconds {
-            return s.start + (seconds - s.seconds) * s.bpm * quarter() / 60.0;
+            return s.piece.start + (seconds - s.seconds) * s.piece.bpm * quarter() / 60.0;
         }
-        piece_ticks(s.start, s.bpm, s.end, s.next_bpm, seconds - s.seconds)
+        s.piece.tick_after(seconds - s.seconds)
     }
 }
 
@@ -840,6 +822,9 @@ mod tests {
         map.set(Ticks::quarters(10), 150.0);
         map.set(Ticks::quarters(16), 60.0);
         map.set_glide(Ticks::quarters(10), true);
+        map.set_curve(Ticks::quarters(10), 0.6);
+        map.set_glide(Ticks::quarters(4), true);
+        map.set_curve(Ticks::quarters(4), -0.7);
         let table = TempoTable::new(&map);
         for quarters in [0, 1, 4, 7, 10, 12, 13, 15, 16, 20] {
             let tick = Ticks::quarters(quarters);

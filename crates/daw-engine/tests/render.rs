@@ -200,6 +200,29 @@ fn a_tempo_glide_speeds_up_smoothly() {
 }
 
 #[test]
+fn a_bent_ritardando_holds_back_then_slows() {
+    // From 120 BPM to 60 over four beats, bent late (decision 0026): the
+    // note on beat 2 comes sooner than on a straight glide, because the
+    // tempo stays near 120 for longer, and it sounds exactly when the tempo
+    // map says.
+    let mut project = project_with(&[note(Ticks::QUARTER * 2, Ticks::QUARTER, 69)]);
+    project.tempo = daw_model::TempoMap::constant(120.0);
+    project.tempo.set(Ticks::QUARTER * 4, 60.0);
+    project.tempo.set_glide(Ticks::ZERO, true);
+    let straight = project.tempo.seconds_at(Ticks::QUARTER * 2);
+    project.tempo.set_curve(Ticks::ZERO, 0.5);
+    let bent = project.tempo.seconds_at(Ticks::QUARTER * 2);
+    assert!(bent < straight - 0.03, "{bent} s against {straight} s");
+    let (left, _) = render_offline(&project, library(), config(), 2.0);
+    let start = onset(&left, 0, 0.01).expect("the note never starts");
+    let expected = seconds(bent);
+    assert!(
+        start >= expected.saturating_sub(1) && start < expected + 16 + 64,
+        "starts at {start}, expected {expected}"
+    );
+}
+
+#[test]
 fn swing_delays_the_off_beats_by_the_amount_chosen() {
     // Straight eighths at 120 BPM fall every 0.25 s; with 100 % swing on
     // eighths, the off-beats move to a dotted eighth: 0.375 s after the beat.
