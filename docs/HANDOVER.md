@@ -76,12 +76,36 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   starting value, held steady for 2.5 s then faded in its release; the
   "plays without LFOs" notice for an instrument with a vibrato; and a song
   with SFZ tracks recovered after the program was killed.
+- Custom kits (decision 0025, a beta tester's idea), same branch:
+  `Instrument::Kit { pads }` with `KitPad` (file format 7), the engine's
+  `kit_sampler`, sounds added through the audio import path
+  (`ImportPlace::pad_of`), the step grid built from rows, and in the
+  window: **Custom kit** in **+ Instrument…**, **Add sounds…**, drops and
+  library drags on the grid, **Make a kit of these sounds** on a library
+  folder, **Remove from the kit**. Checked: tests (model, engine renders,
+  DAWproject and file round trips, interface), and the program on the
+  virtual screen: a library folder made a kit of four rows, a beat clicked
+  in, and the recording had its hits every quarter of a second.
+- Plugins the owner tried (MT Power Drum Kit 2, Decent Sampler, DW-303,
+  Sienna Bass), same branch: plugin windows asking to be shown through
+  XEmbed are shown (MT Power Drum Kit 2's was blank); whether a plugin has
+  a window is asked once (the interface asked every frame, and a VST3
+  plugin answers by making a whole window: 0.6 s for MT Power Drum Kit 2,
+  which also undid its START button); VST3 bus layouts set, output silence
+  flags cleared, output parameter and event lists given; a plugin missing a
+  system library says which (`ScanProblem::MissingLibrary`); an opt-in
+  probe test (`VLABS_PROBE_PLUGINS`) plays reported plugins. Checked: MT
+  Power Drum Kit 2 in the program on its first run (language, START, then
+  three hits recorded) and the same in the probe; DW-303 plays once GTK and
+  WebKitGTK are installed. Decent Sampler stays silent until a library is
+  loaded in its window. Sienna Bass is a Windows VST2 plugin, which VLabs
+  does not support.
 
 ## Waiting on the owner
 
-- Open the pull request for `plugins-and-libraries` (SFZ instruments and
-  the earlier doc updates), and its hands-on check (ROADMAP.md, "Things
-  to try", item 8).
+- Open the pull request for `plugins-and-libraries` (SFZ instruments,
+  custom kits, the plugin fixes and the earlier doc updates), and its
+  hands-on check (ROADMAP.md, "Things to try", items 8, 10 and 11).
 - The hands-on checks of phases 3 to 6 and of the plugins round
   (ROADMAP.md, "things to try").
 
@@ -110,6 +134,10 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   and envelopes were measured), very large commercial libraries (the
   largest tried held 415 MB of sound), SFZ on Windows by hand (CI runs
   every test on Windows).
+- Custom kits: the sound chooser's file dialog (the chooser's path is
+  tested), listening (hits and timing were measured).
+- Plugins the owner tried: Decent Sampler playing a library (its window and
+  file chooser work); the plugins on Windows.
 - From earlier phases: recording from a real microphone, the import file
   dialog, dragging files from a real file manager, phase 4 on Windows by
   hand, closing a plugin window with its own close button on a real
@@ -131,6 +159,8 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
 - SFZ: no LFOs, pitch envelopes or effects; controllers fixed at their
   starting values; all sound in memory (8 GB per instrument at most); an
   instrument edited on the disk is read again only after a restart.
+- Custom kits: changing a pad's settings stops the kit's sounding hits; at
+  most 128 sounds; no waveforms.
 - Earlier: automation drawn, not recorded; no master-bus lanes; no instrument swap;
   plugins in-process; plugin latency not compensated.
 - On Windows, VST3 class ids are kept in the order the plugin reports them

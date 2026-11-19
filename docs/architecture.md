@@ -193,7 +193,15 @@ The window is `daw-ui::synth_ui`.
   process behind the same interface, without changing the engine.
 - **Editor windows:** on Linux, plugin editors need X11; VLabs creates their
   windows through X11 directly, which also works under XWayland on Wayland
-  desktops. On Windows, ordinary Win32 windows.
+  desktops. A plugin window that asks to be shown through XEmbed (its
+  `_XEMBED_INFO` says "mapped") is told it is embedded and shown, as the
+  XEmbed protocol has the host do (MT Power Drum Kit 2's window stayed
+  blank before). On Windows, ordinary Win32 windows.
+- **Whether a plugin has an editor** is asked of it once and remembered
+  (`PluginHandle::has_editor`): the interface asks every frame, and a VST3
+  plugin answers by making a whole editor (0.6 s for MT Power Drum Kit 2,
+  and some plugins start over when another editor is made beside the open
+  one).
 - **Two halves** (decision 0015): loading a plugin gives a main-thread half
   (`PluginHandle`: parameters, settings, its window, housekeeping) and an
   audio-thread half (`PluginProcessor`: one call per block with the block's
@@ -293,6 +301,26 @@ The window is `daw-ui::synth_ui`.
   from the instrument chooser; the status line says which instruments are
   being read while it has nothing else to say, and the track's line says
   "reading…" until its instrument is ready.
+
+## Custom kits *(decision 0025)*
+
+- **Model:** `Instrument::Kit { pads }`; each `KitPad` has the drum pads'
+  settings (`PadSetting`, with its key), a name and the song's audio file
+  it plays (`AudioId`). Pads take free keys from C1 (36) up, at most 128;
+  `Project::add_kit_pad` and `remove_kit_pad` (which also takes the pad's
+  notes out of the track's patterns). An audio file stays in the song while
+  a clip or a pad uses it. A custom kit counts as drums (`is_drums`).
+- **Sound:** the engine builds a `daw_dsp::sampler::Sampler` from the pads
+  (`library::kit_sampler`): one one-shot region per pad, its volume, pan
+  and tuning from the pad, a shortened length fading out by its end. A pad
+  whose sound is still being decoded is added when `register_audio` brings
+  it (the kit is built again then).
+- **Adding sounds** goes through the audio import path (`ImportPlace` with
+  `pad_of: Some(track)`): copied and decoded in the background, then made a
+  pad, one undo step each. The step grid works from rows (a key and a name):
+  the bundled kits give their fifteen, a custom kit its pads.
+- **Files:** file format version 7; DAWproject carries the kit as one of
+  the program's own devices with its sounds in the archive.
 
 ## Automation *(phase 3)*
 

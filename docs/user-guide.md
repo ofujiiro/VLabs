@@ -75,6 +75,26 @@ and to change its volume, pan, tuning and length. **Kit** chooses between the
 acoustic and the electronic kit. Drag the small tab at the right end of the
 ruler to make the pattern longer or shorter (any number of steps).
 
+### Custom kits: a drum kit of your own sounds
+
+A custom kit is a drum track whose pads are your own sounds: kicks, claps,
+vocal chops, a door slamming. Each sound gets its own key and its own row in
+the step grid.
+
+- **+ Instrument…**, **Custom kit**: choose sounds (WAV, AIFF, FLAC, MP3 or
+  Ogg; pick many at once). Each becomes a pad named after its file, and the
+  step grid opens with one row per pad.
+- **More sounds:** **Add sounds…** on the line above the grid, drop files on
+  the grid, or drag sounds from the library onto it.
+- **A whole folder at once:** in the library, right-click a folder and
+  choose **Make a kit of these sounds**.
+- Click a pad's name to hear it and change its volume, pan, tuning and
+  length, rename it, or **Remove from the kit**.
+- The computer keyboard plays the pads as it plays a drum kit (Z is the
+  first pad). A kit holds up to 128 sounds.
+- The sounds are copied into the song, so the song opens anywhere with its
+  kit.
+
 ## The piano roll (melodies and chords)
 
 - Click to place a note (you hear it); drag from an empty spot to draw a
@@ -120,6 +140,8 @@ VLabs, then every plugin found on your computer:
 
 - **Piano**: a sampled grand piano.
 - **Drums**: the drum sampler with two kits.
+- **Custom kit**: a drum kit of your own sounds (see
+  [Custom kits](#custom-kits-a-drum-kit-of-your-own-sounds)).
 - **Synth**: VLabs's own synthesizer (below).
 - **SoundFont or SFZ…**: a track playing an instrument file of yours. Many
   free and paid sampled instruments (pianos, drum kits, orchestras) come
@@ -235,6 +257,17 @@ the others.
 when you add one. Most plugins also come as VST3 or CLAP; look for that
 version on the maker's site.
 
+**A plugin that stays silent** often waits for something in its own window:
+open it with the window button on its track.
+
+- **MT Power Drum Kit 2** (free version) mutes itself each time it starts:
+  click **START** at the bottom right of its window, every session.
+- **Decent Sampler** plays nothing until you load a sample library into it
+  (**FILE…**, **Load…**, or **BROWSE** for its store).
+- On Linux, a plugin may need system libraries of its own. VLabs names the
+  missing one in the Plugins window: install that package, then click
+  **Look again**.
+
 ## The sound library
 
 The folder button at the top right (or <kbd>F6</kbd>) shows the library in
@@ -252,6 +285,8 @@ or moved.
   you type ("kick hard").
 - Right-click a folder on the left to look through it again (after adding
   files) or to remove it from the library (the files stay on your disk).
+- Right-click a folder, **Make a kit of these sounds**: a custom kit of
+  every sound in it (see [Custom kits](#custom-kits-a-drum-kit-of-your-own-sounds)).
 
 ![The sound library](guide-images/library.png)
 
