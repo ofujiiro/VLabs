@@ -145,6 +145,7 @@ pub fn command_name(command: crate::keys::Command) -> &'static str {
         C::Split => "Split the clip at the play position",
         C::ImportAudio => "Import",
         C::UserGuide => "User guide",
+        C::PitchMode => "Edit the notes or the sung pitch (voice tracks)",
     }
 }
 pub const ABOUT: &str = "About";
@@ -2156,4 +2157,109 @@ pub fn glide_tempos(bpm: f64, next_bpm: f64) -> String {
 /// The label of a tempo point, for screen readers: "Tempo 96 at bar 5".
 pub fn tempo_point(bpm: f64, bar: u32) -> String {
     format!("Tempo {} at bar {}", self::bpm(bpm), bar + 1)
+}
+
+// ----- Singing expression (decision 0028)
+
+/// The switch on a voice track's location line: what the piano roll edits.
+pub const NOTES_MODE: &str = "Notes";
+pub const PITCH_MODE: &str = "Pitch";
+/// Their labels for screen readers.
+pub const EDIT_THE_NOTES: &str = "Edit the notes";
+pub const EDIT_THE_PITCH: &str = "Edit the sung pitch";
+pub const NOTES_MODE_HINT: &str = "Place, move and stretch notes";
+pub const PITCH_MODE_HINT: &str = "Shape the sung pitch: click over a note to bend it there, drag \
+    a point, click a point for its details, right-click to remove it; drag a vibrato's handle. \
+    The notes stay where they are.";
+pub const PITCH_LINE_HINT: &str =
+    "Click over a note to bend its pitch there · drag a point · right-click to remove";
+
+/// The lane under a voice track's notes.
+pub const COLOUR: &str = "Colour";
+pub const BREATH: &str = "Breath";
+pub const LANE_COLOUR: &str = "Colour lane";
+pub const LANE_BREATH: &str = "Breath lane";
+pub const SHOW_COLOUR: &str = "Show how light or deep each note is sung, without changing its \
+    pitch: up is lighter and brighter, down darker and deeper";
+pub const SHOW_BREATH: &str = "Show how breathy each note is sung";
+pub const SHOW_VELOCITY_SUNG: &str = "Show how loud each note is sung";
+
+/// The singing commands of the notes menu.
+pub const SINGING: &str = "Singing";
+pub const ADD_VIBRATO: &str = "Add vibrato";
+pub const ADD_VIBRATO_HINT: &str =
+    "Long notes swing a little once they are established; short notes stay plain";
+pub const REMOVE_VIBRATO: &str = "Remove vibrato";
+pub const PLAIN_PITCH: &str = "Plain pitch";
+pub const PLAIN_PITCH_HINT: &str = "Back to a plain glide into each note: the points go";
+
+/// The panel of a pitch point.
+pub const PITCH_POINT: &str = "Pitch point";
+pub const POINT_TIME: &str = "Time";
+pub const POINT_TIME_HINT: &str = "From the note's start (negative: before it)";
+pub const MS: &str = "ms";
+pub const POINT_PITCH: &str = "Pitch";
+pub const POINT_PITCH_HINT: &str = "From the note's own pitch (100 cents to a semitone)";
+pub const CENTS: &str = "cents";
+pub const POINT_LEAVES: &str = "The voice leaves from wherever it is: move this point in time only";
+pub const CURVE_AFTER: &str = "Curve after it";
+pub const SHAPE_SMOOTH: &str = "Smooth";
+pub const SHAPE_STRAIGHT: &str = "Straight";
+pub const SHAPE_SLOW_START: &str = "Slow start";
+pub const SHAPE_SLOW_END: &str = "Slow end";
+pub const SHAPE_SMOOTH_HINT: &str = "Leaves gently and arrives gently";
+pub const SHAPE_STRAIGHT_HINT: &str = "Changes evenly";
+pub const SHAPE_SLOW_START_HINT: &str = "Leaves gently, then arrives quickly";
+pub const SHAPE_SLOW_END_HINT: &str = "Leaves quickly, then arrives gently";
+pub const REMOVE_POINT: &str = "Remove the point";
+
+/// The panel of a note's vibrato (its title is the synth's `VIBRATO`).
+pub const VIBRATO_DEPTH: &str = "Depth";
+pub const VIBRATO_DEPTH_HINT: &str = "How far the pitch swings either side";
+pub const VIBRATO_RATE: &str = "Rate";
+pub const VIBRATO_RATE_HINT: &str = "How many swings a second";
+pub const HZ: &str = "Hz";
+pub const VIBRATO_START: &str = "Starts after";
+pub const VIBRATO_START_HINT: &str = "How long into the note the vibrato starts";
+pub const VIBRATO_GROWS: &str = "Grows over";
+pub const VIBRATO_GROWS_HINT: &str = "How long it takes to reach its full depth";
+pub const REMOVE_THE_VIBRATO: &str = "Remove the vibrato";
+
+// Undo-step names.
+pub const EDIT_ADD_PITCH_POINT: &str = "add pitch point";
+pub const EDIT_MOVE_PITCH_POINT: &str = "move pitch point";
+pub const EDIT_REMOVE_PITCH_POINT: &str = "remove pitch point";
+pub const EDIT_PITCH_SHAPE: &str = "change pitch curve";
+pub const EDIT_PLAIN_PITCH: &str = "plain pitch";
+pub const EDIT_ADD_VIBRATO: &str = "add vibrato";
+pub const EDIT_REMOVE_VIBRATO: &str = "remove vibrato";
+pub const EDIT_VIBRATO: &str = "change vibrato";
+pub const EDIT_COLOUR: &str = "change colour";
+pub const EDIT_BREATH: &str = "change breath";
+
+/// A pitch point, for screen readers: "Pitch point 2 of E4".
+pub fn pitch_point(key: u8, index: usize) -> String {
+    format!("Pitch point {} of {}", index + 1, note_name(key))
+}
+
+/// A shape in a pitch point's panel, for screen readers: "Curve after it:
+/// Straight" (the swing button can say "Straight" at the same time).
+pub fn curve_shape(name: &str) -> String {
+    format!("{CURVE_AFTER}: {name}")
+}
+
+/// A vibrato's handle, for screen readers: "Vibrato of E4".
+pub fn vibrato_handle(key: u8) -> String {
+    format!("Vibrato of {}", note_name(key))
+}
+
+/// A number with its unit, as the panels show it: "−40 ms", "+25 cents".
+pub fn with_sign(value: f64, unit: &str) -> String {
+    if value.abs() < 0.5 {
+        format!("0 {unit}")
+    } else if value > 0.0 {
+        format!("+{value:.0} {unit}")
+    } else {
+        format!("−{:.0} {unit}", -value)
+    }
 }

@@ -3049,3 +3049,176 @@ fn the_voicebanks_window_adds_one_shows_its_terms_and_removes_it() {
     assert!(f.harness.query_by_label(text::VOICEBANKS_TITLE).is_none());
     std::fs::remove_dir_all(folder).ok();
 }
+
+// ----- Singing expression (decision 0028)
+
+/// A new song with a voice track open on its pattern, singing C4 then E4,
+/// a half note each (a second each at 120 BPM), in the Pitch mode.
+fn singing() -> (Fixture, PathBuf, [daw_model::NoteId; 2]) {
+    let folder = fresh_folder("singing");
+    let root = folder.join("voicebanks");
+    test_voicebank(&root.join("Test Voice"));
+    let mut f = new_song();
+    f.workspace_mut().set_voicebanks_folder(Some(root));
+    let track = f
+        .workspace_mut()
+        .session_mut()
+        .add_voice_track("Test Voice", "Test Voice");
+    f.workspace_mut().session_mut().open_track(track);
+    f.workspace_mut().session_mut().note_length = Ticks::QUARTER * 2;
+    let ids = [(Ticks::ZERO, 60), (Ticks::QUARTER * 2, 64)].map(|(at, key)| {
+        f.workspace_mut()
+            .session_mut()
+            .add_note(at, key, 0.8)
+            .unwrap()
+    });
+    f.harness.run_steps(3);
+    // The location line offers the switch where Draw is on other tracks.
+    assert!(f.harness.query_by_label(text::DRAW).is_none());
+    f.harness.get_by_label(text::EDIT_THE_PITCH).click();
+    f.harness.run_steps(3);
+    assert!(f.session().pitch_mode());
+    (f, folder, ids)
+}
+
+impl Fixture {
+    /// The middle of a handle on the sung pitch, found by its label.
+    fn handle(&self, label: &str) -> Pos2 {
+        self.harness.get_by_label(label).rect().center()
+    }
+
+    fn expression(&self, note: daw_model::NoteId) -> daw_model::expression::NoteExpression {
+        self.session().note_expression(note)
+    }
+}
+
+#[test]
+fn the_pitch_mode_bends_the_sung_pitch_where_it_is_clicked() {
+    let (mut f, folder, [c4, e4]) = singing();
+    let notes = f.notes();
+    // Each note shows its plain glide's two points.
+    let leaves = f.handle(&text::pitch_point(64, 0));
+    let arrives = f.handle(&text::pitch_point(64, 1));
+    assert!(leaves.x < arrives.x);
+    assert!(
+        leaves.y > arrives.y,
+        "E4's glide leaves from C4, lower on screen"
+    );
+    // A click over E4, two rows above it, bends the voice up there.
+    let spot = arrives + vec2(60.0, -32.0);
+    f.click(spot, Modifiers::NONE);
+    let points = f.expression(e4).pitch;
+    assert_eq!(points.len(), 3, "{points:?}");
+    assert!((points[2].cents - 200.0).abs() < 20.0, "{points:?}");
+    assert!(points[2].ms > 100.0, "{points:?}");
+    assert_eq!(f.notes(), notes, "the notes stay where they are");
+    assert!(f.session().is_selected(e4));
+    // One undo step takes it away.
+    f.workspace_mut().session_mut().undo();
+    assert!(f.expression(e4).pitch.is_empty());
+    f.click(spot, Modifiers::NONE);
+    // A point is dragged in time and pitch: the arriving one, a row up.
+    let arrives = f.handle(&text::pitch_point(64, 1));
+    f.drag(arrives, arrives + vec2(0.0, -16.0), Modifiers::NONE);
+    let points = f.expression(e4).pitch;
+    assert!((points[1].cents - 100.0).abs() < 15.0, "{points:?}");
+    // The point leaving from C4 moves in time only.
+    let leaves = f.handle(&text::pitch_point(64, 0));
+    f.drag(leaves, leaves + vec2(-10.0, -40.0), Modifiers::NONE);
+    let points = f.expression(e4).pitch;
+    assert!(points[0].ms < -50.0, "earlier: {points:?}");
+    assert!(points[0].cents.abs() < 1e-3, "{points:?}");
+    // A right-click removes a point.
+    let third = f.handle(&text::pitch_point(64, 2));
+    f.right_click(third);
+    assert_eq!(f.expression(e4).pitch.len(), 2);
+    // Clicking a point opens its panel: the shape of the curve after it,
+    // and Remove. The glide's shape is its leaving point's.
+    let leaves = f.handle(&text::pitch_point(64, 0));
+    f.click(leaves, Modifiers::NONE);
+    f.harness.run_steps(8);
+    f.harness.get_by_label(text::POINT_LEAVES);
+    // (Clicked slowly, as a person does: the panel stays open for it.)
+    let straight = f.handle(&text::curve_shape(text::SHAPE_STRAIGHT));
+    f.click(straight, Modifiers::NONE);
+    assert_eq!(
+        f.expression(e4).pitch[0].shape,
+        daw_model::expression::PitchShape::Straight
+    );
+    f.harness.get_by_label(text::REMOVE_POINT).click();
+    f.harness.run_steps(3);
+    assert!(
+        f.expression(e4).pitch.is_empty(),
+        "with one point left, E4 glides the plain way"
+    );
+    assert!(f.expression(c4).is_plain());
+    // Ctrl+P goes back to the notes.
+    f.key(Key::P, Key::P, true, Modifiers::CTRL);
+    f.key(Key::P, Key::P, false, Modifiers::CTRL);
+    assert!(!f.session().pitch_mode());
+    assert!(
+        f.harness
+            .query_by_label(&text::pitch_point(64, 0))
+            .is_none()
+    );
+    std::fs::remove_dir_all(folder).ok();
+}
+
+#[test]
+fn vibrato_colour_and_breath_shape_the_selected_notes() {
+    let (mut f, folder, [c4, e4]) = singing();
+    // The notes menu gives every selected note a vibrato.
+    f.workspace_mut().session_mut().select_all();
+    f.harness.get_by_label_contains(text::NOTES_MENU).click();
+    f.harness.run_steps(3);
+    f.harness.get_by_label(text::ADD_VIBRATO).click();
+    f.harness.run_steps(3);
+    for note in [c4, e4] {
+        assert_eq!(
+            f.expression(note).vibrato,
+            Some(daw_model::expression::Vibrato::default())
+        );
+    }
+    // Its handle sits above the note by its depth: dragged up a row, it
+    // swings a semitone more.
+    let handle = f.handle(&text::vibrato_handle(60));
+    f.drag(handle, handle + vec2(0.0, -16.0), Modifiers::NONE);
+    let depth = f.expression(c4).vibrato.unwrap().depth;
+    assert!((depth - 135.0).abs() < 15.0, "{depth}");
+    // Clicked, it opens its panel; Remove takes it away.
+    let handle = f.handle(&text::vibrato_handle(60));
+    f.click(handle, Modifiers::NONE);
+    f.harness.run_steps(8);
+    f.harness.get_by_label(text::VIBRATO_RATE);
+    let remove = f.handle(text::REMOVE_THE_VIBRATO);
+    f.click(remove, Modifiers::NONE);
+    assert_eq!(f.expression(c4).vibrato, None);
+    assert!(f.expression(e4).vibrato.is_some(), "E4 keeps its own");
+    // The lane under a voice's notes shows each note's colour and breath.
+    f.harness.get_by_label(text::LANE_COLOUR).click();
+    f.harness.run_steps(2);
+    let lane_bottom = f.roll().bottom() - 4.0;
+    let usable = 104.0 - 10.0;
+    // C4's bar stands at its start: half-way between its glide's points.
+    let start_x = f32::midpoint(
+        f.handle(&text::pitch_point(60, 0)).x,
+        f.handle(&text::pitch_point(60, 1)).x,
+    );
+    let middle = Pos2::new(start_x + 1.0, lane_bottom - usable * 0.5);
+    f.workspace_mut().session_mut().select_only([c4]);
+    f.drag(middle, middle - vec2(0.0, usable * 0.3), Modifiers::NONE);
+    let colour = f.expression(c4).colour;
+    assert!((colour - 0.6).abs() < 0.1, "lighter: {colour}");
+    assert_eq!(f.expression(e4).colour, 0.0, "only the selected note");
+    f.harness.get_by_label(text::LANE_BREATH).click();
+    f.harness.run_steps(2);
+    let bottom = Pos2::new(start_x + 1.0, lane_bottom - 1.0);
+    f.drag(bottom, bottom - vec2(0.0, usable * 0.5), Modifiers::NONE);
+    let breath = f.expression(c4).breath;
+    assert!((breath - 0.5).abs() < 0.1, "breathier: {breath}");
+    // Each drag was one step.
+    f.workspace_mut().session_mut().undo();
+    assert_eq!(f.expression(c4).breath, 0.0);
+    assert!((f.expression(c4).colour - colour).abs() < 1e-6);
+    std::fs::remove_dir_all(folder).ok();
+}

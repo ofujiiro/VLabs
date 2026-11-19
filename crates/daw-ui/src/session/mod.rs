@@ -27,6 +27,7 @@ pub use files::SongFile;
 pub use mixing::MAX_GAIN;
 pub use plugins::{LaneChoice, PluginSearch};
 pub use theory::Draw;
+pub use voice::{LineNote, LinePhrase, SungLine, point_from};
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -224,6 +225,9 @@ pub struct Session {
     pub draw: Draw,
     /// The inversion chord stamps place (0 is root position).
     pub chord_inversion: usize,
+    /// Whether the piano roll of a voice track edits the sung pitch rather
+    /// than the notes (decision 0028).
+    pitch_mode: bool,
     /// The notes of a chord just placed, sounding while the mouse holds it.
     chord_held: Vec<u8>,
     /// The length of new notes.
@@ -324,6 +328,7 @@ impl Session {
             keep_in_key: false,
             draw: Draw::Note,
             chord_inversion: 0,
+            pitch_mode: false,
             chord_held: Vec::new(),
             note_length: Ticks::QUARTER,
             clipboard: Vec::new(),

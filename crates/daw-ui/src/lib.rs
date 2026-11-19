@@ -10,6 +10,7 @@ pub mod keys;
 pub mod library_panel;
 pub mod mixer;
 pub mod piano_roll;
+pub mod pitch_line;
 pub mod plugin_manager;
 pub mod session;
 pub mod settings;

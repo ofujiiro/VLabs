@@ -496,6 +496,7 @@ pub fn key_choices(
 pub fn location_bar(
     ui: &mut Ui,
     session: &mut Session,
+    keymap: &Keymap,
     bottom: (bool, bool, bool),
     actions: &mut Vec<Command>,
     intents: &mut Vec<Intent>,
@@ -587,14 +588,16 @@ pub fn location_bar(
                 return;
             }
             ui.add_space(12.0);
-            pattern_tools(ui, session, intents);
+            pattern_tools(ui, session, keymap, intents);
         });
     });
 }
 
 /// The settings of the open pattern, laid out from the right (decision
-/// 0018 adds swing, chord stamps and the notes menu).
-fn pattern_tools(ui: &mut Ui, session: &mut Session, intents: &mut Vec<Intent>) {
+/// 0018 adds swing, chord stamps and the notes menu; decision 0028 the
+/// switch between the notes and the sung pitch on voice tracks, in the
+/// place of chord stamps, which one voice cannot sing).
+fn pattern_tools(ui: &mut Ui, session: &mut Session, keymap: &Keymap, intents: &mut Vec<Intent>) {
     // Laid out from the right.
     if session.is_drum_track() {
         pattern_length(ui, session);
@@ -629,9 +632,13 @@ fn pattern_tools(ui: &mut Ui, session: &mut Session, intents: &mut Vec<Intent>) 
         ui.label(RichText::new(text::SNAP).weak())
             .on_hover_text(text::SNAP_HINT);
         ui.add_space(12.0);
-        draw_menu(ui, session);
-        ui.label(RichText::new(text::DRAW).weak())
-            .on_hover_text(text::DRAW_HINT);
+        if session.is_voice_track() {
+            pitch_switch(ui, session, keymap);
+        } else {
+            draw_menu(ui, session);
+            ui.label(RichText::new(text::DRAW).weak())
+                .on_hover_text(text::DRAW_HINT);
+        }
         ui.add_space(12.0);
         swing_menu(ui, session);
         ui.add_space(12.0);
@@ -897,6 +904,36 @@ fn grid_menu(ui: &mut Ui, session: &mut Session) {
         });
 }
 
+/// What the piano roll of a voice track edits: the notes, or the pitch the
+/// voice sings (decision 0028). Laid out from the right.
+fn pitch_switch(ui: &mut Ui, session: &mut Session, keymap: &Keymap) {
+    let shortcut = keymap.text(Command::PitchMode);
+    let pitch = session.pitch_mode();
+    for (on, name, label, hint) in [
+        (
+            true,
+            text::PITCH_MODE,
+            text::EDIT_THE_PITCH,
+            text::PITCH_MODE_HINT,
+        ),
+        (
+            false,
+            text::NOTES_MODE,
+            text::EDIT_THE_NOTES,
+            text::NOTES_MODE_HINT,
+        ),
+    ] {
+        let chosen = pitch == on;
+        let button = ui
+            .add(Button::selectable(chosen, name).min_size(vec2(52.0, 28.0)))
+            .on_hover_text(with_hint(hint, &shortcut));
+        button.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, chosen, label));
+        if button.clicked() {
+            session.set_pitch_mode(on);
+        }
+    }
+}
+
 /// What a click places: a note or a chord (decision 0018).
 fn draw_menu(ui: &mut Ui, session: &mut Session) {
     let response = ui
@@ -1109,6 +1146,39 @@ fn notes_menu(ui: &mut Ui, session: &mut Session) {
             if ui.button(text::INVERT_DOWN).clicked() {
                 session.invert_selection(false);
                 ui.close();
+            }
+            if session.is_voice_track() {
+                // How the selected notes are sung (decision 0028).
+                ui.separator();
+                ui.label(RichText::new(text::SINGING).small().weak());
+                for (name, hint, run) in [
+                    (
+                        text::ADD_VIBRATO,
+                        text::ADD_VIBRATO_HINT,
+                        Session::add_vibrato_to_selection as fn(&mut Session),
+                    ),
+                    (
+                        text::REMOVE_VIBRATO,
+                        "",
+                        Session::remove_vibrato_from_selection,
+                    ),
+                    (
+                        text::PLAIN_PITCH,
+                        text::PLAIN_PITCH_HINT,
+                        Session::plain_pitch_for_selection,
+                    ),
+                ] {
+                    let button = ui.button(name);
+                    let button = if hint.is_empty() {
+                        button
+                    } else {
+                        button.on_hover_text(hint)
+                    };
+                    if button.clicked() {
+                        run(session);
+                        ui.close();
+                    }
+                }
             }
         });
     });

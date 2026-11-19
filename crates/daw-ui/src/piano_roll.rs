@@ -23,7 +23,11 @@
 //!   Enter (or double-click a note) to type it; words after a space go to
 //!   the next notes; a lyric the voicebank does not have is marked "?";
 //! - the lane under the notes shows their velocity, or the song's tempo
-//!   where the pattern plays (decision 0026; `tempo_lane`), edited there.
+//!   where the pattern plays (decision 0026; `tempo_lane`), edited there;
+//!   on a voice track also each note's colour and breath (decision 0028);
+//! - on a voice track the pitch the voice sings is drawn through the notes
+//!   (`pitch_line`); in the Pitch mode the grid edits it instead of the
+//!   notes, which stay where they are.
 //!
 //! Only what is visible is drawn, and all notes go into one triangle mesh
 //! (from the phase 0 spike), so the cost per frame depends on what is on
@@ -37,6 +41,7 @@ use egui::{
     RichText, Sense, Shape, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2,
 };
 
+use crate::pitch_line::{PitchLine, RollAxes};
 use crate::session::{Draw, Grid, Session};
 use crate::tempo_lane::{Axis, TempoLane};
 use crate::text;
@@ -45,6 +50,8 @@ use crate::theme::{Palette, size};
 const KEYS_WIDTH: f32 = 64.0;
 const RULER_HEIGHT: f32 = 28.0;
 const VELOCITY_HEIGHT: f32 = 72.0;
+/// A voice track's lane is taller: it offers four things to show.
+const VOICE_LANE_HEIGHT: f32 = 104.0;
 const VELOCITY_GAP: f32 = 6.0;
 /// How close to a note's right end the pointer must be to resize it.
 const EDGE_GRAB: f32 = 7.0;
@@ -53,6 +60,20 @@ const DRAG_THRESHOLD: f32 = 3.0;
 /// How close to the end of the pattern the pointer must be, on the ruler,
 /// to take its handle.
 const END_GRAB: f32 = 7.0;
+
+/// What the lane under the notes shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum LaneKind {
+    /// Each note's velocity (on a voice track, how loud it is sung).
+    #[default]
+    Velocity,
+    /// Each note's colour, on a voice track (decision 0028).
+    Colour,
+    /// Each note's breath, on a voice track.
+    Breath,
+    /// The song's tempo where the pattern plays (decision 0026).
+    Tempo,
+}
 
 /// What a mouse drag is doing.
 #[derive(Clone, Debug, Default)]
@@ -90,6 +111,13 @@ enum Drag {
     Erase,
     /// Changing velocities in the lane.
     Velocity { originals: Vec<Note>, grabbed: Note },
+    /// Changing a voice's colour or breath in the lane: the notes' values
+    /// before, and the grabbed note's.
+    Sung {
+        kind: LaneKind,
+        originals: Vec<(NoteId, f32)>,
+        grabbed: f32,
+    },
     /// Moving the play position along the ruler.
     Scrub,
     /// Moving the end of the pattern.
@@ -122,11 +150,12 @@ pub struct PianoRoll {
     reveal: bool,
     /// Where the pattern ends (its handle on the ruler), this frame.
     pattern_end: Ticks,
-    /// Whether the lane under the notes shows the song's tempo (rather
-    /// than the notes' velocity).
-    shows_tempo: bool,
+    /// What the lane under the notes shows.
+    lane: LaneKind,
     /// The tempo line, when the lane shows it.
     tempo: TempoLane,
+    /// The sung pitch, on a voice track (decision 0028).
+    pitch: PitchLine,
     /// The lyric being typed (decision 0027).
     lyric: Option<LyricEdit>,
     /// The notes whose lyric the voicebank does not have, this frame.
@@ -156,8 +185,9 @@ impl Default for PianoRoll {
             hovered: None,
             reveal: false,
             pattern_end: Ticks::WHOLE,
-            shows_tempo: false,
+            lane: LaneKind::Velocity,
             tempo: TempoLane::with_panels_above(),
+            pitch: PitchLine::default(),
             lyric: None,
             missing_lyrics: HashSet::new(),
         }
@@ -177,9 +207,9 @@ struct Layout {
 }
 
 impl Layout {
-    fn new(whole: Rect) -> Self {
+    fn new(whole: Rect, lane_height: f32) -> Self {
         let left = whole.left() + KEYS_WIDTH;
-        let lane_top = whole.bottom() - VELOCITY_HEIGHT;
+        let lane_top = whole.bottom() - lane_height;
         let grid_bottom = lane_top - VELOCITY_GAP;
         Self {
             whole,
@@ -218,7 +248,15 @@ impl PianoRoll {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         response
             .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Canvas, true, text::PIANO_ROLL));
-        let layout = Layout::new(rect);
+        let voice = session.is_voice_track();
+        let layout = Layout::new(
+            rect,
+            if voice {
+                VOICE_LANE_HEIGHT
+            } else {
+                VELOCITY_HEIGHT
+            },
+        );
         self.pattern_end = session.pattern().length;
         if !self.fitted && layout.grid.width() > 50.0 {
             self.fit(session, layout.grid);
@@ -239,6 +277,11 @@ impl PianoRoll {
             }
         }
         self.handle_view_input(ui, &response, &layout);
+        let pitch_mode = session.pitch_mode();
+        if pitch_mode && let Some(line) = session.sung_line() {
+            self.pitch
+                .input(ui, &response, session, &self.axes(&layout), &line);
+        }
         self.handle_pointer(ui, &response, &layout, session);
         self.start_lyric(ui, &response, &layout, session);
         self.follow_playhead(ui, session, &layout);
@@ -249,11 +292,15 @@ impl PianoRoll {
         painter.rect_filled(rect, CornerRadius::ZERO, p.grid);
         self.paint_grid(ui, &layout, session);
         self.paint_notes(ui, &layout, session);
+        if let Some(line) = session.sung_line() {
+            self.pitch
+                .paint(ui, &self.axes(&layout), &line, session.pitch_mode());
+        }
         self.paint_keys(ui, &layout, session);
         self.paint_ruler(ui, &layout, session);
         self.paint_lane(ui, &layout, session);
-        self.lane_switch(ui, &layout);
-        if self.shows_tempo {
+        self.lane_switch(ui, &layout, voice);
+        if self.lane_kind(session) == LaneKind::Tempo {
             // The song's tempo where the pattern's start plays.
             let placement = session.placement();
             let zero = (placement.start - placement.offset).0 as f64;
@@ -266,7 +313,28 @@ impl PianoRoll {
         }
         self.paint_overlay(ui, &layout, session);
         self.tempo.panel_ui(ui, session);
+        self.pitch.panel_ui(ui, session);
         self.lyric_editor(ui, &layout, session);
+    }
+
+    /// How the grid maps time and pitch to the screen, this frame.
+    fn axes(&self, layout: &Layout) -> RollAxes {
+        RollAxes {
+            grid: layout.grid,
+            left_tick: self.left_tick,
+            ticks_per_point: self.ticks_per_point,
+            top_key: self.top_key,
+            key_height: self.key_height,
+        }
+    }
+
+    /// What the lane shows on the open track: a voice's colour and breath
+    /// only on a voice track (velocity elsewhere).
+    fn lane_kind(&self, session: &Session) -> LaneKind {
+        match self.lane {
+            LaneKind::Colour | LaneKind::Breath if !session.is_voice_track() => LaneKind::Velocity,
+            kind => kind,
+        }
     }
 
     /// Opens the lyric field of a voice track's note: Enter types the
@@ -292,7 +360,7 @@ impl PianoRoll {
             return;
         }
         let pattern = session.pattern();
-        let target = if response.double_clicked() {
+        let target = if response.double_clicked() && !session.pitch_mode() {
             response
                 .interact_pointer_pos()
                 .and_then(|pos| self.note_at(&pattern.notes, layout.grid, pos))
@@ -381,48 +449,74 @@ impl PianoRoll {
         }
     }
 
-    /// The buttons left of the lane: what it shows.
-    fn lane_switch(&mut self, ui: &mut Ui, layout: &Layout) {
+    /// The buttons left of the lane: what it shows (on a voice track, also
+    /// each note's colour and breath).
+    fn lane_switch(&mut self, ui: &mut Ui, layout: &Layout, voice: bool) {
         let area = layout.lane_label.shrink2(vec2(3.0, 8.0));
+        let shown = match self.lane {
+            LaneKind::Colour | LaneKind::Breath if !voice => LaneKind::Velocity,
+            kind => kind,
+        };
+        let velocity_hint = if voice {
+            text::SHOW_VELOCITY_SUNG
+        } else {
+            text::SHOW_VELOCITY
+        };
+        let mut choices = vec![(
+            LaneKind::Velocity,
+            text::VELOCITY,
+            velocity_hint,
+            text::LANE_VELOCITY,
+        )];
+        if voice {
+            choices.push((
+                LaneKind::Colour,
+                text::COLOUR,
+                text::SHOW_COLOUR,
+                text::LANE_COLOUR,
+            ));
+            choices.push((
+                LaneKind::Breath,
+                text::BREATH,
+                text::SHOW_BREATH,
+                text::LANE_BREATH,
+            ));
+        }
+        choices.push((
+            LaneKind::Tempo,
+            text::TEMPO_LANE,
+            text::SHOW_TEMPO,
+            text::LANE_TEMPO,
+        ));
         ui.scope_builder(UiBuilder::new().max_rect(area), |ui| {
             // One line each: the column is narrow.
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             ui.spacing_mut().button_padding.x = 3.0;
-            ui.spacing_mut().item_spacing.y = 4.0;
+            ui.spacing_mut().item_spacing.y = if voice { 2.0 } else { 4.0 };
             ui.vertical(|ui| {
-                let velocity = ui
-                    .selectable_label(!self.shows_tempo, RichText::new(text::VELOCITY).small())
-                    .on_hover_text(text::SHOW_VELOCITY);
-                let showing = !self.shows_tempo;
-                velocity.widget_info(|| {
-                    egui::WidgetInfo::selected(
-                        egui::Role::Button,
-                        true,
-                        showing,
-                        text::LANE_VELOCITY,
-                    )
-                });
-                if velocity.clicked() {
-                    self.shows_tempo = false;
-                    self.tempo.close_panel();
-                }
-                let tempo = ui
-                    .selectable_label(self.shows_tempo, RichText::new(text::TEMPO_LANE).small())
-                    .on_hover_text(text::SHOW_TEMPO);
-                let showing = self.shows_tempo;
-                tempo.widget_info(|| {
-                    egui::WidgetInfo::selected(egui::Role::Button, true, showing, text::LANE_TEMPO)
-                });
-                if tempo.clicked() {
-                    self.shows_tempo = true;
+                for (kind, name, hint, label) in choices {
+                    let chosen = shown == kind;
+                    let button = ui
+                        .selectable_label(chosen, RichText::new(name).small())
+                        .on_hover_text(hint);
+                    button.widget_info(|| {
+                        egui::WidgetInfo::selected(egui::Role::Button, true, chosen, label)
+                    });
+                    if button.clicked() {
+                        self.lane = kind;
+                        if kind != LaneKind::Tempo {
+                            self.tempo.close_panel();
+                        }
+                    }
                 }
             });
         });
     }
 
-    /// Whether a drag is in progress (on the notes or on the tempo line).
+    /// Whether a drag is in progress (on the notes, the tempo line or the
+    /// sung pitch).
     pub fn is_dragging(&self) -> bool {
-        self.note_drag() || self.tempo.is_dragging()
+        self.note_drag() || self.tempo.is_dragging() || self.pitch.is_dragging()
     }
 
     /// Whether a drag of the editor's own is in progress.
@@ -433,13 +527,13 @@ impl PianoRoll {
     /// Closes the tempo line's panel, if one is open (Escape); returns
     /// whether one was.
     pub fn close_popups(&mut self) -> bool {
-        self.tempo.close_panel()
+        self.tempo.close_panel() | self.pitch.close_panel()
     }
 
     /// Abandons the drag in progress, putting everything back. Returns
     /// whether there was one.
     pub fn cancel_drag(&mut self, session: &mut Session) -> bool {
-        if self.tempo.cancel_drag(session) {
+        if self.tempo.cancel_drag(session) || self.pitch.cancel_drag(session) {
             return true;
         }
         if !self.note_drag() {
@@ -710,7 +804,9 @@ impl PianoRoll {
             if middle_pressed {
                 self.drag = Drag::Pan;
             } else if secondary_pressed
-                && (grid.contains(pos) || (layout.lane.contains(pos) && !self.shows_tempo))
+                && !session.pitch_mode()
+                && (grid.contains(pos)
+                    || (layout.lane.contains(pos) && self.lane_kind(session) != LaneKind::Tempo))
             {
                 session
                     .document_mut()
@@ -945,6 +1041,35 @@ impl PianoRoll {
                 });
                 self.drag = Drag::Velocity { originals, grabbed };
             }
+            Drag::Sung {
+                kind,
+                originals,
+                grabbed,
+            } => {
+                let value = Self::lane_value(kind, layout.lane, pos.y);
+                let change = value - grabbed;
+                let ids: Vec<NoteId> = originals.iter().map(|(id, _)| *id).collect();
+                let before: std::collections::HashMap<NoteId, f32> =
+                    originals.iter().copied().collect();
+                let label = if kind == LaneKind::Colour {
+                    text::EDIT_COLOUR
+                } else {
+                    text::EDIT_BREATH
+                };
+                session.change_expression(label, &ids, |note, e| {
+                    let old = before.get(&note.id).copied().unwrap_or(0.0);
+                    if kind == LaneKind::Colour {
+                        e.colour = (old + change).clamp(-1.0, 1.0);
+                    } else {
+                        e.breath = (old + change).clamp(0.0, 1.0);
+                    }
+                });
+                self.drag = Drag::Sung {
+                    kind,
+                    originals,
+                    grabbed,
+                };
+            }
             Drag::Select { origin, before } => {
                 let rect = Rect::from_two_pos(origin, pos);
                 let (t0, t1) = (
@@ -1012,7 +1137,9 @@ impl PianoRoll {
             session.document_mut().end_gesture();
             session.pointer_off();
         }
-        if let Some(pos) = pos {
+        if let Some(pos) = pos
+            && !(session.pitch_mode() && layout.grid.contains(pos) && !self.note_drag())
+        {
             self.set_cursor(ui, response, layout, notes, pos, modifiers);
         }
     }
@@ -1044,24 +1171,14 @@ impl PianoRoll {
             return;
         }
         if layout.lane.contains(pos) {
-            if self.shows_tempo {
-                // The tempo line takes it.
-                return;
-            }
-            if let Some(note) = self.stalk_at(notes, layout, pos, session) {
-                if !session.is_selected(note.id) {
-                    session.select_only([note.id]);
-                }
-                let originals = selected_or(notes, session, note);
-                session.document_mut().begin_gesture(text::EDIT_VELOCITY);
-                self.drag = Drag::Velocity {
-                    originals,
-                    grabbed: note,
-                };
-            }
+            self.press_lane(pos, layout, notes, session);
             return;
         }
         if !grid.contains(pos) {
+            return;
+        }
+        if session.pitch_mode() && !additive {
+            // The sung pitch takes the grid's presses (`pitch_line`).
             return;
         }
         let tick = self.x_to_tick(grid, pos.x);
@@ -1128,6 +1245,78 @@ impl PianoRoll {
         }
     }
 
+    /// A left press in the lane under the notes: a note's bar there starts
+    /// changing its value (and the other selected notes' with it).
+    fn press_lane(&mut self, pos: Pos2, layout: &Layout, notes: &[Note], session: &mut Session) {
+        let kind = self.lane_kind(session);
+        if kind == LaneKind::Tempo {
+            // The tempo line takes it.
+            return;
+        }
+        let Some(note) = self.stalk_at(notes, layout, pos, session) else {
+            return;
+        };
+        if !session.is_selected(note.id) {
+            session.select_only([note.id]);
+        }
+        let originals = selected_or(notes, session, note);
+        if kind == LaneKind::Velocity {
+            session.document_mut().begin_gesture(text::EDIT_VELOCITY);
+            self.drag = Drag::Velocity {
+                originals,
+                grabbed: note,
+            };
+            return;
+        }
+        let values: Vec<(NoteId, f32)> = originals
+            .iter()
+            .map(|n| (n.id, Self::sung_value(kind, session, n.id)))
+            .collect();
+        let grabbed = Self::sung_value(kind, session, note.id);
+        let label = if kind == LaneKind::Colour {
+            text::EDIT_COLOUR
+        } else {
+            text::EDIT_BREATH
+        };
+        session.document_mut().begin_gesture(label);
+        self.drag = Drag::Sung {
+            kind,
+            originals: values,
+            grabbed,
+        };
+    }
+
+    /// A voice note's colour or breath, as the lane shows it.
+    fn sung_value(kind: LaneKind, session: &Session, note: NoteId) -> f32 {
+        let expression = session.pattern().expression(note);
+        match kind {
+            LaneKind::Colour => expression.map_or(0.0, |e| e.colour),
+            LaneKind::Breath => expression.map_or(0.0, |e| e.breath),
+            LaneKind::Velocity | LaneKind::Tempo => 0.0,
+        }
+    }
+
+    /// Where in the lane a value is drawn (from its bottom, as a share of
+    /// its usable height): colour runs from −1 at the bottom to 1 at the
+    /// top, the rest from 0 to 1.
+    fn lane_share(kind: LaneKind, value: f32) -> f32 {
+        if kind == LaneKind::Colour {
+            f32::midpoint(value, 1.0)
+        } else {
+            value
+        }
+    }
+
+    /// The value the pointer's height in the lane means.
+    fn lane_value(kind: LaneKind, lane: Rect, y: f32) -> f32 {
+        let share = ((lane.bottom() - 4.0 - y) / (lane.height() - 10.0)).clamp(0.0, 1.0);
+        if kind == LaneKind::Colour {
+            share * 2.0 - 1.0
+        } else {
+            share
+        }
+    }
+
     /// Where a note placed at `tick` starts: on the grid (counted from the
     /// bar line), or exactly with Alt.
     fn place_at(session: &Session, tick: f64, alt: bool) -> Ticks {
@@ -1177,7 +1366,7 @@ impl PianoRoll {
         let icon = match &self.drag {
             Drag::Move { .. } => CursorIcon::Grabbing,
             Drag::Resize { .. } | Drag::Create { .. } | Drag::End => CursorIcon::ResizeHorizontal,
-            Drag::Velocity { .. } => CursorIcon::ResizeVertical,
+            Drag::Velocity { .. } | Drag::Sung { .. } => CursorIcon::ResizeVertical,
             Drag::Pan => CursorIcon::AllScroll,
             Drag::Erase | Drag::Select { .. } | Drag::Scrub | Drag::Keys => CursorIcon::Default,
             Drag::None => {
@@ -1319,6 +1508,8 @@ impl PianoRoll {
         let mut labels = Vec::new();
         let show_names = self.key_height >= 13.0 && range.len() < 400;
         let voice = session.is_voice_track() && range.len() < 400;
+        // In the Pitch mode the notes step back behind the sung line.
+        let dim = if session.pitch_mode() { 0.45 } else { 1.0 };
         let (left, _) = self.visible_ticks(grid);
         for note in &notes[range] {
             if (note.end().0 as f64) < left
@@ -1330,8 +1521,8 @@ impl PianoRoll {
             let body = self.note_rect(grid, note);
             let selected = session.is_selected(note.id);
             let base = if selected { p.selected } else { p.accent };
-            let fill = shade(base, 0.55 + 0.45 * note.velocity);
-            add_rect(&mut mesh, body, p.note_edge);
+            let fill = shade(base, 0.55 + 0.45 * note.velocity).gamma_multiply(dim);
+            add_rect(&mut mesh, body, p.note_edge.gamma_multiply(dim));
             add_rect(&mut mesh, body.shrink(1.0), fill);
             if voice && body.width() > 14.0 {
                 let mut lyric = shown_lyric(ui.ctx(), session.lyric(note.id));
@@ -1631,18 +1822,33 @@ impl PianoRoll {
         );
         let painter = ui.painter_at(lane);
         painter.rect_filled(lane.shrink2(vec2(0.0, 2.0)), CornerRadius::ZERO, p.grid);
-        if self.shows_tempo {
+        let kind = self.lane_kind(session);
+        if kind == LaneKind::Tempo {
             return;
         }
         let notes = &session.pattern().notes;
         let range = self.visible_range(notes, layout.grid);
         let usable = lane.height() - 10.0;
+        let y_of = |share: f32| lane.bottom() - 4.0 - usable * share;
+        // Colour's bars stand on its middle line (no colour).
+        let base = if kind == LaneKind::Colour {
+            let middle = y_of(0.5);
+            painter.hline(lane.x_range(), middle, Stroke::new(1.0, p.grid_bar));
+            middle
+        } else {
+            lane.bottom() - 4.0
+        };
         for note in &notes[range] {
             let x = self.tick_to_x(layout.grid, note.start);
             if x < lane.left() - 4.0 || x > lane.right() + 4.0 {
                 continue;
             }
-            let top = lane.bottom() - 4.0 - usable * note.velocity;
+            let value = if kind == LaneKind::Velocity {
+                note.velocity
+            } else {
+                Self::sung_value(kind, session, note.id)
+            };
+            let top = y_of(Self::lane_share(kind, value));
             let color = if session.is_selected(note.id) {
                 p.selected
             } else {
@@ -1650,7 +1856,7 @@ impl PianoRoll {
             };
             painter.vline(
                 x + 1.0,
-                top..=(lane.bottom() - 4.0),
+                top.min(base)..=top.max(base),
                 Stroke::new(2.0, color),
             );
             painter.circle_filled(pos2(x + 1.0, top), 3.5, color);

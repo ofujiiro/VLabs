@@ -423,6 +423,7 @@ impl Workspace {
                 transport::location_bar(
                     ui,
                     &mut self.session,
+                    &self.keymap,
                     (keyboard_shown, self.settings.show_mixer, library_shown),
                     &mut actions,
                     &mut intents,
@@ -858,6 +859,10 @@ impl Workspace {
             Command::TransposeDown => s.step_selection(false),
             Command::InvertUp => s.invert_selection(true),
             Command::InvertDown => s.invert_selection(false),
+            Command::PitchMode => {
+                self.cancel_drag();
+                self.session.toggle_pitch_mode();
+            }
             Command::OctaveUp => s.transpose(12),
             Command::OctaveDown => s.transpose(-12),
             Command::KeyboardOctaveUp => s.shift_keyboard_octave(1),
@@ -982,7 +987,8 @@ impl Workspace {
             | Command::OctaveUp
             | Command::OctaveDown
             | Command::InvertUp
-            | Command::InvertDown => {}
+            | Command::InvertDown
+            | Command::PitchMode => {}
             _ => return false,
         }
         true

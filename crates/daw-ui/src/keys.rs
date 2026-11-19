@@ -290,11 +290,14 @@ pub enum Command {
     ImportAudio,
     /// Open the user guide.
     UserGuide,
+    /// On a voice track, switch between editing the notes and the sung
+    /// pitch (decision 0028).
+    PitchMode,
 }
 
 impl Command {
     /// Every command, in the order the shortcuts window lists them.
-    pub const ALL: [Self; 38] = [
+    pub const ALL: [Self; 39] = [
         Self::PlayStop,
         Self::Record,
         Self::ToStart,
@@ -321,6 +324,7 @@ impl Command {
         Self::OctaveDown,
         Self::InvertUp,
         Self::InvertDown,
+        Self::PitchMode,
         Self::KeyboardOctaveUp,
         Self::KeyboardOctaveDown,
         Self::ZoomIn,
@@ -376,6 +380,7 @@ impl Command {
             Self::UserGuide => "user_guide",
             Self::InvertUp => "invert_up",
             Self::InvertDown => "invert_down",
+            Self::PitchMode => "pitch_mode",
         }
     }
 
@@ -588,6 +593,7 @@ impl Default for Keymap {
             (Command::OctaveDown, S::shift(Key::ArrowDown)),
             (Command::InvertUp, S::alt(Key::ArrowUp)),
             (Command::InvertDown, S::alt(Key::ArrowDown)),
+            (Command::PitchMode, S::ctrl(Key::P)),
             (Command::KeyboardOctaveUp, S::plain(Key::PageUp)),
             (Command::KeyboardOctaveDown, S::plain(Key::PageDown)),
             (Command::ZoomIn, S::ctrl(Key::Equals)),
