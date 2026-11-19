@@ -23,6 +23,9 @@ pub struct ImportPlace {
     pub track: Option<daw_model::TrackId>,
     /// Where in the song it starts.
     pub at: daw_model::Ticks,
+    /// The custom kit it becomes a pad of, in place of a clip (decision
+    /// 0025).
+    pub pad_of: Option<daw_model::TrackId>,
 }
 
 /// Work for the worker.

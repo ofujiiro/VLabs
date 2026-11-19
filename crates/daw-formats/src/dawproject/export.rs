@@ -311,8 +311,28 @@ impl Writer<'_> {
             Instrument::SoundFont { .. } => ("piano", "Piano"),
             Instrument::Drums { .. } => ("drums", "Drums"),
             Instrument::Synth(_) => ("synth", "Synth"),
+            Instrument::Sfz { .. } => ("sfz", "SFZ instrument"),
+            Instrument::Kit { .. } => ("kit", "Custom kit"),
         };
-        let json = serde_json::to_vec_pretty(instrument).unwrap_or_default();
+        let mut state = serde_json::to_value(instrument).unwrap_or_default();
+        // A custom kit's sounds go in the file, named under `files`.
+        if let (Instrument::Kit { pads }, Some(object)) = (instrument, state.as_object_mut()) {
+            let mut files = serde_json::Map::new();
+            for pad in pads {
+                if let Some(file) = self.project.audio_file(pad.audio)
+                    && is_plain_name(&file.file)
+                {
+                    let entry = format!("audio/{}", file.file);
+                    if !self.audio.iter().any(|(e, _)| *e == entry) {
+                        self.audio
+                            .push((entry.clone(), self.audio_folder.join(&file.file)));
+                    }
+                    files.insert(pad.audio.0.to_string(), entry.into());
+                }
+            }
+            object.insert("files".to_owned(), files.into());
+        }
+        let json = serde_json::to_vec_pretty(&state).unwrap_or_default();
         let state = self.add_file("json", json);
         Some(self.own_device(
             "BuiltinDevice",

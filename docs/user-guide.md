@@ -75,6 +75,26 @@ and to change its volume, pan, tuning and length. **Kit** chooses between the
 acoustic and the electronic kit. Drag the small tab at the right end of the
 ruler to make the pattern longer or shorter (any number of steps).
 
+### Custom kits: a drum kit of your own sounds
+
+A custom kit is a drum track whose pads are your own sounds: kicks, claps,
+vocal chops, a door slamming. Each sound gets its own key and its own row in
+the step grid.
+
+- **+ Instrument…**, **Custom kit**: choose sounds (WAV, AIFF, FLAC, MP3 or
+  Ogg; pick many at once). Each becomes a pad named after its file, and the
+  step grid opens with one row per pad.
+- **More sounds:** **Add sounds…** on the line above the grid, drop files on
+  the grid, or drag sounds from the library onto it.
+- **A whole folder at once:** in the library, right-click a folder and
+  choose **Make a kit of these sounds**.
+- Click a pad's name to hear it and change its volume, pan, tuning and
+  length, rename it, or **Remove from the kit**.
+- The computer keyboard plays the pads as it plays a drum kit (Z is the
+  first pad). A kit holds up to 128 sounds.
+- The sounds are copied into the song, so the song opens anywhere with its
+  kit.
+
 ## The piano roll (melodies and chords)
 
 - Click to place a note (you hear it); drag from an empty spot to draw a
@@ -120,14 +140,26 @@ VLabs, then every plugin found on your computer:
 
 - **Piano**: a sampled grand piano.
 - **Drums**: the drum sampler with two kits.
+- **Custom kit**: a drum kit of your own sounds (see
+  [Custom kits](#custom-kits-a-drum-kit-of-your-own-sounds)).
 - **Synth**: VLabs's own synthesizer (below).
-- **SoundFont…**: a track playing a SoundFont (`.sf2`) file of yours: many
-  free instruments come as SoundFonts. Its sounds ("presets") are chosen
-  in the track's menu, at the top left of its pattern. The song remembers
-  where the file is; on a computer without it, the track plays a plain
-  sound and VLabs says which file is missing.
+- **SoundFont or SFZ…**: a track playing an instrument file of yours. Many
+  free and paid sampled instruments (pianos, drum kits, orchestras) come
+  as a **SoundFont** (`.sf2`) or as an **SFZ instrument** (an `.sfz` file
+  next to a folder of sounds).
+  - A SoundFont's sounds ("presets") are chosen in the track's menu, at the
+    top left of its pattern.
+  - An SFZ instrument is read in the background, however large: its track
+    is silent for a moment while the status line says "Reading the
+    instrument…", then plays. If the instrument uses something VLabs does
+    not play yet (such as vibrato made by an LFO), the status line says so
+    once, and the rest plays.
+  - The song remembers where the file is; on a computer without it, the
+    track plays a plain sound and VLabs says which file is missing.
 
 ![A SoundFont's presets in the track menu](guide-images/soundfont.png)
+
+![An SFZ instrument from the library, as a track](guide-images/sfz.png)
 
 ## The synth
 
@@ -225,22 +257,36 @@ the others.
 when you add one. Most plugins also come as VST3 or CLAP; look for that
 version on the maker's site.
 
+**A plugin that stays silent** often waits for something in its own window:
+open it with the window button on its track.
+
+- **MT Power Drum Kit 2** (free version) mutes itself each time it starts:
+  click **START** at the bottom right of its window, every session.
+- **Decent Sampler** plays nothing until you load a sample library into it
+  (**FILE…**, **Load…**, or **BROWSE** for its store).
+- On Linux, a plugin may need system libraries of its own. VLabs names the
+  missing one in the Plugins window: install that package, then click
+  **Look again**.
+
 ## The sound library
 
 The folder button at the top right (or <kbd>F6</kbd>) shows the library in
 place of the keyboard. **Add a folder…** (or drop a folder on the window)
-adds a folder of sounds: WAV, AIFF, FLAC, MP3 and Ogg files, MIDI files and
-SoundFonts, however many there are. Nothing is copied or moved.
+adds a folder of sounds: WAV, AIFF, FLAC, MP3 and Ogg files, MIDI files,
+SoundFonts and SFZ instruments, however many there are. Nothing is copied
+or moved.
 
 - Click a folder to open it; **Up** goes back.
 - **Click a sound to hear it**; click it again to stop.
 - **Drag** a sound onto the song to put it there, on the beat where you let
   go; **double-click** puts it at the play position. MIDI files become
-  tracks of notes, SoundFonts become instrument tracks.
+  tracks of notes, SoundFonts and SFZ instruments become instrument tracks.
 - The **Search** field looks through every folder at once, for every word
   you type ("kick hard").
 - Right-click a folder on the left to look through it again (after adding
   files) or to remove it from the library (the files stay on your disk).
+- Right-click a folder, **Make a kit of these sounds**: a custom kit of
+  every sound in it (see [Custom kits](#custom-kits-a-drum-kit-of-your-own-sounds)).
 
 ![The sound library](guide-images/library.png)
 
@@ -262,8 +308,9 @@ including a recording that was in progress.
 - **Import…** (<kbd>Ctrl+I</kbd>) adds sound files (WAV, AIFF, FLAC, MP3,
   Ogg) and MIDI files to the song at the play position (a MIDI file's
   tracks become tracks of notes). Dropping files on the window does the
-  same; dropping a song file opens it, a SoundFont becomes an instrument
-  track, plugins go to the Plugins window and folders to the library.
+  same; dropping a song file opens it, a SoundFont or an SFZ instrument
+  becomes an instrument track, plugins go to the Plugins window and
+  folders to the library.
 - **Export…** (<kbd>Ctrl+E</kbd>) makes, from the song:
   - **a sound file**: WAV or FLAC (FLAC is about half the size, with nothing
     lost), in studio quality (24-bit, 48 kHz) or CD quality (16-bit,

@@ -268,7 +268,9 @@ impl Session {
                 Instrument::SoundFont { .. }
                 | Instrument::Plugin(_)
                 | Instrument::Audio
-                | Instrument::Synth(_) => None,
+                | Instrument::Synth(_)
+                | Instrument::Sfz { .. }
+                | Instrument::Kit { .. } => None,
             });
         if current.is_none_or(|k| k == kit) {
             return;
@@ -289,7 +291,9 @@ impl Session {
             Instrument::SoundFont { .. }
             | Instrument::Plugin(_)
             | Instrument::Audio
-            | Instrument::Synth(_) => None,
+            | Instrument::Synth(_)
+            | Instrument::Sfz { .. }
+            | Instrument::Kit { .. } => None,
         }
     }
 

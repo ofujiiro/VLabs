@@ -204,6 +204,26 @@ These come from the brief; tests and CI enforce most of them.
   program's own window buttons. Start the program only once PipeWire and
   WirePlumber are up; a sound device that never starts is reopened after
   three seconds.
+- **Run the reference plugins' tests one at a time** (`-- --test-threads 1`),
+  as CI does: plugin window toolkits (JUCE, VSTGUI) tie themselves to one
+  main thread, and in parallel the editor test can wait forever.
+- **Plugins someone reports:** put them in a folder and run
+  `VLABS_PROBE_PLUGINS=<folder> cargo test -p daw-plugin-host --test probe -- --nocapture`
+  under a virtual screen: each instrument is played at once, after a few
+  seconds, and with its window open. Some plugins are silent until a start
+  screen in their window is clicked (MT Power Drum Kit 2's free version);
+  `VLABS_PROBE_HOLD=<seconds>` keeps the window open to click through it.
+  Linux plugins often need system libraries the container lacks (MT Power
+  Drum Kit: xcb-util, xcb-cursor, cairo, pango; plugins whose windows are
+  web views: GTK and WebKitGTK): install them in the container.
+- **SFZ test instruments** (fixtures only, never bundled): free
+  instruments from the `sfzinstruments` collection on GitHub, for instance
+  `ganjo` and `karoryfer.cowsynth` (CC0; download the repository's zip).
+  `VLABS_TEST_SFZ=<folder>` makes `crates/daw-formats/tests/sfz_instruments.rs`
+  read every `.sfz` inside and play notes across each one's range.
+- **Typing in the real program:** `xdotool type` does not reach text
+  fields on the virtual screen (no window manager); scroll lists with the
+  mouse wheel (`xdotool click 5`) instead of searching.
 - Network access in the development container is restricted: crates.io,
   GitHub (git, raw files and release downloads) and the Ubuntu archive work;
   many other sites do not.

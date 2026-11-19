@@ -12,6 +12,8 @@ workspace = true
 
 [dependencies]
 claxon.workspace = true
+# The sampler banks SFZ instruments are read into (decision 0024).
+daw-dsp.workspace = true
 daw-ident.workspace = true
 lewton.workspace = true
 nanomp3.workspace = true

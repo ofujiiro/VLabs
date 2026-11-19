@@ -36,8 +36,8 @@ mod linux {
     use x11rb::connection::Connection;
     use x11rb::protocol::Event;
     use x11rb::protocol::xproto::{
-        Atom, AtomEnum, ConfigureWindowAux, ConnectionExt, CreateWindowAux, EventMask, PropMode,
-        StackMode, WindowClass,
+        Atom, AtomEnum, ClientMessageEvent, ConfigureWindowAux, ConnectionExt, CreateWindowAux,
+        EventMask, MapState, PropMode, StackMode, WindowClass,
     };
     use x11rb::rust_connection::RustConnection;
     use x11rb::wrapper::ConnectionExt as _;
@@ -148,11 +148,19 @@ mod linux {
             .map_err(|e| e.to_string())
     }
 
+    /// The XEmbed flag saying the embedded window wants to be shown: the
+    /// embedder (this window) maps it.
+    const XEMBED_MAPPED: u32 = 1;
+    /// The XEmbed message telling a window it has been embedded.
+    const XEMBED_EMBEDDED_NOTIFY: u32 = 0;
+
     /// An editor's window.
     pub struct EditorWindow {
         connection: RustConnection,
         window: u32,
         delete_window: Atom,
+        xembed: Atom,
+        xembed_info: Atom,
         size: Cell<(u32, u32)>,
     }
 
@@ -167,9 +175,11 @@ mod linux {
             let visual = screen.root_visual;
             let black = screen.black_pixel;
             let window = connection.generate_id().map_err(|e| e.to_string())?;
+            // Its own changes, and its children's: an editor may make the
+            // window it draws in only later.
             let values = CreateWindowAux::new()
                 .background_pixel(black)
-                .event_mask(EventMask::STRUCTURE_NOTIFY);
+                .event_mask(EventMask::STRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_NOTIFY);
             connection
                 .create_window(
                     x11rb::COPY_DEPTH_FROM_PARENT,
@@ -216,10 +226,14 @@ mod linux {
                     title.as_bytes(),
                 )
                 .map_err(|e| e.to_string())?;
+            let xembed = atom(&connection, "_XEMBED")?;
+            let xembed_info = atom(&connection, "_XEMBED_INFO")?;
             let made = Self {
                 connection,
                 window,
                 delete_window,
+                xembed,
+                xembed_info,
                 size: Cell::new((width, height)),
             };
             made.fix_size(width, height);
@@ -268,7 +282,58 @@ mod linux {
         /// Puts the window on screen.
         pub fn show(&self) {
             let _ = self.connection.map_window(self.window);
+            self.embed_children();
             let _ = self.connection.flush();
+        }
+
+        /// Shows the windows the editor made inside this one that ask to be
+        /// shown by their embedder (the XEmbed convention, which editors
+        /// built with VSTGUI follow): they stay blank otherwise.
+        fn embed_children(&self) {
+            let Some(tree) = self
+                .connection
+                .query_tree(self.window)
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+            else {
+                return;
+            };
+            for child in tree.children {
+                let flags = self
+                    .connection
+                    .get_property(false, child, self.xembed_info, self.xembed_info, 0, 2)
+                    .ok()
+                    .and_then(|cookie| cookie.reply().ok())
+                    .and_then(|reply| reply.value32().and_then(|mut values| values.nth(1)));
+                let Some(flags) = flags else {
+                    continue; // Not an XEmbed window: it shows itself.
+                };
+                let unmapped = self
+                    .connection
+                    .get_window_attributes(child)
+                    .ok()
+                    .and_then(|cookie| cookie.reply().ok())
+                    .is_some_and(|attributes| attributes.map_state == MapState::UNMAPPED);
+                if flags & XEMBED_MAPPED == 0 || !unmapped {
+                    continue;
+                }
+                let notify = ClientMessageEvent::new(
+                    32,
+                    child,
+                    self.xembed,
+                    [
+                        x11rb::CURRENT_TIME,
+                        XEMBED_EMBEDDED_NOTIFY,
+                        0,
+                        self.window,
+                        0,
+                    ],
+                );
+                let _ = self
+                    .connection
+                    .send_event(false, child, EventMask::NO_EVENT, notify);
+                let _ = self.connection.map_window(child);
+            }
         }
 
         /// Brings the window to the front.
@@ -283,12 +348,22 @@ mod linux {
         /// window's pending events).
         pub fn close_requested(&self) -> bool {
             let mut close = false;
+            let mut children_changed = false;
             while let Ok(Some(event)) = self.connection.poll_for_event() {
-                if let Event::ClientMessage(message) = event
-                    && message.data.as_data32()[0] == self.delete_window
-                {
-                    close = true;
+                match event {
+                    Event::ClientMessage(message)
+                        if message.data.as_data32()[0] == self.delete_window =>
+                    {
+                        close = true;
+                    }
+                    // The editor made (or moved in) the window it draws in.
+                    Event::CreateNotify(_) | Event::ReparentNotify(_) => children_changed = true,
+                    _ => {}
                 }
+            }
+            if children_changed {
+                self.embed_children();
+                let _ = self.connection.flush();
             }
             close
         }
@@ -303,6 +378,84 @@ mod linux {
 
     fn clamp16(value: u32) -> u16 {
         u16::try_from(value.clamp(1, 16_000)).unwrap_or(16_000)
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::unwrap_used, reason = "test code")]
+    mod tests {
+        use super::*;
+        use x11rb::protocol::xproto::Window;
+
+        /// A window "the plugin" makes inside the editor's, asking (XEmbed)
+        /// to be shown by its embedder, and left unmapped.
+        fn plugin_window(connection: &RustConnection, parent: Window) -> Window {
+            let screen = &connection.setup().roots[0];
+            let child = connection.generate_id().unwrap();
+            connection
+                .create_window(
+                    x11rb::COPY_DEPTH_FROM_PARENT,
+                    child,
+                    parent,
+                    0,
+                    0,
+                    100,
+                    100,
+                    0,
+                    WindowClass::INPUT_OUTPUT,
+                    screen.root_visual,
+                    &CreateWindowAux::new(),
+                )
+                .unwrap();
+            let info = atom(connection, "_XEMBED_INFO").unwrap();
+            connection
+                .change_property32(PropMode::REPLACE, child, info, info, &[0, XEMBED_MAPPED])
+                .unwrap();
+            connection.sync().unwrap();
+            child
+        }
+
+        fn is_mapped(connection: &RustConnection, window: Window) -> bool {
+            connection
+                .get_window_attributes(window)
+                .unwrap()
+                .reply()
+                .unwrap()
+                .map_state
+                != MapState::UNMAPPED
+        }
+
+        #[test]
+        fn editor_windows_asking_to_be_shown_are_shown() {
+            // Only where there is a display (the plugin jobs run with one).
+            let Ok((plugin, _)) = x11rb::connect(None) else {
+                return;
+            };
+            let Ok(editor) = EditorWindow::new("Test", 200, 200) else {
+                return;
+            };
+            let parent = match editor.handle() {
+                ParentHandle::X11(window) => window,
+                ParentHandle::Win32(_) => unreachable!(),
+            };
+            // Made before the window is shown.
+            let early = plugin_window(&plugin, parent);
+            assert!(!is_mapped(&plugin, early));
+            editor.show();
+            editor.connection.sync().unwrap();
+            assert!(is_mapped(&plugin, early), "shown with the window");
+
+            // Made later, while the window is open.
+            let late = plugin_window(&plugin, parent);
+            for _ in 0..50 {
+                editor.close_requested();
+                editor.connection.sync().unwrap();
+                if is_mapped(&plugin, late) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert!(is_mapped(&plugin, late), "shown once it appears");
+        }
     }
 }
 

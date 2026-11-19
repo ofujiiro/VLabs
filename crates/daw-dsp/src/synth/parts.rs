@@ -254,7 +254,7 @@ fn damping(base: f32, resonance: f32) -> f32 {
 
 /// A voice's filter: one or two state-variable stages.
 #[derive(Clone, Copy, Debug, Default)]
-pub(super) struct VoiceFilter {
+pub(crate) struct VoiceFilter {
     stages: [Svf; 2],
     first: SvfCoeffs,
     second: SvfCoeffs,
@@ -266,7 +266,7 @@ pub(super) struct VoiceFilter {
 
 impl VoiceFilter {
     /// Sets the cutoff and resonance (at the control rate).
-    pub(super) fn tune(
+    pub(crate) fn tune(
         &mut self,
         mode: FilterMode,
         cutoff_hz: f32,
@@ -289,7 +289,7 @@ impl VoiceFilter {
     }
 
     /// Filters one sample.
-    pub(super) fn process(&mut self, input: f32) -> f32 {
+    pub(crate) fn process(&mut self, input: f32) -> f32 {
         let input = input * self.input_gain;
         match self.mode {
             None => input,
@@ -307,7 +307,7 @@ impl VoiceFilter {
     }
 
     /// Forgets the sound so far (a new note).
-    pub(super) fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         for stage in &mut self.stages {
             stage.reset();
         }
@@ -317,15 +317,15 @@ impl VoiceFilter {
 /// A small, fast pseudo-random generator (noise, random LFO steps, start
 /// phases): the same sequence every time, so renders are repeatable.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Random(u32);
+pub(crate) struct Random(u32);
 
 impl Random {
-    pub(super) fn new(seed: u32) -> Self {
+    pub(crate) fn new(seed: u32) -> Self {
         Self(seed.max(1))
     }
 
     /// The next value, from -1 to 1.
-    pub(super) fn next_bipolar(&mut self) -> f32 {
+    pub(crate) fn next_bipolar(&mut self) -> f32 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 17;
         self.0 ^= self.0 << 5;
@@ -335,7 +335,7 @@ impl Random {
     }
 
     /// The next value, from 0 to 1.
-    pub(super) fn next_unit(&mut self) -> f64 {
+    pub(crate) fn next_unit(&mut self) -> f64 {
         f64::from(self.next_bipolar()).mul_add(0.5, 0.5)
     }
 }

@@ -373,3 +373,72 @@ fn saving_and_opening_round_trip() {
     assert_eq!(keys(&other), [67], "a failed open leaves the song alone");
     std::fs::remove_file(saved).ok();
 }
+
+/// The file formats' reader, slowed down as on a slow disk.
+fn slow_sfz_reader(path: &std::path::Path) -> Result<daw_dsp::sampler::SamplerBank, String> {
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    daw_formats::sfz::load(path).map_err(|e| e.to_string())
+}
+
+#[test]
+fn an_sfz_track_says_it_is_being_read_then_plays() {
+    let folder = std::env::temp_dir().join(format!("session-sfz-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let mut writer = daw_formats::wav::WavWriter::create_with_channels(
+        &folder.join("tone.wav"),
+        daw_formats::wav::WavFormat::Pcm16,
+        48_000,
+        1,
+    )
+    .unwrap();
+    let tone: Vec<f32> = (0..48_000).map(|i| (i as f32 * 0.06).sin() * 0.5).collect();
+    writer.write_interleaved(&tone).unwrap();
+    writer.finish().unwrap();
+    let file = folder.join("Slow.sfz");
+    std::fs::write(&file, "<region> sample=tone.wav loop_mode=loop_continuous").unwrap();
+
+    let mut library = SoundLibrary::new();
+    library.set_sfz_reader(slow_sfz_reader);
+    library.set_background_loading(true);
+    let (engine, mut processor) = Engine::new(EngineConfig::default(), library);
+    // A song of a synth alone: nothing else for the status line to say.
+    let mut project = daw_model::Project::empty();
+    let synth = project.add_track(
+        "Synth",
+        daw_model::Instrument::Synth(daw_model::SynthPreset::Plain.settings()),
+    );
+    let pattern = project.add_pattern_for(synth, "P", Ticks::WHOLE);
+    project.add_clip(synth, Ticks::ZERO, Ticks::WHOLE, pattern);
+    let mut s = Session::new(engine, project, None, true);
+    s.update();
+    assert_eq!(s.status(), None);
+    let track = s.add_sfz_track(&file);
+    s.update();
+    assert!(s.is_track_reading(track), "read in the background");
+    let path = file.to_string_lossy().into_owned();
+    assert_eq!(
+        s.status(),
+        Some(text::reading_instruments(&[path]).as_str()),
+        "the status line says so"
+    );
+    let start = std::time::Instant::now();
+    while s.is_reading_instruments() {
+        assert!(start.elapsed().as_secs() < 20, "never read");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        s.update();
+    }
+    assert_eq!(s.status(), None, "the notice goes once it is ready");
+    assert!(!s.is_track_reading(track));
+    // It plays from the computer keyboard.
+    assert!(s.key_down(Key::Q));
+    let mut buffer = vec![0.0_f32; BLOCK * 2];
+    let mut loudest = 0.0_f32;
+    for _ in 0..40 {
+        processor.process(&mut buffer, 2);
+        s.update();
+        loudest = buffer.iter().fold(loudest, |m, v| m.max(v.abs()));
+    }
+    assert!(loudest > 0.05, "heard once ready: {loudest}");
+    s.key_up(Key::Q);
+    let _ = std::fs::remove_dir_all(folder);
+}

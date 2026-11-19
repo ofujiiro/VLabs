@@ -42,6 +42,7 @@ record, notes, the play position); the processing half belongs to
 | Audio files | Reads, decodes, converts and summarises the song's audio files, one at a time | Ordinary thread |
 | Recorder | Writes takes of sound to WAV files as they come, keeps their loudness summary | Ordinary thread |
 | Plugin scanner | A separate run of the program that inspects plugin files | A crash there cannot reach the program |
+| SFZ reader | Reads an SFZ instrument and decodes its sounds (on up to eight helper threads), one thread per instrument | Ordinary thread; the engine builds the track again once it is done |
 
 ## How an edit becomes sound
 
@@ -192,7 +193,15 @@ The window is `daw-ui::synth_ui`.
   process behind the same interface, without changing the engine.
 - **Editor windows:** on Linux, plugin editors need X11; VLabs creates their
   windows through X11 directly, which also works under XWayland on Wayland
-  desktops. On Windows, ordinary Win32 windows.
+  desktops. A plugin window that asks to be shown through XEmbed (its
+  `_XEMBED_INFO` says "mapped") is told it is embedded and shown, as the
+  XEmbed protocol has the host do (MT Power Drum Kit 2's window stayed
+  blank before). On Windows, ordinary Win32 windows.
+- **Whether a plugin has an editor** is asked of it once and remembered
+  (`PluginHandle::has_editor`): the interface asks every frame, and a VST3
+  plugin answers by making a whole editor (0.6 s for MT Power Drum Kit 2,
+  and some plugins start over when another editor is made beside the open
+  one).
 - **Two halves** (decision 0015): loading a plugin gives a main-thread half
   (`PluginHandle`: parameters, settings, its window, housekeeping) and an
   audio-thread half (`PluginProcessor`: one call per block with the block's
@@ -255,6 +264,63 @@ The window is `daw-ui::synth_ui`.
   engine's sound library loads them (once per file) with the same player
   as the bundled piano; a file that is gone gives `Problem::MissingFile`
   and a plain sound in its place.
+
+## SFZ instruments *(decision 0024)*
+
+- **Three layers.** `daw-formats::sfz` reads the text (headers and their
+  levels, `#define`, `#include`, note names, sound paths found whatever
+  their letter case) and decodes the sounds, on several threads, into a
+  `daw_dsp::sampler::SamplerBank`: regions and decoded sounds, with what
+  the file uses that is not played (`LeftOut`) and the sounds it could not
+  find. `daw-formats` depends on `daw-dsp` (a lower layer) for that bank.
+  `daw_dsp::sampler::Sampler` plays a bank like the other built-in
+  instruments: voices with four-point interpolation, envelopes, loops
+  (also the loop a WAV file holds), filters, round robins, keyswitches,
+  release sounds, choke groups and voice limits, with nothing allocated on
+  the audio thread.
+- **Controllers at their starting values.** The program sends instruments
+  no controllers, so what controllers would decide is decided once, at
+  their starting values (`set_ccN`, or MIDI's usual 100 for volume, 64 for
+  pan, 127 for expression, 0 for the rest): which regions play
+  (`loccN`/`hiccN`), crossfades by controller, and the settings they move
+  (envelope times and levels, cutoff, resonance, volume, pan, tuning,
+  offsets). LFOs and pitch envelopes are reported as left out only when
+  they move something.
+- **Read in the background.** The engine cannot read sound files (decision
+  0003), so the program hands its `SoundLibrary` the reader as a plain
+  function (`set_sfz_reader`). With `set_background_loading(true)` (the
+  program, the interface tests) the library starts one thread per
+  instrument file and builds a silent stand-in meanwhile; the engine keeps
+  the tracks waiting and builds them again at the first `sync` after the
+  reading finished, then reports once what the instrument plays without
+  (`Problem::PartlyRead`). Offline rendering waits for every instrument.
+  Instruments read are shared by file between the live engine and
+  exports, and forgotten when another song opens.
+- **In the interface:** `Instrument::Sfz { file }` (file format version
+  7) is added from the library, by dropping or importing a `.sfz` file, or
+  from the instrument chooser; the status line says which instruments are
+  being read while it has nothing else to say, and the track's line says
+  "reading…" until its instrument is ready.
+
+## Custom kits *(decision 0025)*
+
+- **Model:** `Instrument::Kit { pads }`; each `KitPad` has the drum pads'
+  settings (`PadSetting`, with its key), a name and the song's audio file
+  it plays (`AudioId`). Pads take free keys from C1 (36) up, at most 128;
+  `Project::add_kit_pad` and `remove_kit_pad` (which also takes the pad's
+  notes out of the track's patterns). An audio file stays in the song while
+  a clip or a pad uses it. A custom kit counts as drums (`is_drums`).
+- **Sound:** the engine builds a `daw_dsp::sampler::Sampler` from the pads
+  (`library::kit_sampler`): one one-shot region per pad, its volume, pan
+  and tuning from the pad, a shortened length fading out by its end. A pad
+  whose sound is still being decoded is added when `register_audio` brings
+  it (the kit is built again then).
+- **Adding sounds** goes through the audio import path (`ImportPlace` with
+  `pad_of: Some(track)`): copied and decoded in the background, then made a
+  pad, one undo step each. The step grid works from rows (a key and a name):
+  the bundled kits give their fifteen, a custom kit its pads.
+- **Files:** file format version 7; DAWproject carries the kit as one of
+  the program's own devices with its sounds in the archive.
 
 ## Automation *(phase 3)*
 

@@ -4,11 +4,15 @@ The phases come from the project brief. Each ends with a build the owner can
 run and a checklist of things to try. Status is updated at every milestone.
 
 **Now:** phases 0 to 6 and the plugins and sound libraries round are
-built and merged (pull requests 1 to 5). Next: SFZ instruments, then the
-owner's hands-on checks close v1; the singing voices come after v1. The
-owner confirmed the phase 1 and 2 builds; the phase 3 to 6 builds and the
-plugins round await their hands-on check. The repository has been public
-since November 2026 (the owner's decision).
+built and merged (pull requests 1 to 5). SFZ instruments, the last part of
+that round (decision 0024), custom kits (a beta tester's idea, decision
+0025) and fixes for plugins the owner tried (MT Power Drum Kit 2, Decent
+Sampler) are built on branch `plugins-and-libraries`, waiting for their
+pull request. Then the owner's hands-on checks close v1;
+the singing voices come after v1. The owner confirmed the phase 1 and 2
+builds; the phase 3 to 6 builds and the plugins round await their
+hands-on check. The repository has been public since November 2026 (the
+owner's decision).
 
 ## Phase 0 — Foundations and risk spikes
 
@@ -502,7 +506,22 @@ request 4).
 - [x] AIFF files read (import, library).
 - [x] SoundFont (`.sf2`) instrument tracks, with their presets in the track
       menu.
-- [ ] SFZ instruments: planned next.
+- [x] SFZ instruments (decision 0024; on branch `plugins-and-libraries`,
+      pull request to be opened): `.sfz` files in the library, dropped,
+      imported or chosen in **+ Instrument…** (now **SoundFont or SFZ…**)
+      become tracks played by a new built-in sampler; read in the
+      background, however large; what an instrument uses that VLabs does
+      not play is said once; file format version 7.
+- [x] Custom kits (decision 0025; same branch): **Custom kit** in
+      **+ Instrument…**, or **Make a kit of these sounds** on a library
+      folder, makes a drum track of your own sounds, one pad per sound, with
+      beats on the step grid; more sounds by **Add sounds…**, dropping or
+      dragging from the library; the sounds are kept in the song.
+- [x] Plugins the owner tried (same branch): plugin windows that ask to be
+      shown on Linux are shown (MT Power Drum Kit 2's window was blank);
+      the program no longer builds a plugin's window on every frame to ask
+      whether it has one (it crawled with MT Power Drum Kit 2, whose START
+      button was undone); a plugin missing a system library says which.
 - VST2 plugins: kept out of v1 (the owner's decision, November 2026, as
   the brief says).
 
@@ -522,12 +541,31 @@ request 4).
    (thousands of files is fine). Click sounds to hear them, type in
    **Search**, drag a sound onto the song, double-click another.
 6. Drop a whole folder of samples on the window: it joins the library.
-7. Drop a SoundFont (`.sf2`) on the window, or choose **SoundFont…** in
-   **+ Instrument…**: a track plays it; pick its sounds in the track menu
-   (the track's name at the top left of its pattern).
-8. The pattern menus from phase 6: right-click an empty spot of a track to
+7. Drop a SoundFont (`.sf2`) on the window, or choose **SoundFont or
+   SFZ…** in **+ Instrument…**: a track plays it; pick its sounds in the
+   track menu (the track's name at the top left of its pattern).
+8. **SFZ instruments:** download a free one (the sfzinstruments collection
+   on GitHub has many, such as Ganjo or Karoryfer's Cowsynth), unzip it,
+   and add its folder to the library (F6). Double-click the `.sfz` file, or
+   drag it onto the song: a track named after it appears ("SFZ · …" under
+   its name). Play it from the keyboard. A very large instrument says
+   "Reading the instrument…" for a moment first.
+9. The pattern menus from phase 6: right-click an empty spot of a track to
    place any of its patterns by name; right-click a clip, **Play another
    pattern**, to swap it.
+10. **Custom kits:** **+ Instrument…**, **Custom kit**, choose a few of your
+    own sounds at once: the step grid opens with a row per sound; click
+    squares and press Space. Click **Add sounds…** for more, or drag a
+    sound from the library onto the grid. Click a row's name to tune it or
+    shorten it. Then right-click a folder of sounds in the library, **Make
+    a kit of these sounds**. Save, close, open the song again: the kit is
+    all there.
+11. **MT Power Drum Kit 2:** add it with **+ Instrument…**, open its window
+    (the window button on its track): the window shows (it was blank), and
+    the program stays quick. Click **START** at the bottom right (needed
+    every session in its free version), then play: it sounds. **Decent
+    Sampler:** open its window, load a sample library (**FILE…**,
+    **Load…**), then play.
 
 ### Known gaps in this build
 
@@ -538,8 +576,26 @@ request 4).
 - **Installers were not run here**: opening one on Windows and running one
   through Wine on Linux are untested. A plugin's installer may also put it
   somewhere VLabs does not look; **Search another folder…** covers that.
-- **VST2 plugins** are not supported (kept out of v1 by the owner), and
-  **SFZ instruments** are not there yet.
+- **VST2 plugins** are not supported (kept out of v1 by the owner).
+- **SFZ instruments** play without LFOs (vibrato, tremolo), pitch
+  envelopes and the instrument's own effects (the status line says so when
+  an instrument uses them); settings moved by controllers (the modulation
+  wheel…) take the controllers' starting values and do not move while
+  playing. Their sounds are all kept in memory (at most 8 GB per
+  instrument): very large libraries need as much memory as their sound.
+  An instrument edited on the disk is read again only after the program
+  restarts. The library does not preview them (double-click or drag them
+  in). Songs with SFZ tracks are file format 7: older copies of VLabs
+  refuse them.
+- **Custom kits:** changing a pad's settings stops that kit's sounds
+  already playing; a kit holds at most 128 sounds; the grid shows no
+  waveforms. Songs with custom kits are file format 7.
+- **Plugins the owner tried:** MT Power Drum Kit 2 was played in the
+  program after its **START** button (Linux build). Decent Sampler's window
+  and its file chooser work; playing it with a library loaded was not
+  verified here. Sienna Bass is a Windows VST2 plugin
+  (`.dll`), which VLabs does not support. Each plugin's own system
+  libraries (GTK and WebKitGTK for DW-303) must be installed on Linux.
 - The library cannot play MIDI files or SoundFonts to preview them (drag or
   double-click them in), shows no waveforms, and does not play sounds
   larger than 256 MB (drag those in).

@@ -55,6 +55,11 @@ pub trait Host {
     fn choose_soundfont(&mut self) -> Option<PathBuf> {
         None
     }
+    /// Asks the person which sounds to put in a custom kit (many at once;
+    /// none if they cancel).
+    fn choose_kit_sounds(&mut self) -> Vec<PathBuf> {
+        Vec::new()
+    }
     /// Asks the person for a folder (a dialog titled `title`).
     fn choose_folder(&mut self, title: &str) -> Option<PathBuf> {
         let _ = title;
@@ -78,6 +83,8 @@ pub enum Intent {
     OpenEffect(EffectId),
     /// Choose the instrument of a new track.
     ChooseInstrument,
+    /// Choose sounds to add to a custom kit (decision 0025).
+    AddKitSounds(TrackId),
 }
 
 /// The instruments that come with the program, in the chooser.
@@ -85,6 +92,7 @@ pub enum Intent {
 enum Included {
     Piano,
     Drums,
+    Kit,
     Synth,
     SoundFont,
 }
@@ -543,7 +551,24 @@ impl Workspace {
         }
         if self.session.view() == View::Pattern {
             ctx.input_mut(|i| i.raw.dropped_files.clear());
-            self.import(dropped);
+            // Sounds dropped on a custom kit's beat join the kit (decision
+            // 0025); anything else is imported.
+            let kit = self.session.focused_track();
+            let (sounds, others): (Vec<PathBuf>, Vec<PathBuf>) = if self.session.is_custom_kit(kit)
+            {
+                dropped.into_iter().partition(|f| {
+                    daw_formats::library::ItemKind::of(f)
+                        == Some(daw_formats::library::ItemKind::Sound)
+                })
+            } else {
+                (Vec::new(), dropped)
+            };
+            if !sounds.is_empty() {
+                self.session.add_kit_sounds(kit, sounds);
+            }
+            if !others.is_empty() {
+                self.import(others);
+            }
         }
     }
 
@@ -559,8 +584,11 @@ impl Workspace {
             || (self.settings.show_mixer && self.mixer.is_moving())
         {
             ctx.request_repaint();
-        } else if self.session.is_previewing() || self.library.is_listing() {
-            // The library's playing mark and listings.
+        } else if self.session.is_previewing()
+            || self.library.is_listing()
+            || self.session.is_reading_instruments()
+        {
+            // The library's playing mark and listings; instruments read.
             ctx.request_repaint_after(Duration::from_millis(100));
         } else if self.session.any_plugin_window_open() || !self.session.plugin_search().done {
             // Plugin windows are looked after between frames.
@@ -729,6 +757,10 @@ impl Workspace {
                 self.dialog = Some(Dialog::Instruments {
                     search: String::new(),
                 });
+            }
+            Intent::AddKitSounds(track) => {
+                let files = self.host.choose_kit_sounds();
+                self.session.add_kit_sounds(track, files);
             }
         }
     }
@@ -1427,6 +1459,12 @@ impl Workspace {
             Included::Drums => {
                 self.session.add_drum_track();
             }
+            Included::Kit => {
+                // A custom kit, then its sounds (decision 0025).
+                let track = self.session.add_kit_track(None);
+                let files = self.host.choose_kit_sounds();
+                self.session.add_kit_sounds(track, files);
+            }
             Included::Synth => {
                 self.session.add_synth_track();
             }
@@ -1434,7 +1472,7 @@ impl Workspace {
                 let Some(file) = self.host.choose_soundfont() else {
                     return false;
                 };
-                self.session.add_soundfont_track(&file);
+                self.session.add_instrument_file(&file);
             }
         }
         true
@@ -1474,6 +1512,7 @@ impl Workspace {
                     let included = [
                         (text::ADD_PIANO, text::ADD_PIANO_HINT, Included::Piano),
                         (text::ADD_DRUMS, text::ADD_DRUMS_HINT, Included::Drums),
+                        (text::ADD_KIT, text::ADD_KIT_HINT, Included::Kit),
                         (text::ADD_SYNTH, text::ADD_SYNTH_HINT, Included::Synth),
                         (
                             text::ADD_SOUNDFONT,

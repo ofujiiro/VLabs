@@ -30,6 +30,8 @@ considered instead.
 | [0021](0021-autosave-polish.md) | Autosave polish: takes survive a crash, copies before risky moments, a clearer offer | Accepted |
 | [0022](0022-installers-notices-guide.md) | Distribution: a Windows installer, a Linux AppImage, generated notices, a user guide | Accepted |
 | [0023](0023-plugin-manager-and-libraries.md) | Plugins and sound libraries: a Plugins window, plugins added from anywhere, Windows plugins on Linux, a sound library, SoundFonts | Accepted |
+| [0024](0024-sfz-instruments.md) | SFZ instruments: our own reader, a sampler, sounds loaded in the background | Accepted |
+| [0025](0025-custom-kits.md) | Custom kits: a drum kit of your own sounds, played from the step grid | Accepted |
 
 ## Writing a new record
 

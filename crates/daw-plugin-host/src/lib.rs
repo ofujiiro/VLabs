@@ -234,6 +234,7 @@ pub fn load(info: &PluginInfo, config: AudioConfig) -> Result<LoadedPlugin, Stri
             info: info.clone(),
             main,
             window: None,
+            has_editor: None,
         },
         processor: PluginProcessor { audio },
     })
@@ -245,6 +246,11 @@ pub struct PluginHandle {
     info: PluginInfo,
     main: Box<dyn MainSide>,
     window: Option<window::EditorWindow>,
+    /// Whether the plugin has an editor, once asked. Asking a VST3 plugin
+    /// makes a whole editor, which takes time, and some plugins start over
+    /// when another editor is made beside the open one (MT Power Drum Kit
+    /// muted itself again): the interface asks every frame.
+    has_editor: Option<bool>,
 }
 
 impl PluginHandle {
@@ -278,9 +284,15 @@ impl PluginHandle {
         self.main.load_state(state)
     }
 
-    /// Whether the plugin has an editor of its own.
+    /// Whether the plugin has an editor of its own (asked of the plugin
+    /// once).
     pub fn has_editor(&mut self) -> bool {
-        self.main.has_editor()
+        if self.window.is_some() {
+            return true;
+        }
+        *self
+            .has_editor
+            .get_or_insert_with(|| self.main.has_editor())
     }
 
     /// Opens the plugin's editor in a window of its own titled `title` (or
@@ -406,7 +418,88 @@ trait AudioSide: Send {
     fn stop(&mut self);
 }
 
+/// Why a plugin library could not be loaded, in the system's words (the
+/// loader's own message says only that loading failed).
+fn load_error(error: &libloading::Error) -> String {
+    std::error::Error::source(error).map_or_else(|| error.to_string(), ToString::to_string)
+}
+
 /// The file of a plugin, made absolute for messages.
 fn shown(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use super::*;
+
+    /// A plugin's main side that counts how often it is asked whether it
+    /// has an editor.
+    struct Counting(Rc<Cell<u32>>);
+
+    impl MainSide for Counting {
+        fn params(&mut self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn param_value(&mut self, _: u32) -> Option<f64> {
+            None
+        }
+        fn param_text(&mut self, _: u32, _: f64) -> Option<String> {
+            None
+        }
+        fn save_state(&mut self) -> Result<Vec<u8>, String> {
+            Ok(Vec::new())
+        }
+        fn load_state(&mut self, _: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn has_editor(&mut self) -> bool {
+            self.0.set(self.0.get() + 1);
+            true
+        }
+        fn attach_editor(&mut self, _: window::ParentHandle) -> Result<(u32, u32), String> {
+            Err("no window here".to_owned())
+        }
+        fn detach_editor(&mut self) {}
+        fn take_requested_size(&mut self) -> Option<(u32, u32)> {
+            None
+        }
+        fn editor_closed_by_plugin(&mut self) -> bool {
+            false
+        }
+        fn idle(&mut self) {}
+        fn take_touched_param(&mut self) -> Option<u32> {
+            None
+        }
+        fn take_changed(&mut self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn a_plugin_is_asked_once_whether_it_has_an_editor() {
+        let asked = Rc::new(Cell::new(0));
+        let mut handle = PluginHandle {
+            info: PluginInfo {
+                format: Format::Vst3,
+                path: PathBuf::from("Stand-in.vst3"),
+                id: "0".to_owned(),
+                name: "Stand-in".to_owned(),
+                vendor: String::new(),
+                version: String::new(),
+                kind: Kind::Instrument,
+            },
+            main: Box::new(Counting(Rc::clone(&asked))),
+            window: None,
+            has_editor: None,
+        };
+        // The interface asks every frame.
+        for _ in 0..100 {
+            assert!(handle.has_editor());
+        }
+        assert_eq!(asked.get(), 1, "making an editor to find out is costly");
+    }
 }

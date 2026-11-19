@@ -11,7 +11,7 @@ use crate::automation::{AutomationLane, AutomationTarget};
 use crate::mixer::{ChainPlace, Effect, EffectKind, LimiterSettings, MasterBus};
 use crate::song::{
     AudioFile, AudioId, ChannelStrip, Clip, ClipContent, ClipId, EffectId, Instrument, MAX_KEY,
-    Note, NoteId, Pattern, PatternId, Swing, Track, TrackId, default_step,
+    Note, NoteId, PadSetting, Pattern, PatternId, Swing, Track, TrackId, default_step,
 };
 use crate::theory::KeyMap;
 use crate::time::{MeterMap, Region, TempoChange, TempoMap, Ticks, TimeSignature};
@@ -109,6 +109,46 @@ impl Project {
             pattern,
         );
         (track, pattern)
+    }
+
+    /// Adds a pad playing `audio` to a custom kit, on the first free key;
+    /// gives that key (`None` if the track is not a custom kit, or it is
+    /// full).
+    pub fn add_kit_pad(&mut self, track: TrackId, name: &str, audio: AudioId) -> Option<u8> {
+        let track = self.track_mut(track)?;
+        let Instrument::Kit { pads } = &mut track.instrument else {
+            return None;
+        };
+        if pads.len() >= crate::song::KIT_MAX_PADS {
+            return None;
+        }
+        let key = crate::song::free_kit_key(pads)?;
+        pads.push(crate::song::KitPad {
+            setting: PadSetting::new(key),
+            name: name.to_owned(),
+            audio,
+        });
+        pads.sort_by_key(|p| p.setting.key);
+        Some(key)
+    }
+
+    /// Removes a custom kit's pad with the hits on its row (so a sound
+    /// added later on that key does not inherit them), and its sound if
+    /// nothing else uses it.
+    pub fn remove_kit_pad(&mut self, track: TrackId, key: u8) {
+        let Some(t) = self.track_mut(track) else {
+            return;
+        };
+        let Instrument::Kit { pads } = &mut t.instrument else {
+            return;
+        };
+        pads.retain(|p| p.setting.key != key);
+        for pattern in self.patterns.iter_mut().filter(|p| p.track == Some(track)) {
+            if pattern.notes.iter().any(|n| n.key == key) {
+                Arc::make_mut(pattern).notes.retain(|n| n.key != key);
+            }
+        }
+        self.prune_audio();
     }
 
     /// A new, unique identifier.
@@ -586,7 +626,12 @@ impl Project {
         let used: HashSet<AudioId> = self
             .tracks
             .iter()
-            .flat_map(|t| t.clips.iter().filter_map(Clip::audio))
+            .flat_map(|t| {
+                t.clips
+                    .iter()
+                    .filter_map(Clip::audio)
+                    .chain(t.instrument.kit_pads().iter().map(|pad| pad.audio))
+            })
             .collect();
         self.audio.retain(|f| used.contains(&f.id));
     }
@@ -1574,6 +1619,77 @@ mod tests {
             clip.end(),
             Ticks::quarters(12),
             "its clip keeps its four bars"
+        );
+    }
+
+    #[test]
+    fn a_custom_kit_takes_sounds_on_free_keys_and_keeps_them_in_the_song() {
+        let mut project = Project::empty();
+        let kit = project.add_track("Kit", Instrument::Kit { pads: Vec::new() });
+        let file = |name: &str| AudioFile {
+            id: AudioId(0),
+            name: name.to_owned(),
+            file: format!("{name}.wav"),
+            frames: 100,
+            sample_rate: 48_000,
+            channels: 1,
+        };
+        let boom = project.add_audio_file(file("Boom"));
+        let clap = project.add_audio_file(file("Clap"));
+        assert_eq!(project.add_kit_pad(kit, "Boom", boom), Some(36));
+        assert_eq!(project.add_kit_pad(kit, "Clap", clap), Some(37));
+        project.prune_audio();
+        assert_eq!(project.audio.len(), 2, "pads keep their sounds");
+        let instrument = &project.track(kit).unwrap().instrument;
+        assert!(instrument.is_drums() && instrument.is_custom_kit());
+        let mut louder = instrument.pad(37);
+        louder.gain_db = 3.0;
+        project.track_mut(kit).unwrap().instrument.set_pad(louder);
+        assert_eq!(project.track(kit).unwrap().instrument.pad(37).gain_db, 3.0);
+
+        let beat = project.add_pattern_for(kit, "Beat", Ticks::WHOLE);
+        for key in [36, 37] {
+            project.add_note(
+                beat,
+                Note {
+                    id: NoteId(0),
+                    start: Ticks::ZERO,
+                    length: Ticks::QUARTER,
+                    key,
+                    velocity: 1.0,
+                    pitch_offset: 0.0,
+                },
+            );
+        }
+        project.remove_kit_pad(kit, 36);
+        let keys: Vec<u8> = project
+            .pattern(beat)
+            .unwrap()
+            .notes
+            .iter()
+            .map(|n| n.key)
+            .collect();
+        assert_eq!(keys, [37], "its hits go with it");
+        let names: Vec<&str> = project
+            .track(kit)
+            .unwrap()
+            .instrument
+            .kit_pads()
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(names, ["Clap"]);
+        assert_eq!(project.audio.len(), 1, "the removed pad's sound goes");
+        assert_eq!(
+            project.add_kit_pad(kit, "Boom again", clap),
+            Some(36),
+            "the freed key is taken again"
+        );
+        let piano = project.add_track("Piano", Instrument::builtin_piano());
+        assert_eq!(
+            project.add_kit_pad(piano, "No", clap),
+            None,
+            "only custom kits take pads"
         );
     }
 }

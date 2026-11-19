@@ -696,6 +696,11 @@ pub fn problem(problem: &daw_engine::Problem) -> String {
         P::PluginSettings { plugin, reason } => {
             format!("The plugin \"{plugin}\" did not take its saved settings ({reason})")
         }
+        P::PartlyRead {
+            sound,
+            left_out,
+            missing,
+        } => partly_read(sound, left_out, missing),
     }
 }
 
@@ -704,12 +709,11 @@ pub const LIBRARY: &str = "Library";
 pub const SHOW_LIBRARY: &str = "Show the sound library";
 pub const HIDE_LIBRARY: &str = "Hide the sound library";
 pub const ADD_SOUND_FOLDER: &str = "Add a folder…";
-pub const ADD_SOUND_FOLDER_HINT: &str =
-    "Add a folder of sounds, MIDI files or SoundFonts to the library (nothing is copied)";
-pub const LIBRARY_EMPTY: &str = "Add a folder of sounds to find, hear and use them here: WAV, AIFF, FLAC, MP3 and Ogg sounds, MIDI files and SoundFonts.";
+pub const ADD_SOUND_FOLDER_HINT: &str = "Add a folder of sounds, MIDI files or instruments (SoundFonts, SFZ) to the library (nothing is copied)";
+pub const LIBRARY_EMPTY: &str = "Add a folder of sounds to find, hear and use them here: WAV, AIFF, FLAC, MP3 and Ogg sounds, MIDI files, SoundFonts and SFZ instruments.";
 pub const LIBRARY_HINT: &str = "Click a sound to hear it · drag it onto the song, or double-click to add it at the play position";
 pub const LIBRARY_LISTING: &str = "Looking through the folder…";
-pub const LIBRARY_NOTHING_HERE: &str = "No sounds, MIDI files or SoundFonts here.";
+pub const LIBRARY_NOTHING_HERE: &str = "No sounds, MIDI files or instruments here.";
 pub const LIBRARY_UP: &str = "Up";
 pub const LIBRARY_UP_HINT: &str = "Back to the folder above";
 pub const LIBRARY_REFRESH: &str = "Look again";
@@ -722,10 +726,10 @@ pub const PLAY_SOUND: &str = "Play";
 pub const STOP_SOUND: &str = "Stop";
 pub const PREVIEW_TOO_LARGE: &str = "it is too large to play here; drag it onto the song instead";
 pub const SOUNDFONT: &str = "SoundFont";
-pub const ADD_SOUNDFONT: &str = "SoundFont…";
-pub const ADD_SOUNDFONT_HINT: &str = "Add a track playing a SoundFont (.sf2) file";
-pub const SOUNDFONT_FILE_TYPE: &str = "SoundFont";
-pub const CHOOSE_SOUNDFONT_TITLE: &str = "Choose a SoundFont";
+pub const ADD_SOUNDFONT: &str = "SoundFont or SFZ…";
+pub const ADD_SOUNDFONT_HINT: &str = "Play a .sf2 or .sfz instrument file";
+pub const SOUNDFONT_FILE_TYPE: &str = "SoundFont or SFZ instrument";
+pub const CHOOSE_SOUNDFONT_TITLE: &str = "Choose a SoundFont or an SFZ instrument";
 pub const PRESET: &str = "Preset";
 pub const PRESET_HINT: &str = "The sound of the SoundFont this track plays";
 pub const OPEN_TRACK_OR_PRESET_HINT: &str =
@@ -757,9 +761,152 @@ pub fn soundfont_track(file: &str) -> String {
     format!("SoundFont · {file}")
 }
 
+// SFZ instruments (decision 0024).
+pub const SFZ: &str = "SFZ instrument";
+pub const EDIT_ADD_SFZ: &str = "add SFZ instrument track";
+
+/// What an SFZ track plays, under its name (`reading` while its sounds are
+/// read).
+pub fn sfz_track(file: &str, reading: bool) -> String {
+    if reading {
+        format!("SFZ · {file} · reading…")
+    } else {
+        format!("SFZ · {file}")
+    }
+}
+
+/// The status line while instruments are read.
+pub fn reading_instruments(files: &[String]) -> String {
+    match files {
+        [one] => format!(
+            "Reading the instrument {}… its track plays once it is ready",
+            file_name(std::path::Path::new(one))
+        ),
+        many => format!(
+            "Reading {} instruments… their tracks play once they are ready",
+            many.len()
+        ),
+    }
+}
+
+/// What an SFZ instrument plays without, said once when it is ready.
+pub fn partly_read(
+    sound: &str,
+    left_out: &[daw_dsp::sampler::LeftOut],
+    missing: &[String],
+) -> String {
+    use daw_dsp::sampler::LeftOut as L;
+    let mut parts: Vec<String> = left_out
+        .iter()
+        .filter_map(|part| {
+            Some(
+                match part {
+                    L::Lfos => "LFOs (vibrato, tremolo)",
+                    L::Envelopes => "pitch envelopes",
+                    L::ControllerChanges => "changes made by controllers (the modulation wheel…)",
+                    L::Effects => "its own effects",
+                    L::Filters => "some of its filters",
+                    L::Equalizers => "its equalisers",
+                    L::Reversed => "sounds played backwards",
+                    L::LoopCrossfades => "smoothed loop joins",
+                    L::Keyswitches => "some keyswitches",
+                    L::Waves => "built-in waves other than the sine",
+                    L::EmbeddedSounds => "sounds stored inside the file",
+                    L::Other(_) => return None,
+                }
+                .to_owned(),
+            )
+        })
+        .collect();
+    let unknown: Vec<&str> = left_out
+        .iter()
+        .filter_map(|part| match part {
+            L::Other(name) => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    if !unknown.is_empty() {
+        parts.push(format!(
+            "settings it does not know ({})",
+            unknown.join(", ")
+        ));
+    }
+    let name = file_name(std::path::Path::new(sound));
+    let without = if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" plays without {}", parts.join(", "))
+    };
+    let gone = match missing {
+        [] => String::new(),
+        [one] => format!("; its sound file \"{one}\" is missing or damaged"),
+        [first, ..] => format!(
+            "; {} of its sound files are missing or damaged (\"{first}\"…)",
+            missing.len()
+        ),
+    };
+    format!("{name}{without}{gone}")
+}
+
 /// A preset of a SoundFont in the preset menu: its bank and number.
 pub fn preset_number(bank: u16, program: u8) -> String {
     format!("{bank}:{program:03}")
+}
+
+// Custom kits (decision 0025).
+pub const ADD_KIT: &str = "Custom kit";
+pub const ADD_KIT_HINT: &str = "A drum kit of your own sounds";
+pub const KIT_TRACK: &str = "My kit";
+pub const SOUND_FILE_TYPE: &str = "Sound";
+pub const CHOOSE_KIT_SOUNDS_TITLE: &str = "Choose sounds for the kit";
+pub const ADD_SOUNDS: &str = "Add sounds…";
+pub const ADD_SOUNDS_HINT: &str =
+    "Add sounds to this kit (choose many at once): each goes on its own key";
+pub const EMPTY_KIT_HINT: &str = "Add your sounds: each becomes a row here, on its own key";
+pub const EMPTY_KIT_DETAIL: &str =
+    "Click Add sounds… above, drop sound files here, or drag them from the sound library";
+pub const DROP_ON_KIT: &str = "Let go to add these sounds to the kit";
+pub const REMOVE_PAD: &str = "Remove from the kit";
+pub const REMOVE_PAD_HINT: &str = "The sound leaves the kit, with the hits on its row";
+pub const MAKE_KIT: &str = "Make a kit of these sounds";
+pub const MAKE_KIT_HINT: &str = "A custom kit with every sound in this folder, each on its own key";
+pub const EDIT_ADD_KIT: &str = "add custom kit";
+pub const EDIT_ADD_PAD: &str = "add sound to kit";
+pub const EDIT_REMOVE_PAD: &str = "remove sound from kit";
+
+/// The second line of a custom kit's empty step grid: the computer key
+/// that plays its first sound.
+pub fn kit_keys_hint(key: &str, name: &str) -> String {
+    format!(
+        "Or play your sounds on the computer keyboard: {key} plays {name}, the keys after it the next sounds"
+    )
+}
+
+/// The status line while sounds are being added to a custom kit.
+pub fn adding_kit_sounds(count: usize, kit: &str) -> String {
+    match count {
+        1 => format!("Adding a sound to {kit}…"),
+        n => format!("Adding {n} sounds to {kit}…"),
+    }
+}
+
+/// A sound added to a custom kit.
+pub fn added_to_kit(file: &str, kit: &str) -> String {
+    format!("Added {file} to {kit}")
+}
+
+/// A custom kit that cannot take more sounds.
+pub fn kit_full(kit: &str) -> String {
+    format!("{kit} is full: a kit holds at most 128 sounds, one on each key")
+}
+
+/// What a custom kit's track plays, under its name.
+pub fn custom_kit_description(count: usize) -> String {
+    match count {
+        0 => "Custom kit · no sounds yet".to_owned(),
+        1 => "Custom kit · 1 sound".to_owned(),
+        n => format!("Custom kit · {n} sounds"),
+    }
 }
 
 // The synth (decision 0019).
@@ -1041,6 +1188,9 @@ pub fn scan_problem(file: &str, problem: &daw_engine::ScanProblem) -> String {
         P::Crashed => format!("{file} crashed when it was checked"),
         P::NoAnswer => format!("{file} has no plugins inside"),
         P::Failed(reason) => format!("{file} could not be opened ({reason})"),
+        P::MissingLibrary(library) => format!(
+            "{file} needs {library}, a part of the system that is not installed: install it with your system's software manager (the plugin's install notes name the package)"
+        ),
     }
 }
 

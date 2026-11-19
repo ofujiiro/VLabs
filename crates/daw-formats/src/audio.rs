@@ -201,6 +201,45 @@ fn le32(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
 }
 
+/// What a WAV file tells a sampler (its `smpl` chunk): the key its sound
+/// is at, and its first loop.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SamplerInfo {
+    /// The key at which the sound plays at its own pitch.
+    pub root_key: Option<u8>,
+    /// The first loop: its first and last frame.
+    pub loop_frames: Option<(u64, u64)>,
+}
+
+/// Reads what a WAV file tells a sampler; nothing for other files, or a
+/// WAV file without a `smpl` chunk.
+pub fn sampler_info(bytes: &[u8]) -> SamplerInfo {
+    let mut info = SamplerInfo::default();
+    if AudioFormat::sniff(bytes) != Some(AudioFormat::Wav) {
+        return info;
+    }
+    let mut at = 12;
+    while at + 8 <= bytes.len() {
+        let size = le32(bytes, at + 4).unwrap_or(0) as usize;
+        let body_start = at + 8;
+        let body = &bytes[body_start..body_start.saturating_add(size).min(bytes.len())];
+        if &bytes[at..at + 4] == b"smpl" {
+            info.root_key = le32(body, 12)
+                .filter(|&key| key <= 127)
+                .and_then(|key| u8::try_from(key).ok());
+            if le32(body, 28).is_some_and(|loops| loops > 0)
+                && let (Some(start), Some(end)) = (le32(body, 44), le32(body, 48))
+                && end > start
+            {
+                info.loop_frames = Some((u64::from(start), u64::from(end)));
+            }
+            break;
+        }
+        at = body_start.saturating_add(size).saturating_add(size & 1);
+    }
+    info
+}
+
 /// The WAV format chunk's essentials.
 struct WavFormat {
     /// 1 for integers, 3 for floating point.

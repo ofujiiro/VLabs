@@ -55,15 +55,65 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
 - The owner decided (November 2026) not to bundle Wine and yabridge with
   the Linux build (decision 0023), and to drop the ".mse" question.
 
+- SFZ instruments (decision 0024), on branch `plugins-and-libraries`
+  (pull request to be opened): `daw-dsp::sampler` (the sampler and its
+  bank), `daw-formats::sfz` (the reader: levels, `#define`/`#include`,
+  sound paths found whatever their case, controllers at their starting
+  values, sounds decoded on several threads, at most 8 GB),
+  `Instrument::Sfz` (file format 7, with its sample file), the engine's
+  background reading (`SoundLibrary::set_sfz_reader`,
+  `set_background_loading`; `Problem::PartlyRead`), and in the window:
+  `.sfz` in the library, dropped or imported, **SoundFont or SFZ…** in the
+  chooser, a "Reading the instrument…" notice.
+- Checked for SFZ: `cargo xtask ci`; the reader against 18 free
+  instruments made by others (the CC0 Ganjo and Karoryfer Cowsynth from
+  the sfzinstruments collection, run with `VLABS_TEST_SFZ`): all read,
+  nothing missing, notes heard across each one's range; and the program on
+  the virtual screen: an instrument double-clicked and another dragged
+  from the library became tracks; middle C on Ganjo recorded at the pitch
+  of its own recording (267 Hz: that banjo was tuned a little sharp) and
+  A4 at 444 Hz; a Cowsynth organ, whose sustain is set by a controller's
+  starting value, held steady for 2.5 s then faded in its release; the
+  "plays without LFOs" notice for an instrument with a vibrato; and a song
+  with SFZ tracks recovered after the program was killed.
+- Custom kits (decision 0025, a beta tester's idea), same branch:
+  `Instrument::Kit { pads }` with `KitPad` (file format 7), the engine's
+  `kit_sampler`, sounds added through the audio import path
+  (`ImportPlace::pad_of`), the step grid built from rows, and in the
+  window: **Custom kit** in **+ Instrument…**, **Add sounds…**, drops and
+  library drags on the grid, **Make a kit of these sounds** on a library
+  folder, **Remove from the kit**. Checked: tests (model, engine renders,
+  DAWproject and file round trips, interface), and the program on the
+  virtual screen: a library folder made a kit of four rows, a beat clicked
+  in, and the recording had its hits every quarter of a second.
+- Plugins the owner tried (MT Power Drum Kit 2, Decent Sampler, DW-303,
+  Sienna Bass), same branch: plugin windows asking to be shown through
+  XEmbed are shown (MT Power Drum Kit 2's was blank); whether a plugin has
+  a window is asked once (the interface asked every frame, and a VST3
+  plugin answers by making a whole window: 0.6 s for MT Power Drum Kit 2,
+  which also undid its START button); VST3 bus layouts set, output silence
+  flags cleared, output parameter and event lists given; a plugin missing a
+  system library says which (`ScanProblem::MissingLibrary`); an opt-in
+  probe test (`VLABS_PROBE_PLUGINS`) plays reported plugins. Checked: MT
+  Power Drum Kit 2 in the program on its first run (language, START, then
+  three hits recorded) and the same in the probe; DW-303 plays once GTK and
+  WebKitGTK are installed. Decent Sampler stays silent until a library is
+  loaded in its window. Sienna Bass is a Windows VST2 plugin, which VLabs
+  does not support.
+
 ## Waiting on the owner
 
+- Open the pull request for `plugins-and-libraries` (SFZ instruments,
+  custom kits, the plugin fixes and the earlier doc updates), and its
+  hands-on check (ROADMAP.md, "Things to try", items 8, 10 and 11).
 - The hands-on checks of phases 3 to 6 and of the plugins round
   (ROADMAP.md, "things to try").
 
 ## Next
 
-- SFZ instruments (a sampler of their own), then the singing voices
-  (ROADMAP.md).
+- After the owner's checks close v1: the singing voices (ROADMAP.md).
+  Possible SFZ follow-ups: LFOs and pitch envelopes, streaming very large
+  instruments from the disk, previews in the library.
 
 ## Not verified (say so if asked)
 
@@ -79,6 +129,15 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   (no Wine on the test computer; yabridge is tested through a stand-in);
   installers on Windows and through Wine; the Plugins window's file and
   folder dialogs, and dropping files from a real file manager.
+- SFZ: the instrument chooser's file dialog (no dialog program on the
+  virtual screen; the chooser's path is tested), listening (pitch, levels
+  and envelopes were measured), very large commercial libraries (the
+  largest tried held 415 MB of sound), SFZ on Windows by hand (CI runs
+  every test on Windows).
+- Custom kits: the sound chooser's file dialog (the chooser's path is
+  tested), listening (hits and timing were measured).
+- Plugins the owner tried: Decent Sampler playing a library (its window and
+  file chooser work); the plugins on Windows.
 - From earlier phases: recording from a real microphone, the import file
   dialog, dragging files from a real file manager, phase 4 on Windows by
   hand, closing a plugin window with its own close button on a real
@@ -94,9 +153,14 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
 - Audio: no time-stretching, no input monitoring, no by-hand latency
   adjustment, no takes per loop pass, no multi-clip selection or clip copy
   and paste, sound kept in memory, recordings stored as WAV.
-- Plugins and libraries: no VST2, no SFZ, no preview of MIDI files or
-  SoundFonts, no waveforms in the library, large SoundFonts load on the
-  interface thread.
+- Plugins and libraries: no VST2, no preview of MIDI files, SoundFonts or
+  SFZ instruments, no waveforms in the library, large SoundFonts load on
+  the interface thread.
+- SFZ: no LFOs, pitch envelopes or effects; controllers fixed at their
+  starting values; all sound in memory (8 GB per instrument at most); an
+  instrument edited on the disk is read again only after a restart.
+- Custom kits: changing a pad's settings stops the kit's sounding hits; at
+  most 128 sounds; no waveforms.
 - Earlier: automation drawn, not recorded; no master-bus lanes; no instrument swap;
   plugins in-process; plugin latency not compensated.
 - On Windows, VST3 class ids are kept in the order the plugin reports them

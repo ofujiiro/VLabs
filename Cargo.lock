@@ -966,6 +966,7 @@ name = "daw-formats"
 version = "0.6.0"
 dependencies = [
  "claxon",
+ "daw-dsp",
  "daw-ident",
  "daw-model",
  "flacenc",

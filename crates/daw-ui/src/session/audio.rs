@@ -187,6 +187,7 @@ impl Session {
             let place = ImportPlace {
                 track: if index == 0 { track } else { None },
                 at,
+                pad_of: None,
             };
             self.audio.import(file, place);
         }
@@ -338,8 +339,12 @@ impl Session {
                                 sample_rate: imported.sample_rate,
                                 channels: imported.channels,
                             };
-                            self.place_sound(&file, place, 0, text::EDIT_IMPORT);
-                            self.set_status(text::imported(&file_name));
+                            if let Some(kit) = place.pad_of {
+                                self.add_imported_pad(kit, &file, &file_name);
+                            } else {
+                                self.place_sound(&file, place, 0, text::EDIT_IMPORT);
+                                self.set_status(text::imported(&file_name));
+                            }
                         }
                         Err(reason) => {
                             self.set_status(text::could_not_import(&file_name, &reason));
@@ -387,6 +392,7 @@ impl Session {
                     let place = ImportPlace {
                         track: Some(info.track),
                         at: info.at,
+                        pad_of: None,
                     };
                     let seconds = file.seconds_in(sound.frames - offset);
                     self.place_sound(&file, place, offset, text::EDIT_RECORD_SOUND);

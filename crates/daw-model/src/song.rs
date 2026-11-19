@@ -307,6 +307,45 @@ pub enum Instrument {
     Audio,
     /// The built-in subtractive synth (decision 0019).
     Synth(crate::synth::SynthSettings),
+    /// An SFZ instrument (decision 0024): sounds the person has, played by
+    /// the sampler as the `.sfz` file says.
+    Sfz {
+        /// Where the `.sfz` file is.
+        file: String,
+    },
+    /// A custom kit (decision 0025): the person's own sounds, one on each
+    /// key, played like a drum kit.
+    Kit {
+        /// Its pads, by key.
+        #[serde(default)]
+        pads: Vec<KitPad>,
+    },
+}
+
+/// One pad of a custom kit (decision 0025): a sound the person brought,
+/// played on its key, with the drum pads' settings.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct KitPad {
+    /// Its key, and its volume, position, pitch, length and mute.
+    pub setting: PadSetting,
+    /// Its name, as the step grid shows it.
+    pub name: String,
+    /// The song's audio file it plays.
+    pub audio: AudioId,
+}
+
+/// The key a custom kit's first pad takes (C1, the usual kick key).
+pub const KIT_FIRST_KEY: u8 = 36;
+
+/// The most pads a custom kit holds: one on each key.
+pub const KIT_MAX_PADS: usize = 128;
+
+/// The key a new pad of a custom kit takes: the first free one from C1 up,
+/// then below.
+pub fn free_kit_key(pads: &[KitPad]) -> Option<u8> {
+    (KIT_FIRST_KEY..=127)
+        .chain(0..KIT_FIRST_KEY)
+        .find(|key| pads.iter().all(|p| p.setting.key != *key))
 }
 
 impl Instrument {
@@ -327,9 +366,23 @@ impl Instrument {
         }
     }
 
-    /// Whether this is a drum kit.
+    /// Whether this is a drum kit: a bundled one, or a custom kit
+    /// (decision 0025), both played from the step grid.
     pub fn is_drums(&self) -> bool {
-        matches!(self, Self::Drums { .. })
+        matches!(self, Self::Drums { .. } | Self::Kit { .. })
+    }
+
+    /// Whether this is a custom kit (decision 0025).
+    pub fn is_custom_kit(&self) -> bool {
+        matches!(self, Self::Kit { .. })
+    }
+
+    /// A custom kit's pads (none for other instruments).
+    pub fn kit_pads(&self) -> &[KitPad] {
+        match self {
+            Self::Kit { pads } => pads,
+            _ => &[],
+        }
     }
 
     /// Whether the track plays audio clips rather than notes.
@@ -341,6 +394,14 @@ impl Instrument {
     pub fn synth(&self) -> Option<&crate::synth::SynthSettings> {
         match self {
             Self::Synth(settings) => Some(settings),
+            _ => None,
+        }
+    }
+
+    /// The `.sfz` file, if this is an SFZ instrument.
+    pub fn sfz_file(&self) -> Option<&str> {
+        match self {
+            Self::Sfz { file } => Some(file),
             _ => None,
         }
     }
@@ -374,20 +435,34 @@ impl Instrument {
                 .find(|p| p.key == key)
                 .copied()
                 .unwrap_or_else(|| PadSetting::new(key)),
-            Self::SoundFont { .. } | Self::Plugin(_) | Self::Audio | Self::Synth(_) => {
-                PadSetting::new(key)
-            }
+            Self::Kit { pads } => pads
+                .iter()
+                .find(|p| p.setting.key == key)
+                .map_or_else(|| PadSetting::new(key), |p| p.setting),
+            Self::SoundFont { .. }
+            | Self::Plugin(_)
+            | Self::Audio
+            | Self::Synth(_)
+            | Self::Sfz { .. } => PadSetting::new(key),
         }
     }
 
     /// Changes a pad's settings (drum kits only).
     pub fn set_pad(&mut self, setting: PadSetting) {
-        if let Self::Drums { pads, .. } = self {
-            pads.retain(|p| p.key != setting.key);
-            if setting != PadSetting::new(setting.key) {
-                pads.push(setting);
-                pads.sort_by_key(|p| p.key);
+        match self {
+            Self::Drums { pads, .. } => {
+                pads.retain(|p| p.key != setting.key);
+                if setting != PadSetting::new(setting.key) {
+                    pads.push(setting);
+                    pads.sort_by_key(|p| p.key);
+                }
             }
+            Self::Kit { pads } => {
+                if let Some(pad) = pads.iter_mut().find(|p| p.setting.key == setting.key) {
+                    pad.setting = setting;
+                }
+            }
+            _ => {}
         }
     }
 }

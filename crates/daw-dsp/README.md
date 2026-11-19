@@ -6,7 +6,9 @@ no plugin installed.
 ## What belongs here
 
 - **Instruments:** a SoundFont (.sf2) player, a drum sampler, a simple
-  subtractive synth (oscillators, filter, envelopes).
+  subtractive synth (oscillators, filter, envelopes), and a sampler that
+  plays banks of regions as SFZ instruments describe them (`sampler`; the
+  file formats crate reads the files into its banks).
 - **Effects:** EQ, compressor, reverb, delay, limiter.
 - The building blocks they share: filters, envelopes, oscillators, delay
   lines, gain and level measurement.
@@ -33,4 +35,5 @@ The bundled sounds themselves (the piano SoundFont, the drum kit) are files in
 
 Phase 1 (SoundFont player), phase 2 (drum sampler, effects), phase 4
 (audio buffers, rate conversion, waveforms), phase 6 (`synth`: the
-subtractive synth of decision 0019).
+subtractive synth of decision 0019), then `sampler` for SFZ instruments
+(decision 0024).

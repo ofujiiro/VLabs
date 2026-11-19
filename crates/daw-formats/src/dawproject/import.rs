@@ -513,6 +513,7 @@ impl<R: Read + Seek> Importer<'_, R> {
         {
             return Ok(match instrument {
                 Instrument::Synth(settings) => Instrument::Synth(settings.repaired()),
+                Instrument::Kit { pads } => self.kit(pads, &bytes)?,
                 other => other,
             });
         }
@@ -901,6 +902,17 @@ impl<R: Read + Seek> Importer<'_, R> {
             return Ok(None);
         };
         let external = audio.child("File").and_then(|f| f.flag("external")) == Some(true);
+        self.audio_entry(path, external)
+    }
+
+    /// An audio file of the project (an entry of the container, or a file
+    /// beside it when `external`), copied into the audio folder the first
+    /// time (`None` if it cannot be found or read).
+    fn audio_entry(
+        &mut self,
+        path: String,
+        external: bool,
+    ) -> Result<Option<AudioId>, DawProjectError> {
         if let Some(found) = self.audio.get(&path) {
             return Ok(*found);
         }
@@ -947,6 +959,34 @@ impl<R: Read + Seek> Importer<'_, R> {
         });
         self.audio.insert(path, Some(id));
         Ok(Some(id))
+    }
+
+    /// A custom kit (decision 0025): its pads, each with its sound brought in
+    /// from the file (the state names each pad's sound under `files`); a pad
+    /// whose sound is missing is left out.
+    fn kit(
+        &mut self,
+        pads: Vec<daw_model::KitPad>,
+        state: &[u8],
+    ) -> Result<Instrument, DawProjectError> {
+        let files = serde_json::from_slice::<serde_json::Value>(state)
+            .ok()
+            .and_then(|value| value.get("files").cloned())
+            .unwrap_or_default();
+        let mut kept = Vec::new();
+        for mut pad in pads {
+            let Some(path) = files
+                .get(pad.audio.0.to_string())
+                .and_then(serde_json::Value::as_str)
+            else {
+                continue;
+            };
+            if let Some(audio) = self.audio_entry(path.to_owned(), false)? {
+                pad.audio = audio;
+                kept.push(pad);
+            }
+        }
+        Ok(Instrument::Kit { pads: kept })
     }
 
     /// An automation lane.
