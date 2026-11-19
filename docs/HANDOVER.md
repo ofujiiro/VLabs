@@ -5,8 +5,8 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
 ## Done
 
 - Phases 0–5, merged into `main` (phase 5 is pull request 2, CI green on
-  Windows and Linux). The owner confirmed the phase 1 and 2 builds;
-  phases 3, 4 and 5 await their hands-on check.
+  Windows and Linux). The owner has tried every phase's
+  build: all works.
 - Phase 6, completing v1, merged into `main` (pull request 3): decisions
   0019–0022; the synth
   (`daw-dsp::synth`, `daw-model::SynthSettings`, engine settings and
@@ -102,20 +102,23 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   loaded in its window. Sienna Bass is a Windows VST2 plugin, which VLabs
   does not support.
 
-## Waiting on the owner
+## Checked by the owner
 
-- The hands-on check of SFZ instruments, custom kits and the plugin fixes
-  (pull request 7; ROADMAP.md, "Things to try", items 8, 10 and 11).
-- The hands-on checks of phases 3 to 6 and of the plugins round
-  (ROADMAP.md, "things to try").
+- The owner tried every milestone build (phases 1 to 6), the plugins
+  round, SFZ instruments, custom kits and the plugin fixes (November
+  2026): everything works. That closes v1.
 
 ## Next
 
-- After the owner's checks close v1: the singing voices (ROADMAP.md).
+- The owner's request: a new song, and a song opened or recovered, starts
+  on the whole song (the song view), not on an instrument's piano roll or
+  step grid (ROADMAP.md, "After v1"). Today a new song opens on the drum
+  step grid.
+- Then the singing voices (ROADMAP.md).
   Possible SFZ follow-ups: LFOs and pitch envelopes, streaming very large
   instruments from the disk, previews in the library.
 
-## Not verified (say so if asked)
+## Not verified by the development session (say so if asked)
 
 - The installer and the AppImage on real machines. CI made the AppImage;
   the Windows installer's fix was merged without my checking its CI run. Running the

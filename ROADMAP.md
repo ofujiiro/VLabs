@@ -7,11 +7,11 @@ run and a checklist of things to try. Status is updated at every milestone.
 built and merged (pull requests 1 to 7), including SFZ instruments
 (decision 0024), custom kits (a beta tester's idea, decision 0025) and
 fixes for plugins the owner tried (MT Power Drum Kit 2, Decent Sampler),
-merged in pull request 7. The owner's hands-on checks close v1;
-the singing voices come after v1. The owner confirmed the phase 1 and 2
-builds; the phase 3 to 6 builds and the plugins round await their
-hands-on check. The repository has been public since November 2026 (the
-owner's decision).
+merged in pull request 7. The owner has tried every milestone build and
+the plugins round (November 2026): everything works, which closes v1.
+Next: a new or opened song starts on the whole song, not an
+instrument (the owner's request); then the singing voices. The
+repository has been public since November 2026 (the owner's decision).
 
 ## Phase 0 — Foundations and risk spikes
 
@@ -47,8 +47,7 @@ owner's decision).
 - [x] Our own shortcut scheme, rebindable, shown in tooltips and menus, never
       clashing with note keys
 - [x] Autosave and crash recovery, settings remembered (decision 0013)
-- [x] The owner's hands-on check of the milestone build on Linux (Windows
-      still to be tried)
+- [x] The owner's hands-on check of the milestone build
 
 ### Phase 1 milestone: things to try
 
@@ -171,7 +170,7 @@ owner's decision).
       other tracks; the missing plugin is named
 - [x] File format version 3 (plugin settings as entries of their own), with
       migration of phase 1 and 2 songs
-- [ ] The owner's hands-on check of the milestone build
+- [x] The owner's hands-on check of the milestone build
 
 ### Phase 3 milestone: things to try
 
@@ -254,7 +253,7 @@ installers put them in the usual folders.
       its own speed
 - [x] Songs open and save with their sound; autosave keeps it; a recovered
       song comes back with it
-- [ ] The owner's hands-on check of the milestone build
+- [x] The owner's hands-on check of the milestone build
 
 ### Phase 4 milestone: things to try
 
@@ -346,7 +345,7 @@ microphone back to you, and speakers would be recorded too.
 - [x] Patterns of any length (drag the end of the pattern): patterns of
       different lengths turn against each other
 - [x] File format version 5, with migration of phase 1 to 4 songs
-- [ ] The owner's hands-on check of the milestone build
+- [x] The owner's hands-on check of the milestone build
 
 ### Phase 5 milestone: things to try
 
@@ -438,7 +437,7 @@ microphone back to you, and speakers would be recorded too.
       the Linux AppImage, built by "Program builds"; generated licence
       notices in every release; the user guide (F1 opens it)
 - [x] Version 0.6.0
-- [ ] The owner's hands-on check of the milestone build
+- [x] The owner's hands-on check of the milestone build
 
 ### Phase 6 milestone: things to try
 
@@ -602,6 +601,18 @@ request 4).
   when it is added or when a song using it opens.
 - Wine and yabridge are not bundled with the Linux version (the owner's
   decision, November 2026): the Plugins window says how to install them.
+
+### Checked
+
+- [x] The owner's hands-on check of the plugins round, SFZ instruments,
+      custom kits and the plugin fixes: everything tried works
+      (November 2026).
+
+## After v1 — Opening on the whole song (the owner's request, November 2026)
+
+- [ ] A new song, and a song opened from a file or recovered, starts on
+      the whole song (the song view), not on an instrument's piano roll
+      or step grid. Today a new song opens on the drum step grid.
 
 ## After v1 — Singing voices (the owner's request, November 2026)
 
