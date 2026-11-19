@@ -3194,7 +3194,21 @@ fn vibrato_colour_and_breath_shape_the_selected_notes() {
     f.click(remove, Modifiers::NONE);
     assert_eq!(f.expression(c4).vibrato, None);
     assert!(f.expression(e4).vibrato.is_some(), "E4 keeps its own");
-    // The lane under a voice's notes shows each note's colour and breath.
+    // The lane under a voice's notes shows each note's colour and breath,
+    // beside velocity and tempo: all four fit beside the lane.
+    for lane in [
+        text::LANE_VELOCITY,
+        text::LANE_COLOUR,
+        text::LANE_BREATH,
+        text::LANE_TEMPO,
+    ] {
+        let button = f.harness.get_by_label(lane).rect();
+        assert!(
+            button.bottom() <= f.roll().bottom() && button.height() >= 14.0,
+            "{lane}: {button:?} in {:?}",
+            f.roll()
+        );
+    }
     f.harness.get_by_label(text::LANE_COLOUR).click();
     f.harness.run_steps(2);
     let lane_bottom = f.roll().bottom() - 4.0;

@@ -493,6 +493,11 @@ impl PianoRoll {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             ui.spacing_mut().button_padding.x = 3.0;
             ui.spacing_mut().item_spacing.y = if voice { 2.0 } else { 4.0 };
+            if voice {
+                // Four choices: compact, so the last (Tempo) fits the lane.
+                ui.spacing_mut().interact_size.y = 18.0;
+                ui.spacing_mut().button_padding.y = 1.0;
+            }
             ui.vertical(|ui| {
                 for (kind, name, hint, label) in choices {
                     let chosen = shown == kind;
@@ -1555,14 +1560,27 @@ impl PianoRoll {
         painter.add(Shape::mesh(mesh));
         self.paint_stamp(ui, layout, session);
         let font = FontId::proportional((self.key_height - 4.0).clamp(9.0, size::SMALL));
+        // In the Pitch mode the sung line and its handles run through the
+        // notes: their lyrics go just under them, in the text colour.
+        let pitch_mode = session.pitch_mode();
         for (body, name) in labels {
-            painter.text(
-                pos2(body.left() + 4.0, body.center().y),
-                Align2::LEFT_CENTER,
-                name,
-                font.clone(),
-                p.on_accent,
-            );
+            if pitch_mode {
+                painter.text(
+                    body.left_bottom() + vec2(2.0, 1.0),
+                    Align2::LEFT_TOP,
+                    name,
+                    font.clone(),
+                    p.text_weak,
+                );
+            } else {
+                painter.text(
+                    pos2(body.left() + 4.0, body.center().y),
+                    Align2::LEFT_CENTER,
+                    name,
+                    font.clone(),
+                    p.on_accent,
+                );
+            }
         }
 
         if let Drag::Select { origin, .. } = &self.drag
