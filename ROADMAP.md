@@ -4,11 +4,10 @@ The phases come from the project brief. Each ends with a build the owner can
 run and a checklist of things to try. Status is updated at every milestone.
 
 **Now:** phases 0 to 6 and the plugins and sound libraries round are
-built and merged (pull requests 1 to 5). SFZ instruments, the last part of
-that round (decision 0024), custom kits (a beta tester's idea, decision
-0025) and fixes for plugins the owner tried (MT Power Drum Kit 2, Decent
-Sampler) are built on branch `plugins-and-libraries`, waiting for their
-pull request. Then the owner's hands-on checks close v1;
+built and merged (pull requests 1 to 7), including SFZ instruments
+(decision 0024), custom kits (a beta tester's idea, decision 0025) and
+fixes for plugins the owner tried (MT Power Drum Kit 2, Decent Sampler),
+merged in pull request 7. The owner's hands-on checks close v1;
 the singing voices come after v1. The owner confirmed the phase 1 and 2
 builds; the phase 3 to 6 builds and the plugins round await their
 hands-on check. The repository has been public since November 2026 (the
@@ -506,18 +505,18 @@ request 4).
 - [x] AIFF files read (import, library).
 - [x] SoundFont (`.sf2`) instrument tracks, with their presets in the track
       menu.
-- [x] SFZ instruments (decision 0024; on branch `plugins-and-libraries`,
-      pull request to be opened): `.sfz` files in the library, dropped,
-      imported or chosen in **+ Instrument…** (now **SoundFont or SFZ…**)
-      become tracks played by a new built-in sampler; read in the
-      background, however large; what an instrument uses that VLabs does
-      not play is said once; file format version 7.
-- [x] Custom kits (decision 0025; same branch): **Custom kit** in
+- [x] SFZ instruments (decision 0024; merged in pull request 7): `.sfz`
+      files in the library, dropped, imported or chosen in
+      **+ Instrument…** (now **SoundFont or SFZ…**) become tracks played
+      by a new built-in sampler; read in the background, however large;
+      what an instrument uses that VLabs does not play is said once;
+      file format version 7.
+- [x] Custom kits (decision 0025; pull request 7): **Custom kit** in
       **+ Instrument…**, or **Make a kit of these sounds** on a library
       folder, makes a drum track of your own sounds, one pad per sound, with
       beats on the step grid; more sounds by **Add sounds…**, dropping or
       dragging from the library; the sounds are kept in the song.
-- [x] Plugins the owner tried (same branch): plugin windows that ask to be
+- [x] Plugins the owner tried (pull request 7): plugin windows that ask to be
       shown on Linux are shown (MT Power Drum Kit 2's window was blank);
       the program no longer builds a plugin's window on every frame to ask
       whether it has one (it crawled with MT Power Drum Kit 2, whose START

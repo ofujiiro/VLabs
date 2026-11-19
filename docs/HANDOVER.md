@@ -55,8 +55,9 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
 - The owner decided (November 2026) not to bundle Wine and yabridge with
   the Linux build (decision 0023), and to drop the ".mse" question.
 
-- SFZ instruments (decision 0024), on branch `plugins-and-libraries`
-  (pull request to be opened): `daw-dsp::sampler` (the sampler and its
+- SFZ instruments (decision 0024), merged into `main`
+  (pull request 7; CI green on the pull
+  request and on `main`): `daw-dsp::sampler` (the sampler and its
   bank), `daw-formats::sfz` (the reader: levels, `#define`/`#include`,
   sound paths found whatever their case, controllers at their starting
   values, sounds decoded on several threads, at most 8 GB),
@@ -76,7 +77,7 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   starting value, held steady for 2.5 s then faded in its release; the
   "plays without LFOs" notice for an instrument with a vibrato; and a song
   with SFZ tracks recovered after the program was killed.
-- Custom kits (decision 0025, a beta tester's idea), same branch:
+- Custom kits (decision 0025, a beta tester's idea), pull request 7:
   `Instrument::Kit { pads }` with `KitPad` (file format 7), the engine's
   `kit_sampler`, sounds added through the audio import path
   (`ImportPlace::pad_of`), the step grid built from rows, and in the
@@ -87,7 +88,7 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
   virtual screen: a library folder made a kit of four rows, a beat clicked
   in, and the recording had its hits every quarter of a second.
 - Plugins the owner tried (MT Power Drum Kit 2, Decent Sampler, DW-303,
-  Sienna Bass), same branch: plugin windows asking to be shown through
+  Sienna Bass), pull request 7: plugin windows asking to be shown through
   XEmbed are shown (MT Power Drum Kit 2's was blank); whether a plugin has
   a window is asked once (the interface asked every frame, and a VST3
   plugin answers by making a whole window: 0.6 s for MT Power Drum Kit 2,
@@ -103,9 +104,8 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
 
 ## Waiting on the owner
 
-- Open the pull request for `plugins-and-libraries` (SFZ instruments,
-  custom kits, the plugin fixes and the earlier doc updates), and its
-  hands-on check (ROADMAP.md, "Things to try", items 8, 10 and 11).
+- The hands-on check of SFZ instruments, custom kits and the plugin fixes
+  (pull request 7; ROADMAP.md, "Things to try", items 8, 10 and 11).
 - The hands-on checks of phases 3 to 6 and of the plugins round
   (ROADMAP.md, "things to try").
 
