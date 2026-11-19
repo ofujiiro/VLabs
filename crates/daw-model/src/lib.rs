@@ -4,6 +4,7 @@
 
 mod automation;
 mod document;
+pub mod expression;
 pub mod lyrics;
 mod mixer;
 mod plugin;

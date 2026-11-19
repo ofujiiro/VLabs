@@ -21,7 +21,7 @@ use crate::atomic::write_atomically_with;
 /// The version of the file format this program writes. Every version ever
 /// released keeps sample files in `tests/data`, and a test proves they still
 /// open.
-pub const FORMAT_VERSION: u32 = 9;
+pub const FORMAT_VERSION: u32 = 10;
 
 /// The name of the song description inside the container.
 const PROJECT_ENTRY: &str = "project.json";
@@ -339,7 +339,10 @@ fn migrate(value: Value, from: u32) -> Result<Value, FileError> {
     // glides are straight, which is what the bend's default says.
     // Version 9 added singing voices and lyrics (decision 0027); older
     // files have neither.
-    // Each future format change adds a step here: `10 => migrate_9_to_10(value)`.
+    // Version 10 added how each note is sung (decision 0028: pitch points,
+    // vibrato, colour, breath); older notes are sung the plain way, which
+    // is what an absent expression says.
+    // Each future format change adds a step here: `11 => migrate_10_to_11(value)`.
     Ok(value)
 }
 
@@ -354,8 +357,15 @@ fn repair(project: &mut Project) {
     for pattern in &mut project.patterns {
         let pattern = std::sync::Arc::make_mut(pattern);
         pattern.sort_notes();
-        // Lyrics of notes that are not there are dropped.
-        pattern.tidy_lyrics();
+        // Lyrics and expression of notes that are not there are dropped,
+        // and expression numbers are kept in their ranges.
+        pattern.tidy_note_data();
+        let sung: Vec<_> = std::mem::take(&mut pattern.expression)
+            .into_iter()
+            .collect();
+        for (id, expression) in sung {
+            pattern.set_expression(id, expression);
+        }
     }
     // The synth's numbers stay in their ranges, whatever wrote them.
     for track in &mut project.tracks {

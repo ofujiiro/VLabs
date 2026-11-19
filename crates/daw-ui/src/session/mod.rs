@@ -506,6 +506,7 @@ impl Session {
                 step: daw_model::default_step(),
                 swing: daw_model::Swing::default(),
                 lyrics: std::collections::BTreeMap::new(),
+                expression: std::collections::BTreeMap::new(),
             })
         })
     }

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::automation::{AutomationLane, AutomationTarget};
+use crate::expression::NoteExpression;
 use crate::mixer::{ChainPlace, Effect, EffectKind, LimiterSettings, MasterBus};
 use crate::song::{
     AudioFile, AudioId, ChannelStrip, Clip, ClipContent, ClipId, EffectId, Instrument, MAX_KEY,
@@ -200,6 +201,7 @@ impl Project {
             step: default_step(),
             swing: Swing::default(),
             lyrics: std::collections::BTreeMap::new(),
+            expression: std::collections::BTreeMap::new(),
         }));
         id
     }
@@ -226,6 +228,7 @@ impl Project {
         let original = self.pattern(id)?.clone();
         let copy = PatternId(self.allocate_id());
         let mut lyrics = std::collections::BTreeMap::new();
+        let mut expression = std::collections::BTreeMap::new();
         let notes: Vec<Note> = original
             .notes
             .iter()
@@ -233,6 +236,9 @@ impl Project {
                 let id = NoteId(self.allocate_id());
                 if let Some(lyric) = original.lyric(n.id) {
                     lyrics.insert(id, lyric.to_owned());
+                }
+                if let Some(sung) = original.expression(n.id) {
+                    expression.insert(id, sung.clone());
                 }
                 Note { id, ..*n }
             })
@@ -242,6 +248,7 @@ impl Project {
             name: name.to_owned(),
             notes,
             lyrics,
+            expression,
             ..original
         }));
         Some(copy)
@@ -309,7 +316,7 @@ impl Project {
         let wanted = IdSet::new(ids);
         if let Some(pattern) = self.pattern_mut(pattern) {
             pattern.notes.retain(|n| !wanted.contains(n.id));
-            pattern.tidy_lyrics();
+            pattern.tidy_note_data();
         }
     }
 
@@ -319,6 +326,40 @@ impl Project {
         if let Some(pattern) = self.pattern_mut(pattern) {
             for (id, lyric) in lyrics {
                 pattern.set_lyric(*id, lyric);
+            }
+        }
+    }
+
+    /// Sets how notes are sung (decision 0028); the plain way removes a
+    /// note's own.
+    pub fn set_expressions(
+        &mut self,
+        pattern: PatternId,
+        expressions: &[(NoteId, NoteExpression)],
+    ) {
+        if let Some(pattern) = self.pattern_mut(pattern) {
+            for (id, expression) in expressions {
+                pattern.set_expression(*id, expression.clone());
+            }
+        }
+    }
+
+    /// Changes how notes are sung: `change` sees each note's expression
+    /// (the plain one if it has none), which is then kept in range.
+    pub fn update_expressions(
+        &mut self,
+        pattern: PatternId,
+        ids: &[NoteId],
+        mut change: impl FnMut(&Note, &mut NoteExpression),
+    ) {
+        if let Some(pattern) = self.pattern_mut(pattern) {
+            for id in ids {
+                let Some(note) = pattern.note(*id).copied() else {
+                    continue;
+                };
+                let mut expression = pattern.expression(*id).cloned().unwrap_or_default();
+                change(&note, &mut expression);
+                pattern.set_expression(*id, expression);
             }
         }
     }
@@ -1708,5 +1749,70 @@ mod tests {
             None,
             "only custom kits take pads"
         );
+    }
+
+    #[test]
+    fn a_note_s_expression_stays_with_it_and_goes_with_it() {
+        use crate::expression::{NoteExpression, PitchPoint, Vibrato};
+        let mut project = Project::empty();
+        let voice = project.add_track(
+            "Voice",
+            Instrument::Voice {
+                voicebank: "Uta".to_owned(),
+            },
+        );
+        let pattern = project.add_pattern_for(voice, "Verse", Ticks::WHOLE);
+        let ids = project.add_notes(
+            pattern,
+            &[
+                Note {
+                    id: NoteId(0),
+                    start: Ticks::ZERO,
+                    length: Ticks::QUARTER,
+                    key: 60,
+                    velocity: 0.8,
+                    pitch_offset: 0.0,
+                },
+                Note {
+                    id: NoteId(0),
+                    start: Ticks::QUARTER,
+                    length: Ticks::QUARTER,
+                    key: 62,
+                    velocity: 0.8,
+                    pitch_offset: 0.0,
+                },
+            ],
+        );
+        let bent = NoteExpression {
+            pitch: vec![PitchPoint::new(-30.0, 0.0), PitchPoint::new(60.0, 25.0)],
+            vibrato: Some(Vibrato::default()),
+            ..NoteExpression::default()
+        };
+        project.set_expressions(pattern, &[(ids[0], bent.clone())]);
+        project.update_expressions(pattern, &ids, |_, e| e.breath = 0.5);
+        let sung = project.pattern(pattern).unwrap();
+        assert_eq!(sung.expression(ids[0]).unwrap().pitch, bent.pitch);
+        assert_eq!(sung.expression(ids[1]).unwrap().breath, 0.5);
+        // Back to the plain way, nothing is kept.
+        project.update_expressions(pattern, &[ids[1]], |_, e| e.breath = 0.0);
+        assert!(
+            project
+                .pattern(pattern)
+                .unwrap()
+                .expression(ids[1])
+                .is_none()
+        );
+        // A copy of the pattern sings the same way.
+        let copy = project.duplicate_pattern(pattern, "Verse 2").unwrap();
+        let copied = project.pattern(copy).unwrap();
+        let first = copied.notes[0].id;
+        assert_ne!(first, ids[0]);
+        assert_eq!(copied.expression(first).unwrap().breath, 0.5);
+        // A note removed takes its expression with it.
+        project.remove_notes(pattern, &[ids[0]]);
+        assert!(project.pattern(pattern).unwrap().expression.is_empty());
+        // A note the pattern does not have gets none.
+        project.set_expressions(pattern, &[(NoteId(999), bent)]);
+        assert!(project.pattern(pattern).unwrap().expression.is_empty());
     }
 }

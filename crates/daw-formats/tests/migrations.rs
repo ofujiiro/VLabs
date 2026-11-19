@@ -16,6 +16,7 @@
 use std::path::PathBuf;
 
 use daw_formats::{FORMAT_VERSION, load_project, save_project};
+use daw_model::expression::{NoteExpression, PitchPoint, PitchShape, Vibrato};
 use daw_model::{
     ACOUSTIC_KIT, AudioFile, AudioId, AutomationLane, AutomationPoint, AutomationTarget,
     ChainPlace, ClipContent, DEFAULT_VELOCITY, EffectKind, EqSettings, Instrument, Note, NoteId,
@@ -88,7 +89,8 @@ fn write_hum(folder: &std::path::Path) {
 /// version 6 a track of the built-in synth with a lane for its cutoff;
 /// version 7 a track playing an SFZ instrument, and a custom kit whose pad
 /// plays the version 4 sample's sound; version 8 a bent tempo glide;
-/// version 9 a singing voice whose notes have lyrics).
+/// version 9 a singing voice whose notes have lyrics; version 10 how those
+/// notes are sung: a bent pitch with vibrato, a colour, a breath).
 fn reference_project() -> Project {
     let mut project = Project::starter("Pattern 1", "Piano");
     let (_, pattern) = project.first_pattern().unwrap();
@@ -329,7 +331,52 @@ fn add_voice(project: &mut Project) {
         lyrics.push((id, (*lyric).to_owned()));
     }
     project.set_lyrics(pattern, &lyrics);
+    // Version 10: how the notes are sung (decision 0028).
+    let ids: Vec<NoteId> = lyrics.iter().map(|(id, _)| *id).collect();
+    project.set_expressions(
+        pattern,
+        &[
+            (ids[0], sample_expression()),
+            (
+                ids[1],
+                NoteExpression {
+                    colour: -0.5,
+                    ..NoteExpression::default()
+                },
+            ),
+            (
+                ids[2],
+                NoteExpression {
+                    breath: 0.25,
+                    ..NoteExpression::default()
+                },
+            ),
+        ],
+    );
     project.add_clip(voice, Ticks::ZERO, Ticks::WHOLE, pattern);
+}
+
+/// The version 10 sample's first sung note: a scoop with a straight piece,
+/// and a vibrato.
+fn sample_expression() -> NoteExpression {
+    NoteExpression {
+        pitch: vec![
+            PitchPoint::new(0.0, -150.0),
+            PitchPoint {
+                ms: 80.0,
+                cents: 20.0,
+                shape: PitchShape::Straight,
+            },
+            PitchPoint::new(160.0, 0.0),
+        ],
+        vibrato: Some(Vibrato {
+            depth: 40.0,
+            rate: 6.0,
+            start: 0.15,
+            fade_in: 0.1,
+        }),
+        ..NoteExpression::default()
+    }
 }
 
 /// The version 9 sample's voice came back, lyrics and all (and older
@@ -353,6 +400,21 @@ fn check_voice(project: &Project, version: u32, path: &std::path::Path) {
         .map(|n| pattern.lyric(n.id).unwrap_or(""))
         .collect();
     assert_eq!(sung, ["ka", "さ", "ne"], "{name}");
+    let expressions: Vec<Option<&NoteExpression>> = pattern
+        .notes
+        .iter()
+        .map(|n| pattern.expression(n.id))
+        .collect();
+    if version < 10 {
+        assert!(
+            expressions.iter().all(Option::is_none),
+            "{name}: sung the plain way before version 10"
+        );
+        return;
+    }
+    assert_eq!(expressions[0], Some(&sample_expression()), "{name}");
+    assert_eq!(expressions[1].map(|e| e.colour), Some(-0.5), "{name}");
+    assert_eq!(expressions[2].map(|e| e.breath), Some(0.25), "{name}");
 }
 
 /// The version 8 sample's bent glide came back; older glides are all

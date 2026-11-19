@@ -7,6 +7,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::expression::NoteExpression;
 use crate::time::{Region, Ticks};
 
 macro_rules! id_type {
@@ -116,6 +117,10 @@ pub struct Pattern {
     /// that have a lyric of their own, by note.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub lyrics: BTreeMap<NoteId, String>,
+    /// How its notes are sung, for a voice (decision 0028): only the notes
+    /// sung some other way than the plain one, by note.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub expression: BTreeMap<NoteId, NoteExpression>,
 }
 
 /// The step length of a new pattern: a sixteenth note.
@@ -285,13 +290,31 @@ impl Pattern {
         }
     }
 
-    /// Forgets the lyrics of notes that are gone.
-    pub fn tidy_lyrics(&mut self) {
-        if self.lyrics.is_empty() {
+    /// How a note is sung (decision 0028), if some other way than the
+    /// plain one.
+    pub fn expression(&self, id: NoteId) -> Option<&NoteExpression> {
+        self.expression.get(&id)
+    }
+
+    /// Sets how a note is sung (its numbers kept in their ranges); the
+    /// plain way removes it. Ignored for a note the pattern does not have.
+    pub fn set_expression(&mut self, id: NoteId, expression: NoteExpression) {
+        let expression = expression.sanitized();
+        if expression.is_plain() {
+            self.expression.remove(&id);
+        } else if self.note(id).is_some() {
+            self.expression.insert(id, expression);
+        }
+    }
+
+    /// Forgets the lyrics and expression of notes that are gone.
+    pub fn tidy_note_data(&mut self) {
+        if self.lyrics.is_empty() && self.expression.is_empty() {
             return;
         }
         let ids: std::collections::HashSet<NoteId> = self.notes.iter().map(|n| n.id).collect();
         self.lyrics.retain(|id, _| ids.contains(id));
+        self.expression.retain(|id, _| ids.contains(id));
     }
 
     /// The span actually covered by notes, if there are any.
