@@ -322,3 +322,53 @@ fn hostile_files_are_refused() {
     }
     let _ = midi::import(&noise);
 }
+
+#[test]
+fn a_voice_s_lyrics_go_out_and_come_back_on_their_notes() {
+    let mut project = Project::empty();
+    let voice = project.add_track(
+        "Uta",
+        Instrument::Voice {
+            voicebank: "Uta".to_owned(),
+        },
+    );
+    let verse = project.add_pattern_for(voice, "Verse", Ticks::WHOLE);
+    let ids = project.add_notes(
+        verse,
+        &[
+            note(Ticks::ZERO, Ticks::QUARTER, 69),
+            note(Ticks::QUARTER, Ticks::QUARTER, 71),
+            note(Ticks::QUARTER * 2, Ticks::QUARTER, 72),
+        ],
+    );
+    // Two lyrics of their own (one in kana); the last note sings "a".
+    project.set_lyrics(
+        verse,
+        &[(ids[0], "ka".to_owned()), (ids[1], "さ".to_owned())],
+    );
+    project.add_clip(voice, Ticks::ZERO, Ticks::WHOLE * 2, verse);
+    let file = midi::song_to_midi(&project);
+    let track = &file.tracks[1];
+    let lyrics: Vec<(u64, &str)> = track
+        .events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::Lyric(lyric) => Some((e.tick, lyric.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        lyrics,
+        [(0, "ka"), (960, "さ"), (3840, "ka"), (4800, "さ")],
+        "on each repeat, just before their notes"
+    );
+    let bytes = midi::write(&file);
+    let song = midi::import(&bytes).unwrap();
+    let back = song.into_project(name, "Pattern 1");
+    let pattern = back.patterns.iter().find(|p| !p.notes.is_empty()).unwrap();
+    let read_back: Vec<Option<&str>> = pattern.notes.iter().map(|n| pattern.lyric(n.id)).collect();
+    assert_eq!(
+        read_back,
+        [Some("ka"), Some("さ"), None, Some("ka"), Some("さ"), None]
+    );
+}

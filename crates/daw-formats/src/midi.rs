@@ -121,6 +121,9 @@ pub enum EventKind {
     /// The track's name (or, in the first track of a format 1 file, the
     /// song's).
     TrackName(String),
+    /// The lyric of the note that starts at the same moment (decision
+    /// 0027: what a voice sings).
+    Lyric(String),
 }
 
 /// One track of a MIDI file.
@@ -388,6 +391,14 @@ fn meta_event(kind: u8, data: &[u8]) -> Option<EventKind> {
                 .take(200)
                 .collect(),
         )),
+        (0x05, lyric) => {
+            let lyric: String = String::from_utf8_lossy(lyric)
+                .trim()
+                .chars()
+                .take(64)
+                .collect();
+            (!lyric.is_empty()).then_some(EventKind::Lyric(lyric))
+        }
         _ => None,
     }
 }
@@ -414,14 +425,16 @@ fn push_vlq(out: &mut Vec<u8>, value: u32) {
 }
 
 /// The order of events at the same tick: names and the conductor's
-/// changes first, then note ends, then program changes, then note starts.
+/// changes first, then note ends, then program changes, then lyrics just
+/// before the notes they belong to, then note starts.
 fn event_order(kind: &EventKind) -> u8 {
     match kind {
         EventKind::TrackName(_) => 0,
         EventKind::Tempo(_) | EventKind::TimeSignature { .. } | EventKind::KeySignature { .. } => 1,
         EventKind::NoteOff { .. } => 2,
         EventKind::Program { .. } => 3,
-        EventKind::NoteOn { .. } => 4,
+        EventKind::Lyric(_) => 4,
+        EventKind::NoteOn { .. } => 5,
     }
 }
 
@@ -501,14 +514,21 @@ fn write_event(body: &mut Vec<u8>, kind: &EventKind) {
             let sharps = *sharps as u8;
             body.extend_from_slice(&[0xFF, 0x59, 0x02, sharps, u8::from(*minor)]);
         }
-        EventKind::TrackName(name) => {
-            let bytes = name.as_bytes();
-            let length = u32::try_from(bytes.len().min(0xFFFF)).unwrap_or(0);
-            body.extend_from_slice(&[0xFF, 0x03]);
-            push_vlq(body, length);
-            body.extend_from_slice(&bytes[..length as usize]);
-        }
+        EventKind::TrackName(name) => write_text(body, 0x03, name),
+        EventKind::Lyric(lyric) => write_text(body, 0x05, lyric),
     }
+}
+
+/// A meta event of text (UTF-8, as most programs now write it).
+fn write_text(body: &mut Vec<u8>, kind: u8, text: &str) {
+    let mut end = text.len().min(0xFFFF);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let bytes = &text.as_bytes()[..end];
+    body.extend_from_slice(&[0xFF, kind]);
+    push_vlq(body, u32::try_from(bytes.len()).unwrap_or(0));
+    body.extend_from_slice(bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -668,12 +688,19 @@ pub fn song_to_midi(project: &Project) -> MidiFile {
                 },
             });
         }
-        let mut notes: Vec<(u64, u64, u8, u8)> = track
+        // Each note with its lyric, for a voice (its own lyric only: a note
+        // without one sings the default, as it will when read back).
+        let mut notes: Vec<(u64, u64, u8, u8, Option<String>)> = track
             .clips
             .iter()
             .filter_map(|clip| Some((clip, project.pattern(clip.pattern()?)?)))
-            .flat_map(|(clip, pattern)| pattern.played_in(clip))
-            .map(|n| {
+            .flat_map(|(clip, pattern)| {
+                pattern
+                    .played_in(clip)
+                    .into_iter()
+                    .map(move |n| (n, pattern.lyric(n.note).map(str::to_owned)))
+            })
+            .map(|(n, lyric)| {
                 let start = to_file_ticks(n.start);
                 let end = to_file_ticks(n.end).max(start + 1);
                 #[allow(
@@ -682,15 +709,15 @@ pub fn song_to_midi(project: &Project) -> MidiFile {
                     reason = "a velocity from 1 to 127"
                 )]
                 let velocity = (n.velocity * 127.0).round().clamp(1.0, 127.0) as u8;
-                (start, end, n.key, velocity)
+                (start, end, n.key, velocity, lyric)
             })
             .collect();
-        notes.sort_unstable();
+        notes.sort();
         // A key started again before it ends: the earlier note ends there,
         // so every start has its own end.
         let mut ends: HashMap<u8, usize> = HashMap::new();
         for index in 0..notes.len() {
-            let (start, _, key, _) = notes[index];
+            let (start, _, key, _, _) = notes[index];
             if let Some(&previous) = ends.get(&key)
                 && notes[previous].1 > start
             {
@@ -698,7 +725,13 @@ pub fn song_to_midi(project: &Project) -> MidiFile {
             }
             ends.insert(key, index);
         }
-        for (start, end, key, velocity) in notes {
+        for (start, end, key, velocity, lyric) in notes {
+            if let Some(lyric) = lyric {
+                events.push(Event {
+                    tick: start,
+                    kind: EventKind::Lyric(lyric),
+                });
+            }
             events.push(Event {
                 tick: start,
                 kind: EventKind::NoteOn {
@@ -737,7 +770,14 @@ pub struct ImportedTrack {
     pub instrument: Instrument,
     /// Its notes, from the start of the file.
     pub notes: Vec<Note>,
+    /// The lyric of each note (by its place in `notes`), when the file
+    /// gives one: a lyric event at the moment the note starts.
+    pub lyrics: Vec<Option<String>>,
 }
+
+/// A note started and not ended yet, as a file is read: when it started,
+/// how hard, and its lyric.
+type Held = (u64, u8, Option<String>);
 
 /// What a MIDI file holds, as the program understands it.
 #[derive(Clone, Debug, PartialEq)]
@@ -894,8 +934,10 @@ pub fn import(bytes: &[u8]) -> Result<ImportedSong, MidiError> {
         }
         let end = track.end + offset;
         let mut programs: [Option<u8>; 16] = [None; 16];
-        let mut held: HashMap<(u8, u8), Vec<(u64, u8)>> = HashMap::new();
-        let mut by_channel: Vec<Vec<Note>> = vec![Vec::new(); 16];
+        let mut held: HashMap<(u8, u8), Vec<Held>> = HashMap::new();
+        let mut by_channel: Vec<Vec<(Note, Option<String>)>> = vec![Vec::new(); 16];
+        // A lyric waits for the note starting at its moment.
+        let mut lyric: Option<(u64, String)> = None;
         let note = |start: u64, finish: u64, key: u8, velocity: u8| Note {
             id: NoteId(0),
             start: to_ticks(start),
@@ -917,43 +959,45 @@ pub fn import(bytes: &[u8]) -> Result<ImportedSong, MidiError> {
                     channel,
                     key,
                     velocity,
-                } => held
-                    .entry((channel, key))
-                    .or_default()
-                    .push((tick, velocity)),
+                } => {
+                    let sung = lyric.take_if(|(at, _)| *at == tick).map(|(_, lyric)| lyric);
+                    held.entry((channel, key))
+                        .or_default()
+                        .push((tick, velocity, sung));
+                }
                 EventKind::NoteOff { channel, key } => {
                     if let Some(starts) = held.get_mut(&(channel, key))
                         && !starts.is_empty()
                     {
-                        let (start, velocity) = starts.remove(0);
-                        by_channel[usize::from(channel)].push(note(start, tick, key, velocity));
+                        let (start, velocity, sung) = starts.remove(0);
+                        by_channel[usize::from(channel)]
+                            .push((note(start, tick, key, velocity), sung));
                     }
                 }
+                EventKind::Lyric(ref text) => lyric = Some((tick, text.clone())),
                 _ => {}
             }
         }
         // Notes still held when the track ends end there.
         for ((channel, key), starts) in held {
-            for (start, velocity) in starts {
-                by_channel[usize::from(channel)].push(note(
-                    start,
-                    end.max(start + 1),
-                    key,
-                    velocity,
-                ));
+            for (start, velocity, sung) in starts {
+                by_channel[usize::from(channel)]
+                    .push((note(start, end.max(start + 1), key, velocity), sung));
             }
         }
         for (channel, mut notes) in by_channel.into_iter().enumerate() {
             if notes.is_empty() {
                 continue;
             }
-            notes.sort_by_key(|n| (n.start, n.key));
+            notes.sort_by_key(|(n, _)| (n.start, n.key));
             let channel = u8::try_from(channel).unwrap_or(0);
+            let (notes, lyrics) = notes.into_iter().unzip();
             tracks.push(ImportedTrack {
                 name: name.clone(),
                 channel,
                 instrument: instrument_for(channel, programs[usize::from(channel)]),
                 notes,
+                lyrics,
             });
         }
     }
@@ -1019,16 +1063,28 @@ impl ImportedSong {
             }
             let length = project.meter.bar_start(bars_from + bars) - start;
             let id = project.add_pattern_for(track, pattern, length);
-            let notes: Vec<Note> = imported
+            let (notes, lyrics): (Vec<Note>, Vec<Option<String>>) = imported
                 .notes
                 .iter()
-                .map(|n| Note {
-                    start: n.start + shift,
-                    ..*n
+                .zip(imported.lyrics.iter().chain(std::iter::repeat(&None)))
+                .map(|(n, lyric)| {
+                    (
+                        Note {
+                            start: n.start + shift,
+                            ..*n
+                        },
+                        lyric.clone(),
+                    )
                 })
-                .filter(|n| n.start < length)
+                .filter(|(n, _)| n.start < length)
+                .unzip();
+            let ids = project.add_notes(id, &notes);
+            let lyrics: Vec<(NoteId, String)> = ids
+                .into_iter()
+                .zip(lyrics)
+                .filter_map(|(id, lyric)| Some((id, lyric?)))
                 .collect();
-            project.add_notes(id, &notes);
+            project.set_lyrics(id, &lyrics);
             project.add_clip(track, start, length, id);
             added.push(track);
         }
