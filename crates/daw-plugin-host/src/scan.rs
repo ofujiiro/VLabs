@@ -69,6 +69,25 @@ pub enum ScanProblem {
     /// It could not be loaded: the reason, as the system or the plugin gave
     /// it.
     Failed(String),
+    /// It needs a library of the system that is not installed: its file
+    /// name (the plugin's install notes say which package holds it).
+    MissingLibrary(String),
+}
+
+/// The system library a loading failure names as missing, if it does
+/// ("libfoo.so.1: cannot open shared object file: …").
+pub fn missing_library(reason: &str) -> Option<String> {
+    let (before, _) = reason.split_once(": cannot open shared object file")?;
+    let name = before.rsplit([' ', ':']).next()?.trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+/// A loading failure, said plainly when its cause is a missing library.
+fn failure(reason: String) -> ScanProblem {
+    match missing_library(&reason) {
+        Some(library) => ScanProblem::MissingLibrary(library),
+        None => ScanProblem::Failed(reason),
+    }
 }
 
 /// The folders plugins are installed in on this system, plus `CLAP_PATH`.
@@ -196,7 +215,7 @@ pub fn describe(format: Format, path: &Path) -> Result<Vec<PluginInfo>, ScanProb
         Format::Clap => crate::clap::describe(path),
         Format::Vst3 => crate::vst3::describe(path),
     }
-    .map_err(ScanProblem::Failed)
+    .map_err(failure)
 }
 
 /// What the separate run prints.
@@ -493,5 +512,50 @@ fn describe_in_child(
         Some(description) => description.result,
         None if status.success() => Err(ScanProblem::NoAnswer),
         None => Err(ScanProblem::Crashed),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_system_library_is_named() {
+        assert_eq!(
+            missing_library(
+                "/p/DW-303.so could not be loaded: libwebkit2gtk-4.1.so.0: cannot open shared object file: No such file or directory"
+            ),
+            Some("libwebkit2gtk-4.1.so.0".to_owned())
+        );
+        assert_eq!(
+            missing_library(
+                "Failed to load plugin descriptor library: libgtk-3.so.0: cannot open shared object file: No such file or directory"
+            ),
+            Some("libgtk-3.so.0".to_owned())
+        );
+        assert_eq!(missing_library("it crashed"), None);
+        assert!(matches!(
+            failure("it crashed".to_owned()),
+            ScanProblem::Failed(_)
+        ));
+    }
+
+    /// A plugin that cannot be loaded says why, in the system's words.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_plugin_that_cannot_load_says_why() {
+        let folder = std::env::temp_dir().join(format!("scan-broken-{}", std::process::id()));
+        let binary = folder.join("Broken.vst3/Contents/x86_64-linux");
+        std::fs::create_dir_all(&binary).unwrap();
+        std::fs::write(binary.join("Broken.so"), b"\x7fELF but nothing more").unwrap();
+        let problem = describe(Format::Vst3, &folder.join("Broken.vst3")).unwrap_err();
+        let ScanProblem::Failed(reason) = problem else {
+            panic!("{problem:?}");
+        };
+        assert!(
+            reason.contains("Broken.so") && !reason.ends_with("dlopen failed"),
+            "the system's reason: {reason}"
+        );
+        let _ = std::fs::remove_dir_all(folder);
     }
 }

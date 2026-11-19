@@ -54,7 +54,7 @@ use vst3::Steinberg::Vst::{
     IHostApplication, IHostApplicationTrait, IMessage, IMessageTrait, IParamValueQueue,
     IParamValueQueueTrait, IParameterChanges, IParameterChangesTrait, MediaTypes_, NoteOffEvent,
     NoteOnEvent, ParameterInfo, ProcessContext, ProcessData, ProcessModes_, ProcessSetup,
-    String128, SymbolicSampleSizes_, TChar,
+    SpeakerArrangement, String128, SymbolicSampleSizes_, TChar,
 };
 use vst3::Steinberg::{
     FUnknown, IBStream, IBStream_, IBStreamTrait, IPlugFrame, IPlugFrameTrait, IPlugView,
@@ -849,8 +849,13 @@ fn module(bundle: &Path) -> Result<&'static Module, String> {
     // SAFETY: loading a plugin runs its code; that is what a plugin host is
     // for. The entry points are called as the VST3 module protocol says.
     let factory = unsafe {
-        let library = libloading::Library::new(&binary)
-            .map_err(|e| format!("{} could not be loaded: {e}", shown.display()))?;
+        let library = libloading::Library::new(&binary).map_err(|e| {
+            format!(
+                "{} could not be loaded: {}",
+                shown.display(),
+                crate::load_error(&e)
+            )
+        })?;
         #[cfg(unix)]
         let library = {
             // ModuleEntry is given the library's own handle. The handle is
@@ -1074,6 +1079,32 @@ pub fn load(info: &PluginInfo, config: AudioConfig) -> Result<(Vst3Main, Vst3Aud
         if outputs.is_empty() {
             return Err(format!("{} has no audio output", info.name));
         }
+        let processor = component
+            .cast::<IAudioProcessor>()
+            .ok_or("the plugin has no audio processor")?;
+        // Tell the plugin its speaker layouts before preparing it, as hosts
+        // do: each bus as the plugin offers it.
+        let layouts = |direction: i32, count: usize| -> Vec<SpeakerArrangement> {
+            (0..count)
+                .map(|index| {
+                    let mut layout: SpeakerArrangement = 0;
+                    processor.getBusArrangement(direction, index as i32, &raw mut layout);
+                    layout
+                })
+                .collect()
+        };
+        let mut input_layouts = layouts(BusDirections_::kInput as i32, inputs.len());
+        let mut output_layouts = layouts(BusDirections_::kOutput as i32, outputs.len());
+        processor.setBusArrangements(
+            if input_layouts.is_empty() {
+                null_mut()
+            } else {
+                input_layouts.as_mut_ptr()
+            },
+            input_layouts.len() as i32,
+            output_layouts.as_mut_ptr(),
+            output_layouts.len() as i32,
+        );
         for (direction, count) in [
             (BusDirections_::kInput, inputs.len()),
             (BusDirections_::kOutput, outputs.len()),
@@ -1091,9 +1122,6 @@ pub fn load(info: &PluginInfo, config: AudioConfig) -> Result<(Vst3Main, Vst3Aud
             );
         }
 
-        let processor = component
-            .cast::<IAudioProcessor>()
-            .ok_or("the plugin has no audio processor")?;
         let max_block = config.max_block.max(1);
         let mut setup = ProcessSetup {
             processMode: ProcessModes_::kRealtime as i32,
@@ -1376,6 +1404,10 @@ pub struct Vst3Audio {
     output_buses: Vec<AudioBusBuffers>,
     events: ComWrapper<EventList>,
     changes: ComWrapper<ParameterChanges>,
+    /// Where the plugin reports its own parameter changes and the events it
+    /// sends: hosts always offer them.
+    changes_out: ComWrapper<ParameterChanges>,
+    events_out: ComWrapper<EventList>,
     edits: rtrb::Consumer<(u32, f64)>,
     song_values: rtrb::Producer<(u32, f64)>,
     context: ProcessContext,
@@ -1442,6 +1474,10 @@ impl Vst3Audio {
                 events: RefCell::new(Vec::with_capacity(MAX_EVENTS)),
             }),
             changes: ComWrapper::new(ParameterChanges::new()),
+            changes_out: ComWrapper::new(ParameterChanges::new()),
+            events_out: ComWrapper::new(EventList {
+                events: RefCell::new(Vec::with_capacity(MAX_EVENTS)),
+            }),
             edits,
             song_values,
             context,
@@ -1556,6 +1592,13 @@ impl AudioSide for Vst3Audio {
         self.context.projectTimeMusic = transport.beats;
         self.context.barPositionMusic = transport.bar_start;
         self.context.projectTimeSamples = transport.frames;
+        // The plugin marks the outputs it leaves silent: the marks are
+        // cleared for each call, as hosts do.
+        for bus in &mut self.output_buses {
+            bus.silenceFlags = 0;
+        }
+        self.changes_out.clear();
+        self.events_out.events.borrow_mut().clear();
         let mut data = ProcessData {
             processMode: ProcessModes_::kRealtime as i32,
             symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
@@ -1572,12 +1615,18 @@ impl AudioSide for Vst3Audio {
                 .changes
                 .as_com_ref::<IParameterChanges>()
                 .map_or(null_mut(), |r| r.as_ptr()),
-            outputParameterChanges: null_mut(),
+            outputParameterChanges: self
+                .changes_out
+                .as_com_ref::<IParameterChanges>()
+                .map_or(null_mut(), |r| r.as_ptr()),
             inputEvents: self
                 .events
                 .as_com_ref::<IEventList>()
                 .map_or(null_mut(), |r| r.as_ptr()),
-            outputEvents: null_mut(),
+            outputEvents: self
+                .events_out
+                .as_com_ref::<IEventList>()
+                .map_or(null_mut(), |r| r.as_ptr()),
             processContext: &raw mut self.context,
         };
         let result = daw_rt::permit_alloc(|| unsafe { self.processor.process(&raw mut data) });

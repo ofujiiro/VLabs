@@ -407,6 +407,12 @@ trait AudioSide: Send {
 }
 
 /// The file of a plugin, made absolute for messages.
+/// Why a plugin library could not be loaded, in the system's words (the
+/// loader's own message says only that loading failed).
+fn load_error(error: &libloading::Error) -> String {
+    std::error::Error::source(error).map_or_else(|| error.to_string(), ToString::to_string)
+}
+
 fn shown(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }

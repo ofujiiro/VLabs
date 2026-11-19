@@ -1132,6 +1132,9 @@ pub fn scan_problem(file: &str, problem: &daw_engine::ScanProblem) -> String {
         P::Crashed => format!("{file} crashed when it was checked"),
         P::NoAnswer => format!("{file} has no plugins inside"),
         P::Failed(reason) => format!("{file} could not be opened ({reason})"),
+        P::MissingLibrary(library) => format!(
+            "{file} needs {library}, a part of the system that is not installed: install it with your system's software manager (the plugin's install notes name the package)"
+        ),
     }
 }
 
