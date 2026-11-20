@@ -238,10 +238,25 @@ commit too.
   gave the small places the small picture (a tall portrait shrank to a
   sliver there).
 
+- **Release 1.0** (decision 0030, the owner's request: "create the
+  release of V1, if a server is needed tell me": none is). The workspace's
+  version is 1.0.0; `build.yml` publishes a GitHub release when a tag
+  `v<version>` is pushed (or when run by hand with the tag as its
+  `release` input, which makes the tag): a last job checks the tag against
+  the version, gathers the installer, the AppImage, the plain folders
+  (each packed with one folder inside) and `SHA256SUMS.txt`, and runs
+  `gh release create` with the notes in `docs/releases/<tag>.md` (first
+  line: the title). The README has a Download section; CLAUDE.md says how
+  to release.
+- Checked by the development session: the packing script on stand-in
+  files (one folder inside each archive, Linux's executable permission
+  kept, the checksums), the version check, the workflow's YAML.
+
 ## Next session: start here
 
-1. Look at `main`'s CI run for the merge and the "Program builds" run
-   started for the owner after it.
+1. Look at the release (the repository's Releases page, VLabs 1.0) and the
+   "Program builds" run that published it; ask the owner whether the
+   downloads install and start on their computers.
 2. Ask the owner how 7b's checks went (ROADMAP.md: "7b: things to try",
    with their real voicebank) and whether it is the tuning they found
    missing on the 7a build. If they want more, what OpenUtau and UTAU

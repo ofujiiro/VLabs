@@ -52,6 +52,15 @@ cargo xtask installer # Windows installer from dist/ (NSIS's makensis)
 cargo xtask appimage  # Linux AppImage from dist/ (appimagetool)
 ```
 
+**Releasing** (decision 0030): set `version` in the workspace's
+`Cargo.toml` (1.N.0 adds features, 1.N.M only fixes), write
+`docs/releases/v<version>.md` for the people downloading it (its first line
+is the title), bring it to `main` with CI green, then push the tag
+`v<version>` on that commit. "Program builds" builds everything and
+publishes the release; it refuses a tag that is not the version. Without
+the right to push tags, run "Program builds" by hand on `main` with the tag
+as its `release` input: the job makes the tag.
+
 `cargo-deny` must be installed: `cargo install cargo-deny --locked`.
 
 On Linux, building needs: `libasound2-dev libjack-jackd2-dev libudev-dev

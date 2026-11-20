@@ -20,8 +20,10 @@ through the notes and shaped in a Pitch mode, vibrato, and each note's
 loudness, colour and breath), is merged into `main` too (November 20,
 2026) and awaits the owner's hands-on check. A voicebank's picture now
 shows faintly on its track, its clips and behind its notes (decision 0029,
-the owner's request). Next: 7c, UST and USTX projects in and out, unless
-the owner's check of 7b asks for more tuning first.
+the owner's request). **VLabs 1.0 is released** (decision 0030): version
+1.0.0, published on the repository's Releases page with a Windows
+installer and a Linux AppImage. Next: 7c, UST and USTX projects in and
+out, unless the owner's check of 7b asks for more tuning first.
 The repository has been public since November 2026 (the owner's
 decision).
 
@@ -884,6 +886,37 @@ opacity image."
   and VLabs shows them when a voicebank is added.
 - **Already leaves room:** notes keep space for per-note pitch offsets;
   lyrics (7a) and expression (7b) are kept beside the notes, by note.
+
+## Release 1.0 (the owner's request, November 2026)
+
+Decision 0030. No server is needed: GitHub builds the files and hosts
+them.
+
+- [x] Version 1.0.0: everything on `main`, v1 as the brief defines it and
+      the rounds after it (opening on the whole song, expressive tempo,
+      singing 7a and 7b, voicebank pictures)
+- [x] Published by "Program builds" when a tag `v<version>` is pushed: the
+      Windows installer, the Linux AppImage, the plain program folders
+      (`.zip` for Windows, `.tar.gz` for Linux), `SHA256SUMS.txt`, and the
+      notes written in `docs/releases/`; the tag must name the version
+- [ ] VLabs 1.0 on the repository's
+      [Releases page](https://github.com/ofujiiro/VLabs/releases)
+
+### Release 1.0: things to try
+
+1. Open the [Releases page](https://github.com/ofujiiro/VLabs/releases):
+   **VLabs 1.0** shows its notes and files.
+2. On Windows, download `VLabs-1.0.0-setup.exe` and install it (Windows
+   warns about an unknown publisher: **More info**, **Run anyway**); on
+   Linux, the AppImage. Start VLabs: the menu's **About** says 1.0.0.
+3. Open a song saved with an earlier build: it opens as it was.
+
+### Release 1.0: known gaps
+
+- The installer is not signed: a code-signing certificate is a yearly cost,
+  the owner's decision whenever they want it.
+- Every known gap listed above, for each round, is still there; the
+  release notes name the ones a newcomer meets first.
 
 ## Later (not in v1, not designed out)
 

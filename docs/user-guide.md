@@ -13,6 +13,10 @@ you plug one in, but you never need one.
 
 ## Installing
 
+Download VLabs from its
+[Releases page](https://github.com/ofujiiro/VLabs/releases/latest): the
+installer for Windows, the AppImage for Linux.
+
 **Windows.** Run the installer (`VLabs-…-setup.exe`). It installs for you
 alone, needs no administrator rights, adds VLabs to the Start menu, and makes
 VLabs songs open with a double-click. Windows may warn that the installer is

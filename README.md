@@ -20,9 +20,16 @@ expression: the sung pitch drawn through the notes and shaped by hand
 breath. UST and USTX projects and DiffSinger voices come next (see
 [ROADMAP.md](ROADMAP.md)).
 
+## Download
+
+**[VLabs 1.0](https://github.com/ofujiiro/VLabs/releases/latest)**: a
+Windows installer (Windows 10 or 11) and a Linux AppImage (most
+distributions from 2024 on). Its notes say how to install it; press F1 in
+the program for the user guide.
+
 ## Status
 
-**Pre-alpha, feature-complete for v1 (phase 6).** Make a beat on the step
+**Version 1.0, the first release.** Make a beat on the step
 grid with a recorded acoustic kit or an electronic kit, write melodies in
 the piano roll with the bundled piano, the built-in synthesizer (two
 oscillators, a filter, envelopes, an LFO and presets) or a CLAP or VST3
@@ -52,10 +59,10 @@ the background). Make a drum kit of your own sounds (a custom kit) and build
 beats with it on the step grid. Add classic UTAU voicebanks and give notes
 lyrics: a voice track sings them, and in its piano roll you shape how:
 bend the sung pitch where you click, add vibrato, make notes louder,
-lighter, darker or breathier. A Windows installer and a Linux AppImage are built for each
-milestone, with a user guide (F1 in the program, or
-[docs/user-guide.md](docs/user-guide.md)). See [ROADMAP.md](ROADMAP.md) for
-what to try and what comes next.
+lighter, darker or breathier; the voicebank's picture shows faintly on its
+track. Each release has a Windows installer and a Linux AppImage, with a
+user guide (F1 in the program, or [docs/user-guide.md](docs/user-guide.md)).
+See [ROADMAP.md](ROADMAP.md) for what to try and what comes next.
 
 ## Building from source
 

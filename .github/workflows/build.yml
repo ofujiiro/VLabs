@@ -3,16 +3,24 @@
 # AppImage and release folder (decision 0022).
 #
 # It runs by hand (Actions › Program builds › Run workflow) or when a
-# `milestone-*` tag is pushed, so a private repository's CI minutes are
-# spent on milestone builds, not on every change (CI already builds and
-# tests every change).
+# `milestone-*` tag is pushed, so CI minutes are spent on milestone builds,
+# not on every change (CI already builds and tests every change).
+#
+# A tag `v<version>` (or a run by hand given that tag) also publishes the
+# builds as a GitHub release, with the notes in docs/releases/ (decision
+# 0030).
 
 name: Program builds
 
 on:
   workflow_dispatch:
+    inputs:
+      release:
+        description: "To publish a release, its tag: v and the workspace's version (v1.0.0). Empty for a test build."
+        required: false
+        default: ""
   push:
-    tags: ["milestone-*"]
+    tags: ["milestone-*", "v*"]
 
 concurrency:
   group: program-builds-${{ github.ref }}
@@ -144,3 +152,63 @@ jobs:
           name: appimage-linux
           path: dist-installer/*.AppImage
           retention-days: 30
+
+  # The release (decision 0030): the files above on the repository's
+  # Releases page, with the notes in docs/releases/<tag>.md (its first line
+  # is the title). The tag must name the workspace's version.
+  release:
+    name: Publish the release
+    needs: [build, appimage]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release != ''
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check the tag against the version and the notes
+        run: |
+          version="$(grep -m 1 '^version = ' Cargo.toml | cut -d '"' -f 2)"
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::The tag $TAG is not v and the workspace's version ($version)."
+            exit 1
+          fi
+          if [ ! -f "docs/releases/$TAG.md" ]; then
+            echo "::error::The release notes docs/releases/$TAG.md are missing."
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+
+      # The plain folders are packed with a folder of their own inside
+      # (named like the installer), so unpacking them makes one folder.
+      - name: Gather the files
+        run: |
+          mkdir release staging
+          cp artifacts/installer-windows/*-setup.exe release/
+          cp artifacts/appimage-linux/*.AppImage release/
+          name="$(basename release/*-setup.exe -setup.exe)"
+          cp -r artifacts/program-windows "staging/$name"
+          python3 -c 'import shutil, sys; shutil.make_archive(sys.argv[1], "zip", sys.argv[2], sys.argv[3])' \
+            "release/$name-windows" staging "$name"
+          rm -r "staging/$name"
+          mkdir "staging/$name"
+          tar -xzf artifacts/program-linux/program-linux.tar.gz -C "staging/$name"
+          tar -czf "release/$name-linux.tar.gz" -C staging "$name"
+          (cd release && sha256sum -- * > SHA256SUMS.txt)
+          ls -l release
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="docs/releases/$TAG.md"
+          title="$(head -n 1 "$notes" | sed 's/^# *//')"
+          tail -n +2 "$notes" > release-notes.md
+          gh release create "$TAG" release/* --title "$title" \
+            --notes-file release-notes.md --target "$GITHUB_SHA"

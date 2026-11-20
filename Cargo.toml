@@ -11,8 +11,10 @@ members = ["crates/*", "spikes/*", "tools/*", "xtask"]
 default-members = ["crates/*"]
 
 [workspace.package]
-# 0.N.0 is the build delivered at the end of roadmap phase N; 1.0.0 is v1.
-version = "0.6.0"
+# 0.N.0 was the build delivered at the end of roadmap phase N; 1.0.0 is v1.
+# Since 1.0 (decision 0030): 1.N.0 adds features, 1.N.M only fixes. A
+# release is the tag v<this version>, with notes in docs/releases/.
+version = "1.0.0"
 edition = "2024"
 # Keep in step with rust-toolchain.toml.
 rust-version = "1.100"
