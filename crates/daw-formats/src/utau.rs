@@ -4,7 +4,8 @@
 //! an `oto.ini` saying where each syllable is in them (in the folder and in
 //! its subfolders), a `prefix.map` for voicebanks recorded at several
 //! pitches, a `character.txt` (name, picture, author) and a readme with the
-//! creator's terms.
+//! creator's terms. Voicebanks made for OpenUtau may add a `character.yaml`
+//! naming a large portrait of the character (decision 0029).
 //!
 //! UTAU wrote its text files in Shift-JIS; newer voicebanks often use
 //! UTF-8. A file is read as UTF-8 when it is valid UTF-8, otherwise as
@@ -27,6 +28,11 @@ const MAX_ENTRY_BYTES: u64 = 512 << 20;
 const MAX_TEXT_BYTES: u64 = 16 << 20;
 /// How deep subfolders are searched for `oto.ini` files.
 const MAX_DEPTH: usize = 3;
+/// The largest picture file read, and the largest picture decoded.
+const MAX_PICTURE_BYTES: u64 = 32 << 20;
+const MAX_PICTURE_SIDE: u32 = 8192;
+/// Pictures larger than this on their long side are scaled down when read.
+const PICTURE_SIDE: u32 = 1024;
 
 /// What a voicebank says about itself.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -37,6 +43,9 @@ pub struct VoicebankInfo {
     pub name: String,
     /// Its picture, if it names one that exists.
     pub image: Option<PathBuf>,
+    /// Its portrait, a larger picture of the character (OpenUtau's
+    /// `character.yaml`), if it names one that exists.
+    pub portrait: Option<PathBuf>,
     /// Who made it.
     pub author: Option<String>,
     /// Its web page.
@@ -45,6 +54,70 @@ pub struct VoicebankInfo {
     pub terms: String,
     /// How many syllables its `oto.ini` files name.
     pub syllables: usize,
+}
+
+impl VoicebankInfo {
+    /// The picture to show for the voicebank (decision 0029): its portrait
+    /// when it has one, otherwise its picture.
+    pub fn picture(&self) -> Option<&Path> {
+        self.portrait.as_deref().or(self.image.as_deref())
+    }
+}
+
+/// A picture, decoded: its size and its pixels, row by row, four bytes each
+/// (red, green, blue, alpha, not multiplied by alpha).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Picture {
+    /// Its width, in pixels.
+    pub width: u32,
+    /// Its height, in pixels.
+    pub height: u32,
+    /// Its pixels.
+    pub rgba: Vec<u8>,
+}
+
+/// Reads a voicebank's picture (BMP, PNG or JPEG), scaled down to at most
+/// 1024 pixels on its long side; files too large to be a picture, or
+/// pictures too large to decode, are refused.
+pub fn read_picture(path: &Path) -> Result<Picture, String> {
+    let size = fs::metadata(path).map_err(|e| e.to_string())?.len();
+    if size > MAX_PICTURE_BYTES {
+        return Err("the picture is too large".to_owned());
+    }
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_PICTURE_SIDE);
+    limits.max_image_height = Some(MAX_PICTURE_SIDE);
+    limits.max_alloc = Some(512 << 20);
+    let mut reader = image::ImageReader::open(path)
+        .map_err(|e| e.to_string())?
+        .with_guessed_format()
+        .map_err(|e| e.to_string())?;
+    reader.limits(limits);
+    let decoded = reader.decode().map_err(|e| e.to_string())?;
+    let decoded = if decoded.width().max(decoded.height()) > PICTURE_SIDE {
+        decoded.thumbnail(PICTURE_SIDE, PICTURE_SIDE)
+    } else {
+        decoded
+    };
+    let rgba = decoded.to_rgba8();
+    Ok(Picture {
+        width: rgba.width(),
+        height: rgba.height(),
+        rgba: rgba.into_raw(),
+    })
+}
+
+/// A top-level value of a `character.yaml` (`key: value`, quotes removed);
+/// enough for the few plain values read from it.
+fn yaml_field(text: &str, key: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        if line.starts_with([' ', '\t', '-', '#']) {
+            return None;
+        }
+        let (k, v) = line.split_once(':')?;
+        let v = v.trim().trim_matches(|c| c == '"' || c == '\'');
+        (k.trim() == key && !v.is_empty()).then(|| v.to_owned())
+    })
 }
 
 /// Text from a voicebank: UTF-8 when valid (without its byte-order mark),
@@ -239,6 +312,7 @@ pub fn read_info(folder: &Path) -> Result<VoicebankInfo, String> {
         .filter_map(|(path, relative)| Some(parse_oto(&read_text(path).ok()?, relative).len()))
         .sum();
     let character = read_text(&folder.join("character.txt")).unwrap_or_default();
+    let yaml = read_text(&folder.join("character.yaml")).unwrap_or_default();
     let folder_name = folder
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
@@ -247,6 +321,9 @@ pub fn read_info(folder: &Path) -> Result<VoicebankInfo, String> {
         name: field(&character, "name").unwrap_or(folder_name),
         image: field(&character, "image")
             .map(|image| folder.join(image))
+            .filter(|path| path.is_file()),
+        portrait: yaml_field(&yaml, "portrait")
+            .map(|portrait| folder.join(portrait))
             .filter(|path| path.is_file()),
         author: field(&character, "author"),
         web: field(&character, "web"),

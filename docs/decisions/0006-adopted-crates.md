@@ -31,6 +31,7 @@ memory. "Planned" means checked and chosen, but not yet in `Cargo.toml`.
 | `flacenc` | 0.5.1 | Apache-2.0 | 2026-11-16 | FLAC encoding (without its default features): `tools/make-drums`, and FLAC export (decision 0020), frame by frame as the song renders. Released December 2025. |
 | `quick-xml` | 0.42.0 | MIT | 2026-11-18 | Reading DAWproject's `project.xml` (decision 0020), without default features; released August 2026. Writing is our own small code. |
 | `encoding_rs` | 0.8.44 | (Apache-2.0 OR MIT) AND BSD-3-Clause | 2026-11-19 | Shift-JIS text: UTAU voicebanks' `oto.ini`, `character.txt` and readmes, and the Japanese file names inside zipped voicebanks (decision 0027). Henri Sivonen's crate, Firefox's own decoder; released October 2026. |
+| `image` (with `png`, `zune-jpeg`, `zune-core`) | 0.25.10 | MIT OR Apache-2.0 (`zune-jpeg`, `zune-core`: MIT OR Apache-2.0 OR Zlib) | 2026-11-20 | Decoding voicebanks' pictures, BMP, PNG and JPEG only (decision 0029), with size limits and scaling down. The image-rs project's crate, its latest release (March 2026); it was already built into the program through the clipboard library (`arboard`). |
 | `egui_kittest` (with `kittest`) | 0.37.0 (0.5.0) | MIT OR Apache-2.0 | 2026-11-16 | Tests only: drives the real interface with simulated input and inspects it through its accessibility tree, with no window. Also fails tests on any glyph missing from our fonts and on unlabelled controls. |
 
 ## Planned (checked, adopted when the phase needs them)

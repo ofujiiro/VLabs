@@ -977,6 +977,7 @@ dependencies = [
  "daw-model",
  "encoding_rs",
  "flacenc",
+ "image",
  "lewton",
  "nanomp3",
  "quick-xml 0.42.0",
@@ -1815,6 +1816,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

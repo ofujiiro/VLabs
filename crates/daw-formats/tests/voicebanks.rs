@@ -255,3 +255,62 @@ fn a_zipped_voicebank_with_japanese_names_is_added() {
     assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
     std::fs::remove_dir_all(folder).ok();
 }
+
+/// A picture of a gradient, `width` by `height`, its top-left pixel red.
+fn gradient(width: u32, height: u32) -> image::RgbaImage {
+    image::RgbaImage::from_fn(width, height, |x, y| {
+        if x == 0 && y == 0 {
+            image::Rgba([255, 0, 0, 255])
+        } else {
+            image::Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255])
+        }
+    })
+}
+
+#[test]
+fn a_voicebank_s_picture_and_portrait_are_read() {
+    let folder = scratch("pictures").join("Uta");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("oto.ini"), "a.wav=a,0,0,0,0,0\n").unwrap();
+    // A classic voicebank's picture: a small BMP named in character.txt.
+    gradient(100, 80)
+        .save_with_format(folder.join("icon.bmp"), image::ImageFormat::Bmp)
+        .unwrap();
+    std::fs::write(folder.join("character.txt"), "name=Uta\nimage=icon.bmp\n").unwrap();
+    let info = utau::read_info(&folder).unwrap();
+    assert_eq!(info.image, Some(folder.join("icon.bmp")));
+    assert_eq!(info.portrait, None);
+    assert_eq!(info.picture(), Some(folder.join("icon.bmp").as_path()));
+    let icon = utau::read_picture(info.picture().unwrap()).unwrap();
+    assert_eq!((icon.width, icon.height), (100, 80));
+    assert_eq!(icon.rgba.len(), 100 * 80 * 4);
+    assert_eq!(&icon.rgba[..4], &[255, 0, 0, 255], "the top-left pixel");
+    // An OpenUtau portrait named in character.yaml is preferred, and a
+    // large one is scaled down.
+    gradient(2000, 1000)
+        .save_with_format(folder.join("portrait.png"), image::ImageFormat::Png)
+        .unwrap();
+    std::fs::write(
+        folder.join("character.yaml"),
+        "text_file_encoding: shift_jis\nsubbanks:\n  - portrait: not-this.png\n\
+         portrait: \"portrait.png\"\nportrait_opacity: 0.67\n",
+    )
+    .unwrap();
+    let info = utau::read_info(&folder).unwrap();
+    assert_eq!(info.portrait, Some(folder.join("portrait.png")));
+    assert_eq!(info.picture(), Some(folder.join("portrait.png").as_path()));
+    let portrait = utau::read_picture(info.picture().unwrap()).unwrap();
+    assert_eq!((portrait.width, portrait.height), (1024, 512));
+    // JPEG is read too; what is not a picture is refused.
+    image::DynamicImage::ImageRgba8(gradient(64, 64))
+        .to_rgb8()
+        .save_with_format(folder.join("photo.jpg"), image::ImageFormat::Jpeg)
+        .unwrap();
+    let photo = utau::read_picture(&folder.join("photo.jpg")).unwrap();
+    assert_eq!((photo.width, photo.height), (64, 64));
+    assert!(utau::read_picture(&folder.join("oto.ini")).is_err());
+    // A portrait that is not there is not named.
+    std::fs::remove_file(folder.join("portrait.png")).unwrap();
+    assert_eq!(utau::read_info(&folder).unwrap().portrait, None);
+    std::fs::remove_dir_all(folder.parent().unwrap()).ok();
+}
