@@ -3344,15 +3344,19 @@ fn a_voice_s_picture_shows_faintly_on_its_track_and_behind_its_notes() {
     f.workspace_mut()
         .session_mut()
         .add_voice_track("Plain Voice", "Plain Voice");
-    // The picture is read in the background.
+    // Pictures are read in the background: wait (two seconds at most) until
+    // `count` of them show.
     let label = text::voicebank_picture("Test Voice");
-    for _ in 0..200 {
-        f.harness.run_steps(1);
-        if f.harness.query_all_by_label(&label).count() >= 2 {
-            break;
+    let wait_for = |f: &mut Fixture, count: usize| {
+        for _ in 0..200 {
+            f.harness.run_steps(1);
+            if f.harness.query_all_by_label(&label).count() >= count {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    };
+    wait_for(&mut f, 2);
     // In the song view: on the track's header and at the start of its clip.
     assert_eq!(f.harness.query_all_by_label(&label).count(), 2);
     assert!(
@@ -3363,8 +3367,9 @@ fn a_voice_s_picture_shows_faintly_on_its_track_and_behind_its_notes() {
     );
     // Behind the piano roll's notes, at the bottom right of the grid, a
     // 100-point icon at most two and a half times its size.
+    // The piano roll asks for the large picture, read anew the first time.
     f.workspace_mut().session_mut().open_track(track);
-    f.harness.run_steps(3);
+    wait_for(&mut f, 1);
     let picture = f.harness.get_by_label(&label).rect();
     let roll = f.roll();
     assert!(roll.contains_rect(picture), "{picture:?} in {roll:?}");
