@@ -57,10 +57,16 @@ pub struct VoicebankInfo {
 }
 
 impl VoicebankInfo {
-    /// The picture to show for the voicebank (decision 0029): its portrait
-    /// when it has one, otherwise its picture.
+    /// The picture to show large (decision 0029): its portrait when it has
+    /// one, otherwise its picture.
     pub fn picture(&self) -> Option<&Path> {
         self.portrait.as_deref().or(self.image.as_deref())
+    }
+
+    /// The picture to show small: its picture (drawn for small sizes) when
+    /// it has one, otherwise its portrait.
+    pub fn icon(&self) -> Option<&Path> {
+        self.image.as_deref().or(self.portrait.as_deref())
     }
 }
 

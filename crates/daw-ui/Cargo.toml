@@ -24,3 +24,5 @@ serde_json.workspace = true
 
 [dev-dependencies]
 egui_kittest.workspace = true
+# Pictures the tests make for their voicebanks (decision 0029).
+image.workspace = true

@@ -29,10 +29,17 @@ background), which OpenUtau shows faintly behind its piano roll.
 - **The instrument chooser:** a small, clear picture beside each voice, to
   recognise it when choosing (the only place it is not faint: it names the
   choice).
-- The portrait when the voicebank has one, otherwise its picture. Large
-  pictures are scaled down once, when read (at most 1024 points on their
-  long side); small ones are drawn at most two and a half times their size,
-  so a 100-point icon never becomes a blur filling the screen.
+- Behind the piano roll, the portrait when the voicebank has one,
+  otherwise its picture; in the small places (the header, the clips, the
+  chooser, about 56 points tall at most), the picture, made to be seen
+  small (usually a face), otherwise the portrait, which would shrink to a
+  sliver there. OpenUtau does the same: its picture in the singer's menu,
+  its portrait behind the notes. Large pictures are scaled down once, when
+  read (at most 1024 points on their long side); small ones are drawn at
+  most two and a half times their size, so a 100-point icon never becomes a
+  blur filling the screen.
+- In the header the picture sits just left of the track's buttons, never
+  under them.
 - Read in the background the first time a voice track needs it, and kept
   until the voicebank is removed or added again. A voicebank without a
   picture, or with one that cannot be read, simply shows none.

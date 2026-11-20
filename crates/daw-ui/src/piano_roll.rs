@@ -291,6 +291,7 @@ impl PianoRoll {
         let p = Palette::of(ui.ctx());
         painter.rect_filled(rect, CornerRadius::ZERO, p.grid);
         self.paint_grid(ui, &layout, session);
+        Self::paint_picture(ui, &layout, session);
         self.paint_notes(ui, &layout, session);
         if let Some(line) = session.sung_line() {
             self.pitch
@@ -1499,6 +1500,29 @@ impl PianoRoll {
         } else {
             None
         }
+    }
+
+    /// A voice track's picture, faint behind the notes at the bottom right
+    /// of the grid, still while they scroll (decision 0029).
+    fn paint_picture(ui: &Ui, layout: &Layout, session: &Session) {
+        let Some(voicebank) = session.voicebank() else {
+            return;
+        };
+        let Some(picture) = session.voice_portrait(ui.ctx(), voicebank) else {
+            return;
+        };
+        let area = layout.grid.shrink(16.0);
+        crate::voice_picture::paint_faint(
+            ui,
+            picture,
+            area,
+            area.height() * 0.85,
+            Align2::RIGHT_BOTTOM,
+            crate::voice_picture::BEHIND_NOTES,
+            layout.grid,
+            &text::voicebank_picture(voicebank),
+            ui.scope_id().with("voice-picture"),
+        );
     }
 
     /// Every how many bars a bar line is drawn, so they stay 8 points apart.

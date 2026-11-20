@@ -2263,3 +2263,9 @@ pub fn with_sign(value: f64, unit: &str) -> String {
         format!("−{:.0} {unit}", -value)
     }
 }
+
+/// A voicebank's picture, for screen readers (decision 0029): "Picture of
+/// Uta".
+pub fn voicebank_picture(voicebank: &str) -> String {
+    format!("Picture of {voicebank}")
+}

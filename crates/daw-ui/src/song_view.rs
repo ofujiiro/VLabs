@@ -55,6 +55,8 @@ const LANE_MARGIN: f32 = 7.0;
 /// How close to an automation point the pointer must be to take it.
 const POINT_GRAB: f32 = 7.0;
 const ADD_ROW_HEIGHT: f32 = 80.0;
+/// How much of a track header's right side its buttons take.
+const HEADER_BUTTONS: f32 = 106.0;
 /// How close to a clip's end the pointer must be to trim or resize it.
 const EDGE_GRAB: f32 = 8.0;
 const DRAG_THRESHOLD: f32 = 4.0;
@@ -1148,6 +1150,24 @@ impl SongView {
                 let muted = track.strip.mute;
                 let fill = color.gamma_multiply(if muted { 0.12 } else { 0.28 });
                 painter.rect_filled(rect, CornerRadius::same(6), fill);
+                // A voice's picture, faint at the start of each clip (decision
+                // 0029).
+                if let Some(voicebank) = track.instrument.voicebank()
+                    && let Some(picture) = session.voice_icon(ui.ctx(), voicebank)
+                {
+                    let inside = rect.shrink(2.0);
+                    crate::voice_picture::paint_faint(
+                        ui,
+                        picture,
+                        inside,
+                        inside.height(),
+                        Align2::LEFT_CENTER,
+                        crate::voice_picture::ON_TRACK,
+                        inside.intersect(layout.timeline),
+                        &text::voicebank_picture(voicebank),
+                        ui.scope_id().with(("clip-picture", clip.id.0)),
+                    );
+                }
                 if let Some(pattern) = pattern {
                     self.paint_preview(&painter, layout, rect, clip, pattern, drums, color);
                     painter.text(
@@ -1728,6 +1748,27 @@ impl SongView {
             rect.bottom() - 0.5,
             Stroke::new(1.0, p.divider),
         );
+        // A voice track's picture, faint in its header, just left of its
+        // buttons (decision 0029).
+        if let Some(voicebank) = instrument.voicebank()
+            && let Some(picture) = session.voice_icon(ui.ctx(), voicebank)
+        {
+            let area = Rect::from_min_max(
+                rect.left_top() + vec2(8.0, 4.0),
+                pos2(rect.right() - HEADER_BUTTONS, rect.bottom() - 4.0),
+            );
+            crate::voice_picture::paint_faint(
+                ui,
+                picture,
+                area,
+                area.height(),
+                Align2::RIGHT_CENTER,
+                crate::voice_picture::ON_TRACK,
+                rect.intersect(layout.headers),
+                &text::voicebank_picture(voicebank),
+                ui.scope_id().with(("header-picture", track.0)),
+            );
+        }
         let mut child = ui.new_child(
             UiBuilder::new()
                 .max_rect(rect.shrink2(vec2(14.0, 7.0)))

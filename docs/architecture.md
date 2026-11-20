@@ -44,6 +44,7 @@ record, notes, the play position); the processing half belongs to
 | Plugin scanner | A separate run of the program that inspects plugin files | A crash there cannot reach the program |
 | SFZ reader | Reads an SFZ instrument and decodes its sounds (on up to eight helper threads), one thread per instrument | Ordinary thread; the engine builds the track again once it is done |
 | Voicebank reader | Reads a voicebank's `oto.ini` and other files the first time a voice track needs it | Ordinary thread, one per voicebank |
+| Voicebank picture reader | Decodes a voicebank's picture the first time the window shows its voice | Ordinary thread, one per picture; the window turns it into a texture |
 | Voice renderer | Renders voice tracks' phrases, one at a time, keeping each by everything that shapes it | Ordinary thread; the audio thread plays rendered phrases like audio clips |
 
 ## How an edit becomes sound
@@ -356,7 +357,10 @@ a note stays a small value that is cheap to copy.
   around their start, as in 7a. The engine renders with it and the piano
   roll draws with it, so what is drawn is what is sung.
 - **`daw_formats::utau`** reads and installs voicebanks (`oto.ini`,
-  `prefix.map`, `character.txt`, the readme; UTF-8 or Shift-JIS).
+  `prefix.map`, `character.txt`, the readme; UTF-8 or Shift-JIS), and
+  their pictures: `character.txt`'s small picture and `character.yaml`'s
+  portrait (OpenUtau's), BMP, PNG or JPEG, scaled down to 1024 points when
+  larger (decision 0029).
 - **`daw_dsp::voice`** analyses a recording (YIN pitch, a mark on every
   period) and sings a phrase by pitch-synchronous overlap-add at the pitch
   it is given as a function of time: each syllable starts its
@@ -373,7 +377,10 @@ a note stays a small value that is cheap to copy.
   lyrics and the expression edits (`session/voice`), lyrics typed in the
   piano roll, and the sung pitch line with its Pitch mode, points, vibrato
   handles and panels (`pitch_line`); the lane under a voice's notes shows
-  velocity, colour, breath or tempo.
+  velocity, colour, breath or tempo. The voicebank's picture is drawn
+  faintly on its track's header and clips and behind its piano roll's
+  notes (`voice_picture`); the session reads each picture once, in the
+  background, and keeps it as a texture (`session/voice`, decision 0029).
 
 ## Automation *(phase 3)*
 
@@ -450,7 +457,8 @@ Built with egui (eframe, wgpu renderer). All interface code is in `daw-ui`:
 - `song_view`, `step_grid`, `piano_roll`, `mixer`, `effect_ui`,
   `transport`, `keyboard_panel`: the views; the custom-drawn ones draw
   only what is visible. `pitch_line` is the sung pitch of a voice track,
-  drawn over the piano roll's notes (decision 0028). `signature_row` is the song view's row of tempo,
+  drawn over the piano roll's notes (decision 0028); `voice_picture` places
+  and draws a voicebank's faint picture (decision 0029). `signature_row` is the song view's row of tempo,
   time-signature and key changes, pinned under its ruler. `tempo_lane` is
   the tempo line itself (points, glides with their shapes and handles,
   their panels; decision 0026), drawn in the signature row and in the lane

@@ -299,6 +299,11 @@ fn a_voicebank_s_picture_and_portrait_are_read() {
     let info = utau::read_info(&folder).unwrap();
     assert_eq!(info.portrait, Some(folder.join("portrait.png")));
     assert_eq!(info.picture(), Some(folder.join("portrait.png").as_path()));
+    assert_eq!(
+        info.icon(),
+        Some(folder.join("icon.bmp").as_path()),
+        "small, the picture made for small sizes"
+    );
     let portrait = utau::read_picture(info.picture().unwrap()).unwrap();
     assert_eq!((portrait.width, portrait.height), (1024, 512));
     // JPEG is read too; what is not a picture is refused.

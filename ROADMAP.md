@@ -18,9 +18,10 @@ voicebank on that build: everything works (November 2026). Milestone 7b,
 expression, the voice's tuning (decision 0028: the sung pitch drawn
 through the notes and shaped in a Pitch mode, vibrato, and each note's
 loudness, colour and breath), is merged into `main` too (November 20,
-2026) and awaits the owner's hands-on check. Next: 7c, UST and USTX
-projects in and out, unless the owner's check of 7b asks for more tuning
-first.
+2026) and awaits the owner's hands-on check. A voicebank's picture now
+shows faintly on its track, its clips and behind its notes (decision 0029,
+the owner's request). Next: 7c, UST and USTX projects in and out, unless
+the owner's check of 7b asks for more tuning first.
 The repository has been public since November 2026 (the owner's
 decision).
 
@@ -815,6 +816,43 @@ and merged into `main` (November 20, 2026).
   noise of breath and levels were measured, in tests and in the program's
   own output on a virtual sound card, with a synthetic voice made for the
   tests; no real voicebank was tried.
+
+### Voicebank pictures (built, decision 0029)
+
+The owner's request: "for a voicebank, have the avatar display on the song
+visualisation, on the instrument, and in the pattern editor, as a low
+opacity image."
+
+- [x] A voicebank's picture, faint, where its voice sings: in its track's
+      header (just left of the track's buttons), at the start of each of
+      its clips, and large behind its piano roll's notes (at the bottom
+      right, still while the notes scroll); small and clear beside its
+      name in **+ Instrument…**
+- [x] Both pictures voicebanks carry: the small one named in
+      `character.txt` (usually a 100 × 100 BMP) in the small places, and
+      OpenUtau's portrait named in `character.yaml` (usually a large PNG)
+      behind the notes, each standing in for the other; BMP, PNG and JPEG,
+      read once, in the background
+
+### Voicebank pictures: things to try
+
+1. Add a voicebank that has a picture (most do; voicebanks made for
+   OpenUtau often have a large portrait as well) and add its voice track:
+   the picture shows faintly in the track's header and at the start of its
+   clips.
+2. Open one of its clips: the picture (the portrait, if it has one) stands
+   faintly behind the notes at the bottom right and stays put while you
+   scroll; the notes and the pitch line stay readable over it.
+3. **+ Instrument…**: the voicebank's small picture is beside its name.
+
+### Voicebank pictures: known gaps
+
+- The Voicebanks window lists voicebanks without their pictures.
+- A picture changed on the disk shows after the voicebank is added again
+  or the program starts again.
+- Not tried with real voicebanks' pictures (none can be downloaded in the
+  development container): checked with a 100 × 100 BMP and a large PNG
+  portrait made for the tests.
 
 ### Later milestones (decision 0027)
 

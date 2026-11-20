@@ -3316,3 +3316,62 @@ fn copied_notes_keep_their_lyrics_and_expression() {
     assert_eq!(pattern.lyric(pasted.id), None);
     std::fs::remove_dir_all(folder).ok();
 }
+
+// ----- A voicebank's picture (decision 0029)
+
+#[test]
+fn a_voice_s_picture_shows_faintly_on_its_track_and_behind_its_notes() {
+    let folder = fresh_folder("voice-picture");
+    let root = folder.join("voicebanks");
+    let voice = root.join("Test Voice");
+    test_voicebank(&voice);
+    image::RgbaImage::from_pixel(100, 100, image::Rgba([200, 120, 160, 255]))
+        .save(voice.join("icon.png"))
+        .unwrap();
+    std::fs::write(
+        voice.join("character.txt"),
+        "name=Test Voice\nauthor=Tester\nimage=icon.png\n",
+    )
+    .unwrap();
+    // A second voicebank, without a picture.
+    test_voicebank(&root.join("Plain Voice"));
+    let mut f = new_song();
+    f.workspace_mut().set_voicebanks_folder(Some(root));
+    let track = f
+        .workspace_mut()
+        .session_mut()
+        .add_voice_track("Test Voice", "Test Voice");
+    f.workspace_mut()
+        .session_mut()
+        .add_voice_track("Plain Voice", "Plain Voice");
+    // The picture is read in the background.
+    let label = text::voicebank_picture("Test Voice");
+    for _ in 0..200 {
+        f.harness.run_steps(1);
+        if f.harness.query_all_by_label(&label).count() >= 2 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    // In the song view: on the track's header and at the start of its clip.
+    assert_eq!(f.harness.query_all_by_label(&label).count(), 2);
+    assert!(
+        f.harness
+            .query_by_label(&text::voicebank_picture("Plain Voice"))
+            .is_none(),
+        "a voicebank without a picture shows none"
+    );
+    // Behind the piano roll's notes, at the bottom right of the grid, a
+    // 100-point icon at most two and a half times its size.
+    f.workspace_mut().session_mut().open_track(track);
+    f.harness.run_steps(3);
+    let picture = f.harness.get_by_label(&label).rect();
+    let roll = f.roll();
+    assert!(roll.contains_rect(picture), "{picture:?} in {roll:?}");
+    assert!(picture.right() > roll.right() - 40.0, "at the right");
+    assert!(
+        picture.width() <= 250.5 && picture.width() > 100.0,
+        "{picture:?}"
+    );
+    std::fs::remove_dir_all(folder).ok();
+}

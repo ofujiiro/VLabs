@@ -1615,8 +1615,9 @@ impl Workspace {
         let mut added = false;
         for info in voices {
             let detail = text::voicebank_detail(info.author.as_deref(), info.syllables);
-            if choice_row(ui, &info.name, &detail) {
-                let folder = crate::voicebanks::folder_name(&info);
+            let folder = crate::voicebanks::folder_name(&info);
+            let picture = self.session.voice_icon(ui.ctx(), &folder);
+            if voice_row(ui, &info.name, &detail, picture) {
                 self.session.add_voice_track(&folder, &info.name);
                 added = true;
             }
@@ -1812,6 +1813,32 @@ impl Workspace {
 fn choice_row(ui: &mut Ui, name: &str, detail: &str) -> bool {
     ui.add(
         Button::new(RichText::new(name).strong())
+            .shortcut_text(detail)
+            .min_size(egui::vec2(ui.available_width(), 30.0)),
+    )
+    .clicked()
+}
+
+/// A voice in the instrument chooser: its name, with its voicebank's
+/// picture small beside it when it has one (decision 0029).
+fn voice_row(
+    ui: &mut Ui,
+    name: &str,
+    detail: &str,
+    picture: Option<crate::session::VoicePicture>,
+) -> bool {
+    let label = RichText::new(name).strong();
+    let button = match picture {
+        Some(picture) => {
+            let side = picture.size.max_elem().max(1.0);
+            let image = egui::Image::from_texture((picture.texture, picture.size))
+                .fit_to_exact_size(picture.size * (22.0 / side));
+            Button::image_and_text(image, label)
+        }
+        None => Button::new(label),
+    };
+    ui.add(
+        button
             .shortcut_text(detail)
             .min_size(egui::vec2(ui.available_width(), 30.0)),
     )

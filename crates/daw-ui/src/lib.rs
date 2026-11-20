@@ -22,6 +22,7 @@ pub mod tempo_lane;
 pub mod text;
 pub mod theme;
 pub mod transport;
+pub mod voice_picture;
 pub mod voicebanks;
 pub mod widgets;
 pub mod workspace;

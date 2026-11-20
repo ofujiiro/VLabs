@@ -27,7 +27,7 @@ pub use files::SongFile;
 pub use mixing::MAX_GAIN;
 pub use plugins::{LaneChoice, PluginSearch};
 pub use theory::Draw;
-pub use voice::{LineNote, LinePhrase, SungLine, point_from};
+pub use voice::{LineNote, LinePhrase, SungLine, VoicePicture, point_from};
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -256,6 +256,9 @@ pub struct Session {
     drum_base: u8,
     /// The voicebanks lyrics are checked against (decision 0027).
     voicebanks: voice::VoicebankCache,
+    /// The voicebanks' pictures (decision 0029); behind a lock so the views
+    /// can ask for them while they only read the session.
+    pictures: std::sync::Mutex<voice::VoicePictures>,
     keyboard_velocity: f32,
     held_keys: HashMap<Key, u8>,
     pointer_note: Option<u8>,
@@ -354,6 +357,7 @@ impl Session {
             keyboard_base: 48,
             drum_base: DRUM_BASE,
             voicebanks: voice::VoicebankCache::default(),
+            pictures: std::sync::Mutex::new(voice::VoicePictures::default()),
             keyboard_velocity: 0.8,
             held_keys: HashMap::new(),
             pointer_note: None,

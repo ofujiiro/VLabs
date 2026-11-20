@@ -9,10 +9,13 @@
 //! through the open pattern (worked out as the engine sings it, for the
 //! piano roll to draw), and the edits of each note's pitch points,
 //! vibrato, colour and breath, every one undoable.
+//!
+//! Pictures (decision 0029): each voicebank's picture, read in the
+//! background the first time a view asks for it, kept as a texture.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError, mpsc};
 
 use daw_dsp::voice::VoiceBank;
 use daw_model::expression::{
@@ -29,6 +32,144 @@ use crate::text;
 /// The least depth a dragged vibrato keeps (a vibrato of no depth is none;
 /// removing one is a right-click or its panel's button).
 const LEAST_DRAGGED_DEPTH: f32 = 5.0;
+
+/// A voicebank's picture, ready to draw (decision 0029).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VoicePicture {
+    /// Its texture.
+    pub texture: egui::TextureId,
+    /// Its size, in pixels.
+    pub size: egui::Vec2,
+}
+
+/// Where a voicebank's picture stands.
+enum PictureSlot {
+    /// Being read.
+    Reading,
+    /// Read: its texture.
+    Ready(egui::TextureHandle),
+    /// It has none, or it could not be read.
+    None,
+}
+
+/// Which of a voicebank's pictures: the one to show small (its picture,
+/// else its portrait) or large (its portrait, else its picture).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum PictureSize {
+    Small,
+    Large,
+}
+
+/// A picture read in the background: of which voicebank, at which size, in
+/// which generation of the store (a result from before a voicebank was
+/// forgotten is dropped), and the picture, if any.
+type PictureResult = (
+    (String, PictureSize),
+    u64,
+    Option<daw_formats::utau::Picture>,
+);
+
+/// The voicebanks' pictures, by the name of their folder and their size.
+pub(crate) struct VoicePictures {
+    root: Option<PathBuf>,
+    slots: HashMap<(String, PictureSize), PictureSlot>,
+    generation: u64,
+    sender: mpsc::Sender<PictureResult>,
+    receiver: mpsc::Receiver<PictureResult>,
+}
+
+impl Default for VoicePictures {
+    fn default() -> Self {
+        let (sender, receiver) = mpsc::channel();
+        Self {
+            root: None,
+            slots: HashMap::new(),
+            generation: 0,
+            sender,
+            receiver,
+        }
+    }
+}
+
+impl VoicePictures {
+    /// Pictures from the voicebanks in `root`.
+    fn reset(&mut self, root: Option<PathBuf>) {
+        self.root = root;
+        self.slots.clear();
+        self.generation += 1;
+    }
+
+    /// Forgets one voicebank's pictures (it was removed, or added again).
+    fn forget(&mut self, name: &str) {
+        self.slots.retain(|(slot, _), _| slot != name);
+        self.generation += 1;
+    }
+
+    /// Turns the pictures read meanwhile into textures.
+    fn receive(&mut self, ctx: &egui::Context) {
+        while let Ok((key, generation, picture)) = self.receiver.try_recv() {
+            if generation != self.generation {
+                continue;
+            }
+            let slot = picture.map_or(PictureSlot::None, |picture| {
+                let size = [picture.width as usize, picture.height as usize];
+                let image = egui::ColorImage::from_rgba_unmultiplied(size, &picture.rgba);
+                PictureSlot::Ready(ctx.load_texture(
+                    format!("voicebank-picture-{}-{:?}", key.0, key.1),
+                    image,
+                    egui::TextureOptions::LINEAR,
+                ))
+            });
+            self.slots.insert(key, slot);
+        }
+    }
+
+    /// A picture of the voicebank in the folder `name`, reading it the
+    /// first time (in the background).
+    fn get(&mut self, ctx: &egui::Context, name: &str, size: PictureSize) -> Option<VoicePicture> {
+        self.receive(ctx);
+        let key = (name.to_owned(), size);
+        match self.slots.get(&key) {
+            Some(PictureSlot::Ready(texture)) => {
+                return Some(VoicePicture {
+                    texture: texture.id(),
+                    size: texture.size_vec2(),
+                });
+            }
+            Some(PictureSlot::Reading | PictureSlot::None) => return None,
+            None => {}
+        }
+        let Some(root) = self.root.clone() else {
+            self.slots.insert(key, PictureSlot::None);
+            return None;
+        };
+        self.slots.insert(key.clone(), PictureSlot::Reading);
+        let (sender, generation, folder) = (self.sender.clone(), self.generation, root.join(name));
+        let ctx = ctx.clone();
+        let read = move || {
+            let picture = daw_formats::utau::read_info(&folder)
+                .ok()
+                .and_then(|info| {
+                    match size {
+                        PictureSize::Small => info.icon(),
+                        PictureSize::Large => info.picture(),
+                    }
+                    .map(Path::to_path_buf)
+                })
+                .and_then(|path| daw_formats::utau::read_picture(&path).ok());
+            let _ = sender.send((key, generation, picture));
+            ctx.request_repaint();
+        };
+        if std::thread::Builder::new()
+            .name("voicebank-picture".to_owned())
+            .spawn(read)
+            .is_err()
+        {
+            return None;
+        }
+        None
+    }
+}
 
 /// One note of a sung phrase, as the piano roll draws it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -159,12 +300,33 @@ impl Session {
             root: root.map(Path::to_path_buf),
             banks: HashMap::new(),
         };
+        self.pictures_mut().reset(root.map(Path::to_path_buf));
     }
 
     /// Forgets what is known of a voicebank (it was added again, or
     /// removed).
     pub fn forget_voicebank(&mut self, name: &str) {
         self.voicebanks.banks.remove(name);
+        self.pictures_mut().forget(name);
+    }
+
+    fn pictures_mut(&self) -> std::sync::MutexGuard<'_, VoicePictures> {
+        self.pictures.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The picture to show large for the voicebank in the folder
+    /// `voicebank` (decision 0029: its portrait, else its picture): `None`
+    /// while it is read (in the background, the first time it is asked
+    /// for), or when the voicebank has none.
+    pub fn voice_portrait(&self, ctx: &egui::Context, voicebank: &str) -> Option<VoicePicture> {
+        self.pictures_mut().get(ctx, voicebank, PictureSize::Large)
+    }
+
+    /// The picture to show small for a voicebank (its picture, made for
+    /// small sizes, else its portrait); `None` as for
+    /// [`Self::voice_portrait`].
+    pub fn voice_icon(&self, ctx: &egui::Context, voicebank: &str) -> Option<VoicePicture> {
+        self.pictures_mut().get(ctx, voicebank, PictureSize::Small)
     }
 
     /// Adds a track sung by the voicebank in the folder `voicebank` (shown as

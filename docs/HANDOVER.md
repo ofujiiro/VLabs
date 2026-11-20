@@ -208,6 +208,36 @@ commit too.
   faults, fixed with a test: the voice lane's Tempo button fell below the
   lane, and lyrics vanished in the Pitch mode.
 
+## Built on November 20, 2026, not yet tried by the owner
+
+- **Voicebank pictures** (decision 0029, the owner's request: "have the
+  avatar display on the song visualisation, on the instrument, and in the
+  pattern editor, as a low opacity image"). `daw_formats::utau` reads
+  `character.yaml`'s `portrait` beside `character.txt`'s `image`
+  (`VoicebankInfo::picture` prefers the portrait, `icon` the small
+  picture) and decodes BMP, PNG and JPEG with the `image` crate
+  (`read_picture`: size limits, scaled to 1024 points at most);
+  `session/voice`'s `VoicePictures` decodes each on a thread of its own
+  the first time it is needed and keeps it as a texture, forgotten when
+  the voicebank is removed or added again (`voice_portrait`,
+  `voice_icon`); `daw-ui::voice_picture` places and draws a picture with a
+  low opacity (never more than 2.5 times its size), named "Picture of …"
+  for screen readers and tests. Drawn in the song view's track header
+  (left of the buttons) and clips (`voice_icon`, 30 %), behind the piano
+  roll's notes (`voice_portrait`, 14 %), and clear in the instrument
+  chooser.
+- Checked by the development session: `cargo xtask ci` (Linux); a
+  voicebank test (a BMP icon, a 2000 × 1000 PNG portrait scaled to
+  1024 × 512, a nested `portrait:` in `character.yaml` ignored, JPEG, a
+  file that is no picture refused); an interface test (the picture on the
+  header and the clip, none for a voicebank without one, the portrait at
+  the piano roll's right edge, not blown up); and the real program on the
+  virtual screen with a synthetic voicebank carrying both pictures: the
+  header, the clip, the chooser and the piano roll in screenshots. That
+  look moved the header's picture out from under the track's buttons and
+  gave the small places the small picture (a tall portrait shrank to a
+  sliver there).
+
 ## Next session: start here
 
 1. Look at `main`'s CI run for the merge and the "Program builds" run
@@ -238,6 +268,9 @@ commit too.
    pitch line follows the first placement's tempo (see known gaps).
 
 ## Not verified by the development session (say so if asked)
+
+- Voicebank pictures: real voicebanks' pictures (checked with pictures
+  made for the tests), the light theme, Windows by hand.
 
 - Singing expression (7b): listening (everything was measured, in tests
   and in the program's output); real voicebanks; the program on Windows by

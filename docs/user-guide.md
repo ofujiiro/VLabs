@@ -242,6 +242,12 @@ Copying, pasting and duplicating notes keeps their lyrics (and how they
 are sung, below). MIDI files you export carry the lyrics, and MIDI files
 with lyrics bring them in on their notes.
 
+A voicebank's picture, the face its creator gave it, shows faintly
+wherever the voice sings: in its track's header, at the start of each of
+its clips, and large behind the notes of its piano roll, without covering
+them. **+ Instrument…** shows it beside the voicebank's name. A voicebank
+without a picture shows none.
+
 ### Shaping the voice
 
 A voice track's piano roll draws the pitch the voice sings as a white line
