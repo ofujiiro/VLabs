@@ -251,6 +251,24 @@ commit too.
 - Checked by the development session: the packing script on stand-in
   files (one folder inside each archive, Linux's executable permission
   kept, the checksums), the version check, the workflow's YAML.
+- **Published** (November 20, 2026):
+  [VLabs 1.0](https://github.com/ofujiiro/VLabs/releases/tag/v1.0.0), tag
+  `v1.0.0` on `a21b09f`. Pushing the tag was refused (HTTP 403 from the
+  session's git access), so "Program builds" was run by hand on `main`
+  with `release: v1.0.0` and made the tag. Before it, CI on `main` failed
+  on Windows: the new picture test looked for the piano roll's picture
+  before its thread had decoded it (fixed: it waits, checked with a reader
+  slowed by 300 ms). After it, the published files were downloaded and
+  checked: the checksums match; the AppImage starts on this container's
+  glibc 2.39 and its About says 1.0.0; but the plain Linux folder was built
+  on Ubuntu 26.04 and needs glibc 2.43. Both Linux builds are now made on
+  24.04 and the release job refreshes an existing release's files; 1.0's
+  files were built again that way, from `261f181` (the tag's program
+  sources; only the workflow and decision 0030 changed). Checked again:
+  all five checksums match, the plain Linux program needs glibc 2.39 at
+  most, and both Linux downloads start here and say 1.0.0. The Windows
+  installer and zip were built and packed on Windows by the workflow but
+  not run (no Windows here).
 
 ## Next session: start here
 
@@ -283,6 +301,9 @@ commit too.
    pitch line follows the first placement's tempo (see known gaps).
 
 ## Not verified by the development session (say so if asked)
+
+- Release 1.0: the Windows installer and zip were not run (built by the
+  workflow on Windows; the installer step there succeeded).
 
 - Voicebank pictures: real voicebanks' pictures (checked with pictures
   made for the tests), the light theme, Windows by hand.
@@ -372,6 +393,9 @@ commit too.
 - The project file extension is a word the identity rule refuses in any
   Rust file (it is also Kasane Teto's name): use other names in code and
   tests.
+- The development session cannot push tags (HTTP 403): releases are made
+  by running "Program builds" by hand with the `release` input
+  (CLAUDE.md, "Releasing").
 - Do not put AI model identifiers in commits (CLAUDE.md): no
   Co-Authored-By trailer naming a model. Some earlier commits on `main`
   carry one by mistake; history was left as it is.

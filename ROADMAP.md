@@ -899,8 +899,10 @@ them.
       Windows installer, the Linux AppImage, the plain program folders
       (`.zip` for Windows, `.tar.gz` for Linux), `SHA256SUMS.txt`, and the
       notes written in `docs/releases/`; the tag must name the version
-- [ ] VLabs 1.0 on the repository's
-      [Releases page](https://github.com/ofujiiro/VLabs/releases)
+- [x] VLabs 1.0 published on the repository's
+      [Releases page](https://github.com/ofujiiro/VLabs/releases/tag/v1.0.0)
+      (November 20, 2026); the published Linux downloads checked: the
+      checksums match, both start on Ubuntu 24.04's glibc and say 1.0.0
 
 ### Release 1.0: things to try
 

@@ -59,7 +59,12 @@ is the title), bring it to `main` with CI green, then push the tag
 `v<version>` on that commit. "Program builds" builds everything and
 publishes the release; it refuses a tag that is not the version. Without
 the right to push tags, run "Program builds" by hand on `main` with the tag
-as its `release` input: the job makes the tag.
+as its `release` input: the job makes the tag (the development session's
+git access refused tags in November 2026, HTTP 403, so 1.0 was made this
+way). Run by hand again for an existing release, it replaces its files and
+notes. Then check the published files: download them, compare
+`SHA256SUMS.txt`, unpack the AppImage (`--appimage-extract`) and start
+`squashfs-root/AppRun --silent` on the virtual screen.
 
 `cargo-deny` must be installed: `cargo install cargo-deny --locked`.
 
