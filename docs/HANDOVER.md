@@ -107,6 +107,10 @@ Read `CLAUDE.md` first; it points to the brief, roadmap and decisions.
 - The owner tried every milestone build (phases 1 to 6), the plugins
   round, SFZ instruments, custom kits and the plugin fixes (November
   2026): everything works. That closes v1.
+- The owner sang with a real voicebank on the build from `main` with 7a
+  (November 20, 2026): "everything works great with the vb, still tuning
+  is missing". The tuning (7b) was not on `main` yet; it was merged that
+  day at the owner's request.
 
 ## Merged after v1, not yet tried by the owner
 
@@ -152,13 +156,13 @@ fast-forwarded into `main` at the owner's request, without pull requests).
   390 Hz against 330, 392, 440 and 392) with a harmonic-rich synthetic
   voice.
 
-## Built on the branch `claude/admiring-dirac-yzpv2t`, not merged yet
+## Merged into `main` on November 20, 2026, not yet tried by the owner
 
-November 19, 2026. CI on `main` for 7a's merge was green on Windows and
-Linux before this work started. CI and the Spikes workflow, started by
-hand on the branch (they run on `main` and pull requests only), passed
-on Windows and Linux for commit `0642f87` (everything but the Pitch
-mode's hover hint, which came after and was checked locally).
+Built on the branch `claude/admiring-dirac-yzpv2t` and fast-forwarded into
+`main` at the owner's request, without a pull request, as 7a was. CI and
+the Spikes workflow, started by hand on the branch (they run on `main` and
+pull requests only), passed on Windows and Linux, CI for its last code
+commit too.
 
 - **Singing voices, milestone 7b: expression** (decision 0028).
   `daw_model::expression` (each note's `NoteExpression`: pitch points in
@@ -206,15 +210,17 @@ mode's hover hint, which came after and was checked locally).
 
 ## Next session: start here
 
-1. If the branch was merged since, look at `main`'s CI run for it;
-   otherwise start CI on the branch with "Run workflow" after any change
-   (CI runs on `main` and pull requests only).
-2. Ask the owner how the hands-on checks went (ROADMAP.md: "Expressive
-   tempo", "7a: things to try" and "7b: things to try", with a real Kasane
-   Teto UTAU voicebank), and whether to merge the branch into `main` (a
-   pull request, or a fast-forward as for 7a). Real recordings are still
-   the big unknown: the renderer has only met synthetic voices.
-3. Build **singing voices 7c, exchange** (decision 0027): UST (UTAU) and
+1. Look at `main`'s CI run for the merge and the "Program builds" run
+   started for the owner after it.
+2. Ask the owner how 7b's checks went (ROADMAP.md: "7b: things to try",
+   with their real voicebank) and whether it is the tuning they found
+   missing on the 7a build. If they want more, what OpenUtau and UTAU
+   users tune that VLabs does not yet: phoneme timing (each note's
+   preutterance and overlap, dragged), consonant speed (UTAU's velocity),
+   modulation (how much of the recording's own pitch wobble is kept),
+   an envelope inside a note, pitch drawn freehand, more flags. Expressive
+   tempo's check was not mentioned: ask.
+3. Otherwise build **singing voices 7c, exchange** (decision 0027): UST (UTAU) and
    USTX (OpenUtau) projects in and out. Pointers:
    - 7b's model is OpenUtau's: pitch points in ms from the note's start
      (USTX `pitch.data` x), cents (USTX y is in tenths of a semitone),

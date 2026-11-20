@@ -13,11 +13,14 @@ A new or opened song now starts on the whole song, not an instrument
 (the owner's request). Glides now have shapes, and the tempo shows under
 the piano roll too (decision 0026). Singing voices have begun: milestone
 7a, a first voice sung from classic UTAU voicebanks, is built (decision
-0027). Both are merged into `main` and await the owner's hands-on check.
-Milestone 7b, expression, is built on the branch
-`claude/admiring-dirac-yzpv2t` (decision 0028): the sung pitch drawn
+0027). Both are merged into `main`; the owner has sung with a real
+voicebank on that build: everything works (November 2026). Milestone 7b,
+expression, the voice's tuning (decision 0028: the sung pitch drawn
 through the notes and shaped in a Pitch mode, vibrato, and each note's
-loudness, colour and breath. Next: 7c, UST and USTX projects in and out.
+loudness, colour and breath), is merged into `main` too (November 20,
+2026) and awaits the owner's hands-on check. Next: 7c, UST and USTX
+projects in and out, unless the owner's check of 7b asks for more tuning
+first.
 The repository has been public since November 2026 (the owner's
 decision).
 
@@ -682,7 +685,7 @@ them, with the voice managed and tuned inside VLabs, in the spirit of
 OpenUtau (MIT-licensed, the open successor of UTAU). Designed in decision
 0027 as four milestones; **7a, a first voice, is built** and merged
 into `main` (November 2026); **7b, expression, is built** (decision 0028)
-on the branch `claude/admiring-dirac-yzpv2t`.
+and merged into `main` (November 20, 2026).
 
 ### 7a. A first voice (built)
 
@@ -707,6 +710,8 @@ on the branch `claude/admiring-dirac-yzpv2t`.
 - [x] Played live, a voice sounds its "a" at the key's pitch at once
 - [x] Japanese text drawn with a Japanese font of the computer when it
       has one (none is bundled), otherwise lyrics in romaji
+- [x] The owner's hands-on check with a real voicebank (November 2026):
+      everything works
 
 ### 7a: things to try
 
