@@ -40,8 +40,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Linux (Ubuntu 26.04)
-            os: ubuntu-26.04
+          # Built on the oldest current Ubuntu LTS, as the AppImage is, so
+          # the plain folder runs on the same systems (glibc 2.39 or newer).
+          - name: Linux (Ubuntu 24.04)
+            os: ubuntu-24.04
             artifact: program-linux
           - name: Windows (Server 2025)
             os: windows-2025
@@ -155,7 +157,8 @@ jobs:
 
   # The release (decision 0030): the files above on the repository's
   # Releases page, with the notes in docs/releases/<tag>.md (its first line
-  # is the title). The tag must name the workspace's version.
+  # is the title). The tag must name the workspace's version. Run again for
+  # a release that exists, it replaces the release's files and notes.
   release:
     name: Publish the release
     needs: [build, appimage]
@@ -210,5 +213,10 @@ jobs:
           notes="docs/releases/$TAG.md"
           title="$(head -n 1 "$notes" | sed 's/^# *//')"
           tail -n +2 "$notes" > release-notes.md
-          gh release create "$TAG" release/* --title "$title" \
-            --notes-file release-notes.md --target "$GITHUB_SHA"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber
+            gh release edit "$TAG" --title "$title" --notes-file release-notes.md
+          else
+            gh release create "$TAG" release/* --title "$title" \
+              --notes-file release-notes.md --target "$GITHUB_SHA"
+          fi

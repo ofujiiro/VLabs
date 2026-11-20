@@ -33,7 +33,12 @@ has now asked for the release.
 - The job refuses a tag that is not the workspace's version, so a release
   cannot carry files that say another version.
 - The workflow can also be run by hand with a version: it then creates the
-  tag itself, on the commit it built, for when a tag cannot be pushed.
+  tag itself, on the commit it built, for when a tag cannot be pushed. Run
+  by hand for a release that exists, it replaces the release's files and
+  notes (a packaging fix): the files then come from the commit that run
+  built.
+- Both Linux downloads are built on the oldest current Ubuntu LTS (24.04),
+  so they run on the same systems.
 - **After 1.0:** `1.N.0` adds features (a singing milestone, say), `1.N.M`
   only fixes. Songs saved by an earlier version always open in a later one
   (the file format's migrations); a song saved by a later version may not
@@ -68,6 +73,9 @@ anywhere.
   Signing needs a code-signing certificate, a yearly cost: the owner's
   decision, whenever they want it. The AppImage is not signed either
   (rarely checked on Linux).
-- The AppImage needs glibc 2.39 or newer (Ubuntu 24.04, Fedora 40, Debian
-  13 and later), as decision 0022 built it.
+- The Linux downloads need glibc 2.39 or newer (Ubuntu 24.04, Fedora 40,
+  Debian 13 and later), as decision 0022 built the AppImage. The first
+  1.0 files had the plain Linux folder built on Ubuntu 26.04 (glibc 2.43);
+  the development session's check of the published files found it, and
+  the release's files were built again with it on 24.04.
 - The README links to the latest release.
