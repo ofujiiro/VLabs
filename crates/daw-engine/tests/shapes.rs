@@ -105,6 +105,37 @@ fn a_cut_piano_stops_at_the_end_of_its_note_in_the_song() {
     );
 }
 
+#[test]
+fn a_cut_piano_leaves_its_own_reverb_out() {
+    // The program's piano has its SoundFont's gentle room on; a cut must
+    // still sound cut.
+    let mut library = SoundLibrary::new();
+    library.register_builtin(BUILTIN_PIANO, PIANO);
+    let natural = render_offline(
+        &piano_song(NoteShape::NATURAL),
+        library.clone(),
+        config(),
+        1.5,
+    )
+    .0;
+    let cut = render_offline(
+        &piano_song(NoteShape {
+            attack: None,
+            release: Some(NoteShape::CUT_RELEASE),
+        }),
+        library,
+        config(),
+        1.5,
+    )
+    .0;
+    let held = peak(&natural, 0.4, 0.5);
+    assert!(peak(&natural, 0.6, 0.7) > held * 0.05, "the room rings on");
+    assert!(
+        peak(&cut, 0.6, 0.7) < held * 0.003,
+        "the cut piano is silent"
+    );
+}
+
 /// Half a second of a sine at 440 Hz.
 fn tone() -> Arc<AudioBuffer> {
     let samples = (0..RATE / 2)

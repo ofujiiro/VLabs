@@ -431,6 +431,14 @@ impl SoundLibrary {
                         if let Some(amount) = self.soundfont_reverb {
                             player.set_reverb(amount);
                         }
+                        // A set release says how notes end, and the
+                        // SoundFont's own reverb would ring on past it (a
+                        // cut would not sound cut): it is off then
+                        // (decision 0031). A reverb effect on the track
+                        // adds one on purpose.
+                        if shape.release.is_some() {
+                            player.set_reverb(0.0);
+                        }
                         (Box::new(player), None)
                     }
                     Err(problem) => (Box::new(SineSynth::new(sample_rate)), Some(problem)),

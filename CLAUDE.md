@@ -221,6 +221,18 @@ These come from the brief; tests and CI enforce most of them.
   `daw-formats` by path, with its own copy of `rust-toolchain.toml`) and a
   synthetic voicebank in the scratch home's `.local/share/vlabs/voicebanks`
   save a lot of clicking; `pw-record` the output and measure it.
+- **Shaping sounds (decision 0031):** the bundled piano's SoundFont
+  reverb rings on past a note's end: measure a note's tail with the
+  reverb off (`set_soundfont_reverb(0.0)`, `SoundFontPlayer::set_reverb`)
+  or with a release set (which leaves it out). The piano's own release is
+  short (about 0.15 s); hold notes for a second to compare tails. In
+  interface tests the sound editor's ends and fade squares are sliders
+  labelled `text::SOUND_START_HANDLE`, `SOUND_END_HANDLE`, `CLIP_FADE_IN`
+  and `CLIP_FADE_OUT`; the note shape's sliders are labelled by their
+  ticks (`get_by_role_and_label(Role::Slider, text::SHAPE_ATTACK)`). To
+  check them in the real program, a song made with the crates (a clip of
+  a generated sound, piano chords) opens from the command line:
+  `daw-app <song>`; double-click its clip to open the editor.
 - **Panels and popups:** give an `egui::Area` panel fixed column widths and
   no separators that stretch across it. A widget that takes "all the room
   there is" grows the panel to the window's edge, the window nudges it

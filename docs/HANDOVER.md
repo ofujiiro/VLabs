@@ -270,8 +270,55 @@ commit too.
   installer and zip were built and packed on Windows by the workflow but
   not run (no Windows here).
 
+## Built on November 22, 2026, on branch `claude/gracious-ramanujan-d1aikb`, not yet tried by the owner
+
+- **Second library folder crash** (the owner's report: "adding more than
+  one folder in the folders tab crashes the program"). Adding a folder
+  selected it before the library had taken it in, so the files column
+  indexed past the end of its roots (`library_panel`); it now takes the
+  folder in at once, and removing a folder keeps the one shown selected.
+  An interface test adds three folders, switches and removes two (it
+  panicked exactly so before the fix).
+- **Shaping sounds** (decision 0031, the owner's request: "no way to
+  change a sound in the program, for instance to cut it earlier; add
+  ways to change imported sounds and the instruments, for instance a
+  release cut piano").
+  - Model: `Track::shape` (`NoteShape`), and `reverse` and `pitch` on
+    audio clips (`Project::set_clip_reverse`, `set_clip_pitch`; trimming,
+    splitting and `audio_end` follow direction and speed); format 11, with
+    its sample file.
+  - DSP: `daw_dsp::sf2_shape` rewrites a SoundFont's instrument zones with
+    the new attack and release (`SoundFontBank::from_bytes_shaped`);
+    `Sampler::set_shape` and `DrumSampler::set_shape` (with a release,
+    one-shots follow their key); `InstrumentSettings::Shape`.
+  - Engine: `Engine::shapes` per slot; a shape change goes to a playing
+    sampler or kit as a setting, and rebuilds a SoundFont
+    (`SoundLibrary::shaped_soundfont`, the last three kept); with a
+    release, the SoundFont's own reverb is off. Audio spans play backwards
+    and faster or slower (`step`).
+  - Interface: `shape_ui` (the Note shape button and panel, in the track
+    header and the location line), `sound_editor` (the window; opened by
+    double-clicking an audio clip or Edit sound… in its menu),
+    `session/shape.rs`, `session/sound_edit.rs`.
+- Checked by the development session: `cargo xtask ci`; offline renders
+  (`daw-dsp/tests/shapes.rs` plays the bundled piano: a cut note is 60 dB
+  down 50 ms after its end with no click, a long release rings, a slow
+  attack swells; the kits and the sampler; `daw-engine/tests/shapes.rs`
+  and `audio.rs`: in songs, with the piano's reverb on, a reversed ramp,
+  a clip a fifth up at 659 Hz); interface tests for both panels; the real
+  program on the virtual screen (screenshots of the panel and the editor,
+  every control of the editor used with the mouse) and the virtual sound
+  card: a song of four piano chords recorded from the program, natural
+  and cut: with the cut each chord is silent 50 ms after its end (-150
+  dB), naturally it rings at -9 to -16 dB; no click at the cuts. That
+  recording is what found the SoundFont reverb ringing on after a cut.
+
 ## Next session: start here
 
+0. Ask the owner to try the shaping-sounds build (ROADMAP.md: "Shaping
+   sounds: things to try"), merge it into `main`, and release it as 1.1.0
+   (decision 0030; it adds features) with notes in
+   `docs/releases/v1.1.0.md`; the library crash fix goes with it.
 1. Look at the release (the repository's Releases page, VLabs 1.0) and the
    "Program builds" run that published it; ask the owner whether the
    downloads install and start on their computers.
@@ -301,6 +348,11 @@ commit too.
    pitch line follows the first placement's tempo (see known gaps).
 
 ## Not verified by the development session (say so if asked)
+
+- Shaping sounds: how the shapes sound to a person (measured only); the
+  panels in the light theme and on Windows; a shaped SoundFont other than
+  the bundled piano (the rewrite follows the SoundFont 2 specification
+  and is checked on the piano and the generated test fonts).
 
 - Release 1.0: the Windows installer and zip were not run (built by the
   workflow on Windows; the installer step there succeeded).

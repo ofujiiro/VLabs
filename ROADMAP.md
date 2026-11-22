@@ -22,8 +22,13 @@ loudness, colour and breath), is merged into `main` too (November 20,
 shows faintly on its track, its clips and behind its notes (decision 0029,
 the owner's request). **VLabs 1.0 is released** (decision 0030): version
 1.0.0, published on the repository's Releases page with a Windows
-installer and a Linux AppImage. Next: 7c, UST and USTX projects in and
-out, unless the owner's check of 7b asks for more tuning first.
+installer and a Linux AppImage. After 1.0, the owner's reports: adding a
+second library folder crashed the program (fixed), and sounds could not
+be shaped in the program: **shaping sounds** (decision 0031) adds note
+shapes for the instruments (a one-click release cut) and a sound editor
+for audio clips; built on a development branch, awaiting the owner's
+check and a 1.1 release. Next: 7c, UST and USTX projects in and out,
+unless the owner's check of 7b asks for more tuning first.
 The repository has been public since November 2026 (the owner's
 decision).
 
@@ -919,6 +924,66 @@ them.
   the owner's decision whenever they want it.
 - Every known gap listed above, for each round, is still there; the
   release notes name the ones a newcomer meets first.
+
+## After 1.0 — Shaping sounds (the owner's request, November 2026)
+
+Decision 0031. "There is no way to change a sound in the program, for
+instance to cut it off earlier; add ways to change imported sounds and the
+instruments, for instance to make a release cut piano."
+
+- [x] A library folder added after another no longer crashes the program
+      (the library showed the new folder before it had taken it in)
+- [x] Note shapes: an attack and a release for every track whose
+      instrument plays recorded sounds (the piano, SoundFonts, SFZ
+      instruments, drum kits, custom kits), each the instrument's own or
+      a time; the piano reads its SoundFont again with the new times; the
+      samplers take them while playing; with a release, kit hits stop at
+      their note's end, and a SoundFont's own reverb is left out
+- [x] The Note shape panel, from the track's header and the pattern's
+      location line: a picture of the shape, the two times, and Cut at
+      note end, Soft start, Long tail, Natural
+- [x] Audio clips play backwards or at another pitch (tape-style), in the
+      model, the engine, the timeline's waveforms; format version 11
+- [x] The sound editor: double-click an audio clip (or Edit sound… in its
+      menu): its whole sound with the played part lit, ends that drag
+      exactly, fade handles, volume, pitch, Backwards, As loud as it can be
+- [x] Checked: offline renders of the bundled piano (a cut note is 60 dB
+      down 50 ms after its end; the natural one still rings; no click), the
+      kits and the sampler; the format sample for version 11; interface
+      tests for both panels; the real program on the virtual screen and
+      sound card (chords recorded from it: silent 50 ms after each chord
+      with the cut, -9 to -16 dB without), screenshots of both windows
+- [ ] The owner's hands-on check, then release 1.1
+
+### Shaping sounds: things to try
+
+1. In a song with the piano, click the small rise-and-fall button in the
+   piano track's header, then **Cut at note end**. Play: each chord stops
+   dead when it ends. **Natural** brings the ringing back.
+2. Tick **Attack** and drag it right: notes swell in. **Long tail**: they
+   ring on after their key comes up.
+3. On a drum track (or a custom kit made of your sounds), choose **Cut at
+   note end**, then lengthen and shorten the notes in the pattern: each
+   hit stops where its note ends.
+4. Import a sound, double-click its clip: the sound editor opens. Drag the
+   right end to cut the clip shorter, the small squares to fade it, then
+   try **Backwards**, **Pitch** and **As loud as it can be**. Ctrl+Z undoes
+   each step.
+5. Save, close and open the song again: the shapes and edits are kept.
+
+### Shaping sounds: known gaps
+
+- A sound I could not hear: the cut, swell and long tail were measured, not
+  listened to; how they feel on the bundled piano is for the owner's ears.
+- The bundled piano's own release is short already (about 0.15 s), so its
+  cut is a short tail removed; a release cut is most striking on sustained
+  sounds (organs, pads, strings from SoundFonts or SFZ instruments).
+- A shaped SoundFont keeps a second copy of its file in memory while it
+  plays (19 MB for the piano).
+- DAWproject export keeps neither note shapes nor backwards or re-pitched
+  clips (such clips go out forwards at their own pitch).
+- Pitch changes speed with it (as a tape); changing pitch while keeping the
+  length (time-stretching) is for later.
 
 ## Later (not in v1, not designed out)
 
