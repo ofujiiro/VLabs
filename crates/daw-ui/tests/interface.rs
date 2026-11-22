@@ -2504,6 +2504,83 @@ fn the_library_browses_folders_and_plays_a_sound_when_clicked() {
     f.harness.get_by_label("Loops");
 }
 
+/// A library folder's button in the folders column, by part of its name.
+fn library_folder<'a>(f: &'a Fixture, name: &'a str) -> egui_kittest::Node<'a> {
+    f.harness.get_by(move |node| {
+        node.role() == egui::accesskit::Role::Button
+            && node.label().is_some_and(|label| label.contains(name))
+    })
+}
+
+#[test]
+fn a_second_library_folder_opens_beside_the_first() {
+    let mut f = new_song();
+    let first = sound_folder();
+    open_library(&mut f, &first);
+    // A second folder, added the same way, opens at once (this crashed
+    // the program in 1.0: it showed the new folder before listing it).
+    let second = first.with_file_name(format!(
+        "{}",
+        first
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .replace("library", "second")
+    ));
+    std::fs::create_dir_all(&second).unwrap();
+    std::fs::copy(tone_file("tone.wav", 0.5), second.join("Bass.wav")).unwrap();
+    *f.host.folder.lock().unwrap() = Some(second.clone());
+    f.harness.get_by_label(text::ADD_SOUND_FOLDER).click();
+    f.harness.run_steps(2);
+    wait_for_label(&mut f, "Bass.wav");
+    assert_eq!(
+        f.workspace().settings().sound_folders,
+        vec![first.clone(), second.clone()]
+    );
+    assert!(f.harness.query_by_label("Loops").is_none());
+    // And a third, then back to the first.
+    let third = first.with_file_name(format!(
+        "{}",
+        first
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .replace("library", "third")
+    ));
+    std::fs::create_dir_all(&third).unwrap();
+    std::fs::copy(tone_file("tone.wav", 0.5), third.join("Pad.wav")).unwrap();
+    *f.host.folder.lock().unwrap() = Some(third.clone());
+    f.harness.get_by_label(text::ADD_SOUND_FOLDER).click();
+    f.harness.run_steps(2);
+    wait_for_label(&mut f, "Pad.wav");
+    assert_eq!(f.workspace().settings().sound_folders.len(), 3);
+    let name = first.file_name().unwrap().to_string_lossy().into_owned();
+    library_folder(&f, &name).click();
+    f.harness.run_steps(2);
+    wait_for_label(&mut f, "Loops");
+    // Removing the second folder keeps the first one shown.
+    let second_name = second.file_name().unwrap().to_string_lossy().into_owned();
+    library_folder(&f, &second_name).click_secondary();
+    f.harness.run_steps(4);
+    f.harness.get_by_label(text::REMOVE_SOUND_FOLDER).click();
+    f.harness.run_steps(4);
+    assert_eq!(
+        f.workspace().settings().sound_folders,
+        vec![first.clone(), third.clone()]
+    );
+    f.harness.get_by_label("Loops");
+    // Removing the folder shown shows the one before it.
+    library_folder(&f, &third.file_name().unwrap().to_string_lossy()).click();
+    f.harness.run_steps(2);
+    wait_for_label(&mut f, "Pad.wav");
+    library_folder(&f, &third.file_name().unwrap().to_string_lossy()).click_secondary();
+    f.harness.run_steps(4);
+    f.harness.get_by_label(text::REMOVE_SOUND_FOLDER).click();
+    f.harness.run_steps(4);
+    assert_eq!(f.workspace().settings().sound_folders, vec![first.clone()]);
+    wait_for_label(&mut f, "Loops");
+}
+
 #[test]
 fn searching_the_library_looks_in_every_folder() {
     let mut f = new_song();

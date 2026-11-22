@@ -564,7 +564,7 @@ impl Workspace {
                     .retain(|f| !folders.iter().any(|p| p.as_path() == f.path()));
             });
             for folder in &folders {
-                library_panel::add_folder(&mut self.settings, folder.clone());
+                library_panel::add_folder(&mut self.settings, folder);
             }
             self.settings.show_library = true;
             self.settings.show_mixer = false;
