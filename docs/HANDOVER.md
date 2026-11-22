@@ -270,7 +270,7 @@ commit too.
   installer and zip were built and packed on Windows by the workflow but
   not run (no Windows here).
 
-## Built on November 22, 2026, on branch `claude/gracious-ramanujan-d1aikb`, not yet tried by the owner
+## Released as 1.1 on November 22, 2026, not yet tried by the owner
 
 - **Second library folder crash** (the owner's report: "adding more than
   one folder in the folders tab crashes the program"). Adding a folder
@@ -315,10 +315,9 @@ commit too.
 
 ## Next session: start here
 
-0. Ask the owner to try the shaping-sounds build (ROADMAP.md: "Shaping
-   sounds: things to try"), merge it into `main`, and release it as 1.1.0
-   (decision 0030; it adds features) with notes in
-   `docs/releases/v1.1.0.md`; the library crash fix goes with it.
+0. Ask the owner how 1.1's shaping sounds feel (ROADMAP.md: "Shaping
+   sounds: things to try"): the cut piano, the kits cut to their notes, the
+   sound editor; and whether the downloads install and start.
 1. Look at the release (the repository's Releases page, VLabs 1.0) and the
    "Program builds" run that published it; ask the owner whether the
    downloads install and start on their computers.

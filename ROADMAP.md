@@ -26,8 +26,8 @@ installer and a Linux AppImage. After 1.0, the owner's reports: adding a
 second library folder crashed the program (fixed), and sounds could not
 be shaped in the program: **shaping sounds** (decision 0031) adds note
 shapes for the instruments (a one-click release cut) and a sound editor
-for audio clips; built on a development branch, awaiting the owner's
-check and a 1.1 release. Next: 7c, UST and USTX projects in and out,
+for audio clips; merged into `main` and released as **VLabs 1.1**
+(November 22, 2026), awaiting the owner's hands-on check. Next: 7c, UST and USTX projects in and out,
 unless the owner's check of 7b asks for more tuning first.
 The repository has been public since November 2026 (the owner's
 decision).
@@ -953,7 +953,9 @@ instruments, for instance to make a release cut piano."
       tests for both panels; the real program on the virtual screen and
       sound card (chords recorded from it: silent 50 ms after each chord
       with the cut, -9 to -16 dB without), screenshots of both windows
-- [ ] The owner's hands-on check, then release 1.1
+- [x] Version 1.1.0 (it adds features, decision 0030), notes in
+      `docs/releases/v1.1.0.md`, published by "Program builds" from `main`
+- [ ] The owner's hands-on check
 
 ### Shaping sounds: things to try
 
