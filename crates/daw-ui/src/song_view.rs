@@ -7,7 +7,8 @@
 //! - click an empty spot on a track: its pattern is placed there (keep the
 //!   button down to drag it into place);
 //! - drag a clip to move it; drag its right end to repeat its pattern;
-//! - double-click a clip to open its pattern; right-click it for more;
+//! - double-click a clip to open its pattern (or its sound, in the sound
+//!   editor); right-click it for more;
 //! - click the ruler to move the play position; drag along it to loop a
 //!   part of the song;
 //! - the wheel scrolls, Shift+wheel scrolls in time, Ctrl+wheel zooms; hold
@@ -673,12 +674,16 @@ impl SongView {
             && !layout.conductor.contains(pos);
         if response.double_clicked()
             && let Some((clip, _, _)) = self.clip_at(layout, session, pos)
-            && let Some((track, c)) = session.project().clip(clip)
-            && let Some(pattern) = c.pattern()
+            && let Some((track, c)) = session.project().clip(clip).map(|(t, c)| (t, *c))
         {
             session.cancel_gesture();
             self.drag = Drag::None;
-            session.open_pattern(track, pattern);
+            // A pattern opens; a sound opens in the sound editor (decision
+            // 0031).
+            match c.pattern() {
+                Some(pattern) => session.open_pattern(track, pattern),
+                None => session.open_sound_editor(clip),
+            }
             return;
         }
         // (Over the view, not over a menu or popup on top of it. A quick tap
@@ -1995,6 +2000,15 @@ impl SongView {
                         session.open_pattern(track, pattern);
                         close = true;
                     }
+                    if c.is_audio()
+                        && ui
+                            .button(text::EDIT_SOUND)
+                            .on_hover_text(text::EDIT_SOUND_HINT)
+                            .clicked()
+                    {
+                        session.open_sound_editor(clip);
+                        close = true;
+                    }
                     if let Some(pattern) = c.pattern() {
                         let others: Vec<(daw_model::PatternId, String)> = session
                             .patterns_of(track)
@@ -2040,24 +2054,7 @@ impl SongView {
                     }
                     if let Some(gain) = session.clip_gain(clip) {
                         ui.separator();
-                        let mut db = crate::widgets::gain_to_db(gain);
-                        let slider = ui
-                            .add(
-                                Slider::new(&mut db, -60.0..=12.0)
-                                    .suffix(" dB")
-                                    .fixed_decimals(1)
-                                    .text(text::CLIP_VOLUME),
-                            )
-                            .on_hover_text(text::CLIP_VOLUME_HINT);
-                        if slider.drag_started() {
-                            session.begin_gesture(text::EDIT_CLIP_VOLUME);
-                        }
-                        if slider.changed() {
-                            session.set_clip_gain(clip, crate::widgets::db_to_gain(db));
-                        }
-                        if slider.drag_stopped() {
-                            session.end_gesture();
-                        }
+                        clip_volume(ui, session, clip, gain);
                     }
                 });
             });
@@ -2261,4 +2258,29 @@ fn max_zoom() -> f64 {
     #[allow(clippy::cast_precision_loss, reason = "a constant")]
     let quarter = Ticks::QUARTER.0 as f64;
     quarter / 1.5
+}
+
+/// An audio clip's volume, in its menu.
+fn clip_volume(ui: &mut Ui, session: &mut Session, clip: ClipId, gain: f32) {
+    let shown = crate::widgets::gain_to_db(gain);
+    let mut db = shown;
+    let slider = ui
+        .add(
+            Slider::new(&mut db, -60.0..=12.0)
+                .suffix(" dB")
+                .fixed_decimals(1)
+                .text(text::CLIP_VOLUME),
+        )
+        .on_hover_text(text::CLIP_VOLUME_HINT);
+    if slider.drag_started() {
+        session.begin_gesture(text::EDIT_CLIP_VOLUME);
+    }
+    // (Shown in tenths of a decibel: a volume with more decimals is not
+    // changed by being shown.)
+    if slider.changed() && (db - shown).abs() > 0.04 {
+        session.set_clip_gain(clip, crate::widgets::db_to_gain(db));
+    }
+    if slider.drag_stopped() {
+        session.end_gesture();
+    }
 }

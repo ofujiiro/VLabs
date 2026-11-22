@@ -3544,3 +3544,123 @@ fn the_song_view_shows_a_shape_button_for_tracks_that_take_one() {
     f.harness.run_steps(3);
     assert_eq!(f.harness.query_all_by_label(text::NOTE_SHAPE).count(), 2);
 }
+
+#[test]
+fn a_sound_is_cut_reversed_pitched_and_levelled_in_the_sound_editor() {
+    let mut f = new_song();
+    f.workspace_mut().session_mut().import_audio(
+        vec![tone_file("Loop.wav", 2.0)],
+        None,
+        Ticks::ZERO,
+    );
+    f.wait_for_audio();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(3);
+    let track = f.session().project().tracks.last().unwrap().id;
+    let clip = f.session().project().track(track).unwrap().clips[0].id;
+    let middle = f.row_top(2) + 34.0;
+
+    // The clip's menu opens the editor (a double-click does too, in the
+    // program).
+    f.right_click(Pos2::new(f.song_x(Ticks::QUARTER), middle));
+    f.harness.get_by_label(text::EDIT_SOUND).click();
+    f.harness.run_steps(6);
+    let wave = f.harness.get_by_label(text::SOUND_WAVEFORM).rect();
+
+    // Its end, dragged a quarter of the way back: half a second shorter,
+    // exactly where it was dropped (no beats here), as one step.
+    let depth = f.session().document().undo_depth();
+    let end = f
+        .harness
+        .get_by_role_and_label(egui::accesskit::Role::Slider, text::SOUND_END_HANDLE)
+        .rect()
+        .center();
+    f.drag(end, end - vec2(wave.width() / 4.0, 0.0), Modifiers::NONE);
+    let stretch = f.session().clip_stretch(clip).unwrap();
+    assert!(
+        (stretch.end - 1.5).abs() < 0.02,
+        "cut to a second and a half: {stretch:?}"
+    );
+    assert_eq!(f.session().document().undo_depth(), depth + 1, "one step");
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_TRIM_CLIP)
+    );
+
+    // Its start, dragged a quarter in: the sound stays where it was in the
+    // song, the clip starts later.
+    let start = f
+        .harness
+        .get_by_role_and_label(egui::accesskit::Role::Slider, text::SOUND_START_HANDLE)
+        .rect()
+        .center();
+    f.drag(
+        start,
+        start + vec2(wave.width() / 4.0, 0.0),
+        Modifiers::NONE,
+    );
+    let stretch = f.session().clip_stretch(clip).unwrap();
+    assert!((stretch.start - 0.5).abs() < 0.02, "{stretch:?}");
+    let c = *f.session().project().clip(clip).unwrap().1;
+    let seconds = f.session().project().tempo.seconds_at(c.start);
+    assert!(
+        (seconds - 0.5).abs() < 0.02,
+        "starts half a second in: {seconds}"
+    );
+
+    // Backwards: the same stretch of sound, played the other way.
+    f.harness.get_by_label(text::CLIP_REVERSE).click();
+    f.harness.run_steps(2);
+    assert_eq!(f.session().clip_motion(clip), Some((0.0, true)));
+    let stretch = f.session().clip_stretch(clip).unwrap();
+    assert!(
+        (stretch.end - stretch.start - 1.0).abs() < 0.02,
+        "{stretch:?}"
+    );
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_CLIP_REVERSE)
+    );
+
+    // Up in pitch: shorter, as a tape played faster.
+    let slider = f
+        .harness
+        .get_by_role_and_label(egui::accesskit::Role::Slider, text::CLIP_PITCH)
+        .rect();
+    f.drag(
+        slider.center(),
+        slider.center() + vec2(slider.width() / 4.0, 0.0),
+        Modifiers::NONE,
+    );
+    let (pitch, _) = f.session().clip_motion(clip).unwrap();
+    assert!(
+        pitch >= 1.0 && pitch.fract() == 0.0,
+        "whole semitones up: {pitch}"
+    );
+    let stretch = f.session().clip_stretch(clip).unwrap();
+    let expected = 1.0 / daw_model::pitch_speed(pitch);
+    assert!(
+        (stretch.end - stretch.start - expected).abs() < 0.02,
+        "{stretch:?} against {expected}"
+    );
+
+    // As loud as it can be: the tone peaks at half of full scale, so its
+    // volume nearly doubles.
+    f.harness.get_by_label(text::CLIP_NORMALIZE).click();
+    f.harness.run_steps(2);
+    let gain = f.session().clip_gain(clip).unwrap();
+    assert!((gain - 1.95).abs() < 0.05, "{gain}");
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_NORMALIZE_CLIP)
+    );
+
+    // Undo takes the steps back one by one; the window closes with its
+    // own button.
+    f.key(Key::Z, Key::Z, true, Modifiers::COMMAND);
+    f.key(Key::Z, Key::Z, false, Modifiers::COMMAND);
+    assert!((f.session().clip_gain(clip).unwrap() - 1.0).abs() < 1e-6);
+    f.harness.get_by_label("Close window").click();
+    f.harness.run_steps(3);
+    assert!(f.harness.query_by_label(text::SOUND_WAVEFORM).is_none());
+}

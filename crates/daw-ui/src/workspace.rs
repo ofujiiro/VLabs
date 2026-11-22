@@ -451,6 +451,7 @@ impl Workspace {
             });
         self.effects.ui(&ctx, &mut self.session);
         crate::synth_ui::show_windows(&ctx, &mut self.session);
+        crate::sound_editor::show(&ctx, &mut self.session);
         self.show_dialog(&ctx);
 
         for intent in intents {

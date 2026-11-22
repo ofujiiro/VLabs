@@ -2303,3 +2303,42 @@ pub fn shape_time(seconds: f32) -> String {
         format!("{seconds:.2} s")
     }
 }
+
+// The sound editor (decision 0031).
+pub const EDIT_SOUND: &str = "Edit sound…";
+pub const EDIT_SOUND_HINT: &str =
+    "Cut, fade, reverse, re-pitch and level this clip, in a window of its own";
+pub const EDIT_CLIP_REVERSE: &str = "play clip backwards";
+pub const EDIT_CLIP_PITCH: &str = "change clip pitch";
+pub const EDIT_NORMALIZE_CLIP: &str = "make clip as loud as it can be";
+pub const SOUND_WAVEFORM: &str =
+    "The clip's sound: drag its ends to cut it, the small squares to fade it";
+pub const SOUND_START_HANDLE: &str = "Where the clip starts in its sound";
+pub const SOUND_END_HANDLE: &str = "Where the clip ends in its sound";
+pub const CLIP_REVERSE: &str = "Backwards";
+pub const CLIP_REVERSE_HINT: &str = "Play the clip's sound backwards";
+pub const CLIP_PITCH: &str = "Pitch";
+pub const CLIP_PITCH_HINT: &str =
+    "Higher or lower, in semitones: like a tape, the sound also plays faster or slower";
+pub const CLIP_NORMALIZE: &str = "As loud as it can be";
+pub const CLIP_NORMALIZE_HINT: &str =
+    "Sets the volume so the loudest moment of the clip is just under full scale";
+pub const CLIP_FADE_IN: &str = "Fade in";
+pub const CLIP_FADE_OUT: &str = "Fade out";
+pub const SOUND_NOT_READY: &str = "The sound is still being read…";
+
+/// The sound editor's title.
+pub fn sound_editor_title(name: &str) -> String {
+    format!("Sound — {name}")
+}
+
+/// How much of its sound a clip plays.
+pub fn clip_span(start: f64, end: f64, total: f64) -> String {
+    format!(
+        "{:.2} s to {:.2} s of {:.2} s ({:.2} s long)",
+        start,
+        end,
+        total,
+        end - start
+    )
+}
