@@ -21,7 +21,7 @@ use daw_engine::{
     Engine, EngineConfig, EngineProcessor, PluginFileFormat, PluginInfo, PluginKind, PluginSystem,
     PluginTarget, ScanProblem, SoundLibrary,
 };
-use daw_model::{AutomationPoint, AutomationTarget, ChainPlace, EffectKind, Ticks};
+use daw_model::{AutomationPoint, AutomationTarget, ChainPlace, EffectKind, NoteShape, Ticks};
 use daw_ui::{
     BridgeState, Host, KeyLabels, LayoutFamily, PluginJobDone, PluginPlaces, PluginSearch, Request,
     Session, Settings, View, Workspace, text,
@@ -2504,6 +2504,81 @@ fn the_library_browses_folders_and_plays_a_sound_when_clicked() {
     f.harness.get_by_label("Loops");
 }
 
+/// A library folder's button in the folders column, by part of its name.
+fn library_folder<'a>(f: &'a Fixture, name: &'a str) -> egui_kittest::Node<'a> {
+    f.harness.get_by(move |node| {
+        node.role() == egui::accesskit::Role::Button
+            && node.label().is_some_and(|label| label.contains(name))
+    })
+}
+
+#[test]
+fn a_second_library_folder_opens_beside_the_first() {
+    let mut f = new_song();
+    let first = sound_folder();
+    open_library(&mut f, &first);
+    // A second folder, added the same way, opens at once (this crashed
+    // the program in 1.0: it showed the new folder before listing it).
+    let second = first.with_file_name(
+        first
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .replace("library", "second"),
+    );
+    std::fs::create_dir_all(&second).unwrap();
+    std::fs::copy(tone_file("tone.wav", 0.5), second.join("Bass.wav")).unwrap();
+    *f.host.folder.lock().unwrap() = Some(second.clone());
+    f.harness.get_by_label(text::ADD_SOUND_FOLDER).click();
+    f.harness.run_steps(2);
+    wait_for_label(&mut f, "Bass.wav");
+    assert_eq!(
+        f.workspace().settings().sound_folders,
+        vec![first.clone(), second.clone()]
+    );
+    assert!(f.harness.query_by_label("Loops").is_none());
+    // And a third, then back to the first.
+    let third = first.with_file_name(
+        first
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .replace("library", "third"),
+    );
+    std::fs::create_dir_all(&third).unwrap();
+    std::fs::copy(tone_file("tone.wav", 0.5), third.join("Pad.wav")).unwrap();
+    *f.host.folder.lock().unwrap() = Some(third.clone());
+    f.harness.get_by_label(text::ADD_SOUND_FOLDER).click();
+    f.harness.run_steps(2);
+    wait_for_label(&mut f, "Pad.wav");
+    assert_eq!(f.workspace().settings().sound_folders.len(), 3);
+    let name = first.file_name().unwrap().to_string_lossy().into_owned();
+    library_folder(&f, &name).click();
+    f.harness.run_steps(2);
+    wait_for_label(&mut f, "Loops");
+    // Removing the second folder keeps the first one shown.
+    let second_name = second.file_name().unwrap().to_string_lossy().into_owned();
+    library_folder(&f, &second_name).click_secondary();
+    f.harness.run_steps(4);
+    f.harness.get_by_label(text::REMOVE_SOUND_FOLDER).click();
+    f.harness.run_steps(4);
+    assert_eq!(
+        f.workspace().settings().sound_folders,
+        vec![first.clone(), third.clone()]
+    );
+    f.harness.get_by_label("Loops");
+    // Removing the folder shown shows the one before it.
+    library_folder(&f, &third.file_name().unwrap().to_string_lossy()).click();
+    f.harness.run_steps(2);
+    wait_for_label(&mut f, "Pad.wav");
+    library_folder(&f, &third.file_name().unwrap().to_string_lossy()).click_secondary();
+    f.harness.run_steps(4);
+    f.harness.get_by_label(text::REMOVE_SOUND_FOLDER).click();
+    f.harness.run_steps(4);
+    assert_eq!(f.workspace().settings().sound_folders, vec![first.clone()]);
+    wait_for_label(&mut f, "Loops");
+}
+
 #[test]
 fn searching_the_library_looks_in_every_folder() {
     let mut f = new_song();
@@ -3379,4 +3454,213 @@ fn a_voice_s_picture_shows_faintly_on_its_track_and_behind_its_notes() {
         "{picture:?}"
     );
     std::fs::remove_dir_all(folder).ok();
+}
+
+#[test]
+fn the_piano_is_cut_at_the_end_of_its_notes_from_its_shape_panel() {
+    let mut f = fixture();
+    let track = f.session().track_id();
+    assert_eq!(f.session().track_shape(track), Some(NoteShape::NATURAL));
+    // The button on the pattern's location line opens the panel.
+    f.harness.get_by_label(text::NOTE_SHAPE).click();
+    f.harness.run_steps(4);
+    f.harness.get_by_label(text::SHAPE_PICTURE);
+    assert!(
+        f.harness.query_by_label(text::SHAPE_KIT_NOTE).is_none(),
+        "the note about kits is for kits"
+    );
+    // One click cuts every note off at its end, as one undo step.
+    let depth = f.session().document().undo_depth();
+    let cut = f.harness.get_by_label(text::SHAPE_CUT).rect().center();
+    f.click(cut, Modifiers::NONE);
+    let shape = f.session().track_shape(track).unwrap();
+    assert!(shape.is_cut(), "{shape:?}");
+    assert_eq!(shape.attack, None, "the attack stays the instrument's own");
+    assert_eq!(f.session().document().undo_depth(), depth + 1);
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_NOTE_SHAPE)
+    );
+    // The panel stays open: tick the attack and drag its slider longer,
+    // as one more step.
+    let attack = f
+        .harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, text::SHAPE_ATTACK)
+        .rect()
+        .center();
+    f.click(attack, Modifiers::NONE);
+    let ticked = f.session().track_shape(track).unwrap().attack;
+    assert!(ticked.is_some(), "ticked, it is set");
+    let slider = f
+        .harness
+        .get_by_role_and_label(egui::accesskit::Role::Slider, text::SHAPE_ATTACK)
+        .rect();
+    let depth = f.session().document().undo_depth();
+    f.drag(
+        slider.left_center() + vec2(6.0, 0.0),
+        slider.left_center() + vec2(60.0, 0.0),
+        Modifiers::NONE,
+    );
+    let longer = f.session().track_shape(track).unwrap().attack.unwrap();
+    assert!(longer > ticked.unwrap(), "{longer} after {ticked:?}");
+    assert_eq!(f.session().document().undo_depth(), depth + 1, "one step");
+    assert!(
+        f.session().track_shape(track).unwrap().is_cut(),
+        "still cut"
+    );
+    // Back to the instrument's own shape.
+    let natural = f.harness.get_by_label(text::SHAPE_RESET).rect().center();
+    f.click(natural, Modifiers::NONE);
+    assert_eq!(f.session().track_shape(track), Some(NoteShape::NATURAL));
+    // Undo brings the cut back.
+    f.key(Key::Z, Key::Z, true, Modifiers::COMMAND);
+    f.key(Key::Z, Key::Z, false, Modifiers::COMMAND);
+    assert!(f.session().track_shape(track).unwrap().is_cut());
+}
+
+#[test]
+fn a_kit_has_a_shape_too_and_says_what_a_release_does_to_its_hits() {
+    let mut f = beat();
+    f.harness.get_by_label(text::NOTE_SHAPE).click();
+    f.harness.run_steps(4);
+    f.harness.get_by_label(text::SHAPE_KIT_NOTE);
+    let long = f.harness.get_by_label(text::SHAPE_LONG).rect().center();
+    f.click(long, Modifiers::NONE);
+    let track = f.session().track_id();
+    assert_eq!(
+        f.session().track_shape(track).and_then(|s| s.release),
+        Some(2.5)
+    );
+}
+
+#[test]
+fn the_song_view_shows_a_shape_button_for_tracks_that_take_one() {
+    let mut f = new_song();
+    // The starter song's drums and piano both take a shape.
+    let buttons = f.harness.query_all_by_label(text::NOTE_SHAPE).count();
+    assert_eq!(buttons, 2);
+    // A synth has envelopes of its own: no shape button for it.
+    f.workspace_mut().session_mut().add_synth_track();
+    f.harness.run_steps(3);
+    assert_eq!(f.harness.query_all_by_label(text::NOTE_SHAPE).count(), 2);
+}
+
+#[test]
+fn a_sound_is_cut_reversed_pitched_and_levelled_in_the_sound_editor() {
+    let mut f = new_song();
+    f.workspace_mut().session_mut().import_audio(
+        vec![tone_file("Loop.wav", 2.0)],
+        None,
+        Ticks::ZERO,
+    );
+    f.wait_for_audio();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(3);
+    let track = f.session().project().tracks.last().unwrap().id;
+    let clip = f.session().project().track(track).unwrap().clips[0].id;
+    let middle = f.row_top(2) + 34.0;
+
+    // The clip's menu opens the editor (a double-click does too, in the
+    // program).
+    f.right_click(Pos2::new(f.song_x(Ticks::QUARTER), middle));
+    f.harness.get_by_label(text::EDIT_SOUND).click();
+    f.harness.run_steps(6);
+    let wave = f.harness.get_by_label(text::SOUND_WAVEFORM).rect();
+
+    // Its end, dragged a quarter of the way back: half a second shorter,
+    // exactly where it was dropped (no beats here), as one step.
+    let depth = f.session().document().undo_depth();
+    let end = f
+        .harness
+        .get_by_role_and_label(egui::accesskit::Role::Slider, text::SOUND_END_HANDLE)
+        .rect()
+        .center();
+    f.drag(end, end - vec2(wave.width() / 4.0, 0.0), Modifiers::NONE);
+    let stretch = f.session().clip_stretch(clip).unwrap();
+    assert!(
+        (stretch.end - 1.5).abs() < 0.02,
+        "cut to a second and a half: {stretch:?}"
+    );
+    assert_eq!(f.session().document().undo_depth(), depth + 1, "one step");
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_TRIM_CLIP)
+    );
+
+    // Its start, dragged a quarter in: the sound stays where it was in the
+    // song, the clip starts later.
+    let start = f
+        .harness
+        .get_by_role_and_label(egui::accesskit::Role::Slider, text::SOUND_START_HANDLE)
+        .rect()
+        .center();
+    f.drag(
+        start,
+        start + vec2(wave.width() / 4.0, 0.0),
+        Modifiers::NONE,
+    );
+    let stretch = f.session().clip_stretch(clip).unwrap();
+    assert!((stretch.start - 0.5).abs() < 0.02, "{stretch:?}");
+    let c = *f.session().project().clip(clip).unwrap().1;
+    let seconds = f.session().project().tempo.seconds_at(c.start);
+    assert!(
+        (seconds - 0.5).abs() < 0.02,
+        "starts half a second in: {seconds}"
+    );
+
+    // Backwards: the same stretch of sound, played the other way.
+    f.harness.get_by_label(text::CLIP_REVERSE).click();
+    f.harness.run_steps(2);
+    assert_eq!(f.session().clip_motion(clip), Some((0.0, true)));
+    let stretch = f.session().clip_stretch(clip).unwrap();
+    assert!(
+        (stretch.end - stretch.start - 1.0).abs() < 0.02,
+        "{stretch:?}"
+    );
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_CLIP_REVERSE)
+    );
+
+    // Up in pitch: shorter, as a tape played faster.
+    let slider = f
+        .harness
+        .get_by_role_and_label(egui::accesskit::Role::Slider, text::CLIP_PITCH)
+        .rect();
+    f.drag(
+        slider.center(),
+        slider.center() + vec2(slider.width() / 4.0, 0.0),
+        Modifiers::NONE,
+    );
+    let (pitch, _) = f.session().clip_motion(clip).unwrap();
+    assert!(
+        pitch >= 1.0 && pitch.fract() == 0.0,
+        "whole semitones up: {pitch}"
+    );
+    let stretch = f.session().clip_stretch(clip).unwrap();
+    let expected = 1.0 / daw_model::pitch_speed(pitch);
+    assert!(
+        (stretch.end - stretch.start - expected).abs() < 0.02,
+        "{stretch:?} against {expected}"
+    );
+
+    // As loud as it can be: the tone peaks at half of full scale, so its
+    // volume nearly doubles.
+    f.harness.get_by_label(text::CLIP_NORMALIZE).click();
+    f.harness.run_steps(2);
+    let gain = f.session().clip_gain(clip).unwrap();
+    assert!((gain - 1.95).abs() < 0.05, "{gain}");
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_NORMALIZE_CLIP)
+    );
+
+    // Undo takes the steps back one by one; the window closes with its
+    // own button.
+    f.key(Key::Z, Key::Z, true, Modifiers::COMMAND);
+    f.key(Key::Z, Key::Z, false, Modifiers::COMMAND);
+    assert!((f.session().clip_gain(clip).unwrap() - 1.0).abs() < 1e-6);
+    f.harness.get_by_label("Close window").click();
+    f.harness.run_steps(3);
+    assert!(f.harness.query_by_label(text::SOUND_WAVEFORM).is_none());
 }

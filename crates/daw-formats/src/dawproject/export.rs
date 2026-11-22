@@ -584,10 +584,22 @@ impl Writer<'_> {
                     offset,
                     fade_in,
                     fade_out,
+                    reverse,
+                    pitch,
                     ..
                 } => {
                     let Some(file) = self.project.audio_file(audio) else {
                         continue;
+                    };
+                    // DAWproject has no backwards or tape-speed clips: such
+                    // a clip goes out as the same stretch of its sound,
+                    // forwards at its own pitch (decision 0031).
+                    let speed = daw_model::pitch_speed(pitch);
+                    let played = self.project.seconds_between(clip.start, clip.end()) * speed;
+                    let play_start = if reverse {
+                        (file.seconds_in(offset) - played).max(0.0)
+                    } else {
+                        file.seconds_in(offset)
                     };
                     if !is_plain_name(&file.file) {
                         return Err(DawProjectError::MissingAudio(file.name.clone()));
@@ -601,7 +613,7 @@ impl Writer<'_> {
                         .number("time", beats(clip.start))
                         .number("duration", beats(clip.length))
                         .attr("contentTimeUnit", "seconds")
-                        .number("playStart", file.seconds_in(offset))
+                        .number("playStart", play_start)
                         .attr("fadeTimeUnit", "seconds")
                         .number("fadeInTime", f64::from(fade_in))
                         .number("fadeOutTime", f64::from(fade_out))

@@ -187,6 +187,28 @@ VLabs, then every plugin found on your computer:
 
 ![An SFZ instrument from the library, as a track](guide-images/sfz.png)
 
+### Note shape: how notes start and end
+
+The piano, SoundFonts, SFZ instruments, drum kits and custom kits have a
+**Note shape** button (a small rise-and-fall line) in their track's header
+and next to the track's name above its pattern. It opens a panel:
+
+- **Attack**: how long a note takes to rise to full level. Tick it to set
+  it; unticked, the instrument plays its notes as they were recorded.
+- **Release**: how long a note takes to fall silent once its key comes up.
+- **Cut at note end** makes every note stop the moment its key comes up,
+  with no ringing tail: the "release cut" sound, on the piano or anything
+  else. **Soft start** makes notes swell in, **Long tail** lets them ring
+  on, **Natural** goes back to the instrument's own way.
+- On a kit, a release also makes each hit stop at the end of its note,
+  however long its sound: lengthen or shorten the notes to cut a sound
+  where you want.
+- With a release set, a SoundFont's own reverb is left out, so a cut
+  sounds cut; add a **Reverb** effect to the track if you want a room.
+
+The synth has full envelopes of its own (in its window), and plugins have
+theirs.
+
 ## The synth
 
 Add a synth track, then click the window button on its track header (or in
@@ -313,6 +335,24 @@ Bring in sound files with **Import…** (<kbd>Ctrl+I</kbd>) or by dropping them
 on the song: WAV, FLAC, MP3 and Ogg Vorbis. On the timeline, drag a clip's
 ends to trim it, the small squares at its top corners to fade it, and
 right-click it to split it or change its volume.
+
+### The sound editor
+
+**Double-click** an audio clip (or choose **Edit sound…** in its
+right-click menu) to open it in a window of its own. It shows the clip's
+whole sound, with the part the clip plays lit:
+
+- drag the **ends** to cut the clip exactly where you want (they do not
+  snap to beats here); the sound stays where it is in the song;
+- drag the **small squares** at the top to fade it in and out;
+- **Volume**, and **As loud as it can be**, which sets the volume so the
+  loudest moment is just under full scale;
+- **Pitch**, in semitones: like a tape, the sound also plays faster
+  (higher) or slower (lower), so the clip gets shorter or longer;
+- **Backwards** plays the clip's sound in reverse.
+
+Every change can be undone, one at a time, and shows on the timeline at
+once.
 
 ## The mixer and effects
 

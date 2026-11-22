@@ -448,6 +448,15 @@ impl Instrument {
         }
     }
 
+    /// Whether a note shape (decision 0031) changes how this instrument
+    /// sounds: it plays recorded sounds itself.
+    pub fn takes_shape(&self) -> bool {
+        matches!(
+            self,
+            Self::SoundFont { .. } | Self::Drums { .. } | Self::Sfz { .. } | Self::Kit { .. }
+        )
+    }
+
     /// Whether the track plays audio clips rather than notes.
     pub fn is_audio(&self) -> bool {
         matches!(self, Self::Audio)
@@ -587,6 +596,60 @@ impl PadSetting {
 /// The name of the bundled piano SoundFont.
 pub const BUILTIN_PIANO: &str = "piano";
 
+/// How a track's notes start and end (decision 0031), for the instruments
+/// that play recorded sounds: SoundFonts, SFZ instruments, drum kits and
+/// custom kits. What is not set keeps the instrument's own.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NoteShape {
+    /// Seconds a note takes to rise from silence to full level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attack: Option<f32>,
+    /// Seconds a note takes to fall silent once its key comes up. With a
+    /// release, the sounds of a kit stop at their note's end too, and a
+    /// very short one cuts every note off as its key comes up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<f32>,
+}
+
+impl NoteShape {
+    /// The shortest and longest attack, in seconds.
+    pub const ATTACK_RANGE: (f32, f32) = (0.0, 2.0);
+    /// The shortest and longest release, in seconds (the shortest still
+    /// fades over a few milliseconds, so a cut never clicks).
+    pub const RELEASE_RANGE: (f32, f32) = (0.005, 5.0);
+    /// The release that cuts notes off at their end.
+    pub const CUT_RELEASE: f32 = 0.01;
+
+    /// The instrument's own shape.
+    pub const NATURAL: Self = Self {
+        attack: None,
+        release: None,
+    };
+
+    /// Whether nothing is changed.
+    pub fn is_natural(&self) -> bool {
+        self.attack.is_none() && self.release.is_none()
+    }
+
+    /// Whether notes are cut off at their end.
+    pub fn is_cut(&self) -> bool {
+        self.release.is_some_and(|r| r <= Self::CUT_RELEASE + 1e-6)
+    }
+
+    /// The shape with its times within their ranges (a damaged file cannot
+    /// ask for anything else).
+    #[must_use]
+    pub fn clamped(self) -> Self {
+        let within = |value: Option<f32>, (low, high): (f32, f32)| {
+            value.filter(|v| v.is_finite()).map(|v| v.clamp(low, high))
+        };
+        Self {
+            attack: within(self.attack, Self::ATTACK_RANGE),
+            release: within(self.release, Self::RELEASE_RANGE),
+        }
+    }
+}
+
 /// Volume, pan, mute and solo of a track.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChannelStrip {
@@ -639,7 +702,36 @@ pub enum ClipContent {
         /// seconds.
         #[serde(default, skip_serializing_if = "is_zero")]
         fade_out: f32,
+        /// Played backwards (decision 0031): from `offset` towards the
+        /// file's start.
+        #[serde(default, skip_serializing_if = "is_false")]
+        reverse: bool,
+        /// Pitch change in semitones (decision 0031), by playing faster or
+        /// slower, as a tape does: up an octave plays twice as fast.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        pitch: f32,
     },
+}
+
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes a reference"
+)]
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// The lowest and highest pitch change of an audio clip, in semitones.
+pub const CLIP_PITCH_RANGE: (f32, f32) = (-24.0, 24.0);
+
+/// How fast sound plays for a pitch change in semitones: 2 an octave up.
+pub fn pitch_speed(semitones: f32) -> f64 {
+    let semitones = if semitones.is_finite() {
+        semitones.clamp(CLIP_PITCH_RANGE.0, CLIP_PITCH_RANGE.1)
+    } else {
+        0.0
+    };
+    2.0_f64.powf(f64::from(semitones) / 12.0)
 }
 
 fn unity() -> f32 {
@@ -663,6 +755,17 @@ impl ClipContent {
             gain: 1.0,
             fade_in: 0.0,
             fade_out: 0.0,
+            reverse: false,
+            pitch: 0.0,
+        }
+    }
+
+    /// For audio: how many seconds of its file a second of the clip plays
+    /// (its pitch change's speed), and whether it plays backwards.
+    pub fn audio_motion(&self) -> Option<(f64, bool)> {
+        match *self {
+            Self::Audio { pitch, reverse, .. } => Some((pitch_speed(pitch), reverse)),
+            Self::Pattern { .. } => None,
         }
     }
 }
@@ -771,6 +874,10 @@ pub struct Track {
     /// Settings that change over the song.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub automation: Vec<crate::automation::AutomationLane>,
+    /// How its notes start and end (decision 0031), for instruments that
+    /// play recorded sounds.
+    #[serde(default, skip_serializing_if = "NoteShape::is_natural")]
+    pub shape: NoteShape,
 }
 
 #[cfg(test)]

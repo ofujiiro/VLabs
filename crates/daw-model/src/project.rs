@@ -395,6 +395,7 @@ impl Project {
             strip: ChannelStrip::default(),
             effects: Vec::new(),
             automation: Vec::new(),
+            shape: crate::NoteShape::NATURAL,
         }));
         id
     }
@@ -472,36 +473,44 @@ impl Project {
                     },
                 }
             }
-            ClipContent::Audio {
+            content @ ClipContent::Audio {
                 audio,
                 offset,
-                gain,
-                fade_in,
-                fade_out,
+                reverse,
+                pitch,
+                ..
             } => {
                 let Some(file) = self.audio_file(audio) else {
                     return;
                 };
+                let speed = crate::pitch_speed(pitch);
                 if start < clip.start {
-                    // No earlier than the file's first frame.
-                    let first = self.tempo.seconds_at(clip.start) - file.seconds_in(offset);
+                    // No further back than the sound goes: its first frame,
+                    // or its last when it plays backwards.
+                    let before = if reverse {
+                        file.seconds() - file.seconds_in(offset)
+                    } else {
+                        file.seconds_in(offset)
+                    } / speed;
+                    let first = self.tempo.seconds_at(clip.start) - before;
                     #[allow(clippy::cast_possible_truncation, reason = "tick positions fit easily")]
                     let earliest = Ticks(self.tempo.ticks_at(first.max(0.0)).ceil() as i64);
                     start = start.max(earliest).min(clip.start);
                 }
                 let moved = self.seconds_between(clip.start, start);
-                let frames = file.frames_in(moved.abs());
-                ClipContent::Audio {
-                    audio,
-                    offset: if moved >= 0.0 {
-                        offset + frames
+                let frames = file.frames_in(moved.abs() * speed);
+                let mut content = content;
+                if let ClipContent::Audio { offset: o, .. } = &mut content {
+                    // Later in time is further into the sound, or further
+                    // back in it when it plays backwards.
+                    let forwards = (moved >= 0.0) ^ reverse;
+                    *o = if forwards {
+                        (offset + frames).min(file.frames)
                     } else {
                         offset.saturating_sub(frames)
-                    },
-                    gain,
-                    fade_in,
-                    fade_out,
+                    };
                 }
+                content
             }
         };
         self.update_clip(id, |c| {
@@ -534,31 +543,43 @@ impl Project {
             ClipContent::Audio {
                 audio,
                 offset,
-                gain,
                 fade_in,
                 fade_out,
+                reverse,
+                pitch,
+                ..
             } => {
                 let file = self.audio_file(audio)?;
                 let first = self.seconds_between(clip.start, at);
                 let second = self.seconds_between(at, clip.end());
+                let played = file.frames_in(first * crate::pitch_speed(pitch));
+                let (mut before, mut after) = (clip.content, clip.content);
                 #[allow(clippy::cast_possible_truncation, reason = "seconds")]
-                let parts = (
+                if let (
                     ClipContent::Audio {
-                        audio,
-                        offset,
-                        gain,
-                        fade_in: fade_in.min(first as f32),
-                        fade_out: 0.0,
+                        fade_in: in_1,
+                        fade_out: out_1,
+                        ..
                     },
                     ClipContent::Audio {
-                        audio,
-                        offset: offset + file.frames_in(first),
-                        gain,
-                        fade_in: 0.0,
-                        fade_out: fade_out.min(second as f32),
+                        offset: offset_2,
+                        fade_in: in_2,
+                        fade_out: out_2,
+                        ..
                     },
-                );
-                parts
+                ) = (&mut before, &mut after)
+                {
+                    *in_1 = fade_in.min(first as f32);
+                    *out_1 = 0.0;
+                    *offset_2 = if reverse {
+                        offset.saturating_sub(played)
+                    } else {
+                        offset + played
+                    };
+                    *in_2 = 0.0;
+                    *out_2 = fade_out.min(second as f32);
+                }
+                (before, after)
             }
         };
         let new = ClipId(self.allocate_id());
@@ -711,12 +732,97 @@ impl Project {
 
     /// Where an audio clip's sound runs out: the furthest its end can go.
     pub fn audio_end(&self, clip: &Clip) -> Option<Ticks> {
-        let ClipContent::Audio { audio, offset, .. } = clip.content else {
+        let ClipContent::Audio {
+            audio,
+            offset,
+            reverse,
+            pitch,
+            ..
+        } = clip.content
+        else {
             return None;
         };
         let file = self.audio_file(audio)?;
-        let left = file.seconds() - file.seconds_in(offset);
+        let left = if reverse {
+            file.seconds_in(offset)
+        } else {
+            file.seconds() - file.seconds_in(offset)
+        } / crate::pitch_speed(pitch);
         Some(clip.start + self.ticks_for(clip.start, left))
+    }
+
+    /// Plays an audio clip backwards, or forwards again (decision 0031): it
+    /// keeps the same stretch of its sound, played the other way.
+    pub fn set_clip_reverse(&mut self, id: ClipId, reverse: bool) {
+        let Some((_, clip)) = self.clip(id).map(|(t, c)| (t, *c)) else {
+            return;
+        };
+        let ClipContent::Audio {
+            audio,
+            offset,
+            reverse: was,
+            pitch,
+            ..
+        } = clip.content
+        else {
+            return;
+        };
+        let Some(file) = self.audio_file(audio) else {
+            return;
+        };
+        if was == reverse {
+            return;
+        }
+        let seconds = self.seconds_between(clip.start, clip.end());
+        let span = file.frames_in(seconds * crate::pitch_speed(pitch));
+        let flipped = if reverse {
+            (offset + span).min(file.frames)
+        } else {
+            offset.saturating_sub(span)
+        };
+        self.update_clip(id, |c| {
+            if let ClipContent::Audio {
+                offset, reverse: r, ..
+            } = &mut c.content
+            {
+                *offset = flipped;
+                *r = reverse;
+            }
+        });
+    }
+
+    /// Changes an audio clip's pitch, in semitones (decision 0031): its
+    /// sound plays faster or slower, so the clip gets shorter or longer
+    /// (no longer than its sound lasts).
+    pub fn set_clip_pitch(&mut self, id: ClipId, semitones: f32) {
+        let Some((_, clip)) = self.clip(id).map(|(t, c)| (t, *c)) else {
+            return;
+        };
+        let ClipContent::Audio { pitch: was, .. } = clip.content else {
+            return;
+        };
+        let semitones = if semitones.is_finite() {
+            semitones.clamp(crate::CLIP_PITCH_RANGE.0, crate::CLIP_PITCH_RANGE.1)
+        } else {
+            0.0
+        };
+        if (semitones - was).abs() < 1e-4 {
+            return;
+        }
+        let seconds = self.seconds_between(clip.start, clip.end()) * crate::pitch_speed(was)
+            / crate::pitch_speed(semitones);
+        let mut changed = clip;
+        if let ClipContent::Audio { pitch, .. } = &mut changed.content {
+            *pitch = semitones;
+        }
+        let mut length = self.ticks_for(clip.start, seconds);
+        if let Some(end) = self.audio_end(&changed) {
+            length = length.min(end - clip.start).max(Ticks(1));
+        }
+        self.update_clip(id, |c| {
+            c.content = changed.content;
+            c.length = length;
+        });
     }
 
     /// Sets the tempo from `at` onwards (see [`Self::change_tempo`]).
@@ -1433,6 +1539,68 @@ mod tests {
             "not inside"
         );
         assert_eq!(project.audio.len(), 1, "both parts play the same file");
+    }
+
+    #[test]
+    fn a_reversed_clip_plays_the_same_stretch_of_sound_backwards() {
+        let (mut project, _, _, clip) = audio_song();
+        // Keep seconds 2 to 6 of the sound: trim two seconds (a bar) off
+        // the start and four off the end.
+        project.trim_clip_start(clip, Ticks::WHOLE * 2);
+        project.update_clip(clip, |c| c.length = Ticks::WHOLE * 2);
+        assert_eq!(audio_offset(&project, clip), 96_000);
+        project.set_clip_reverse(clip, true);
+        // Backwards, it starts from the end of the same stretch.
+        assert_eq!(audio_offset(&project, clip), 288_000);
+        let (_, c) = project.clip(clip).map(|(t, c)| (t, *c)).unwrap();
+        assert_eq!(c.length, Ticks::WHOLE * 2, "as long as before");
+        // It can reach on to the file's start: six seconds from where it
+        // starts.
+        assert_eq!(
+            project.audio_end(&c),
+            Some(Ticks::WHOLE * 2 + project.ticks_for(Ticks::WHOLE * 2, 6.0))
+        );
+        // Trimming its start moves into the sound backwards.
+        project.trim_clip_start(clip, Ticks::WHOLE * 3);
+        assert_eq!(audio_offset(&project, clip), 192_000);
+        // Splitting it carries on backwards.
+        let second = project
+            .split_clip(clip, Ticks::WHOLE * 3 + Ticks::quarters(2))
+            .unwrap();
+        assert_eq!(audio_offset(&project, second), 144_000);
+        // Forwards again: the same stretch, from its start.
+        project.set_clip_reverse(clip, false);
+        assert_eq!(audio_offset(&project, clip), 144_000);
+    }
+
+    #[test]
+    fn a_clip_pitched_up_an_octave_plays_twice_as_fast() {
+        let (mut project, _, _, clip) = audio_song();
+        project.set_clip_pitch(clip, 12.0);
+        let (_, c) = project.clip(clip).map(|(t, c)| (t, *c)).unwrap();
+        // Ten seconds of sound last five.
+        assert_eq!(c.length, Ticks::quarters(10));
+        assert_eq!(project.audio_end(&c), Some(c.end()));
+        // A split a bar in starts four seconds into the sound.
+        let second = project.split_clip(clip, Ticks::WHOLE * 2).unwrap();
+        assert_eq!(audio_offset(&project, second), 192_000);
+        // Down an octave, the first part's four seconds of sound last
+        // eight.
+        project.set_clip_pitch(clip, -12.0);
+        let (_, c) = project.clip(clip).map(|(t, c)| (t, *c)).unwrap();
+        assert_eq!(c.length, Ticks::WHOLE * 4);
+        // Never longer than the sound: the second part, at its own pitch
+        // again, lasts the six seconds left.
+        project.set_clip_pitch(second, 0.0);
+        let (_, b) = project.clip(second).map(|(t, c)| (t, *c)).unwrap();
+        assert_eq!(b.length, Ticks::quarters(12));
+        project.set_clip_pitch(second, -24.0);
+        let (_, b) = project.clip(second).map(|(t, c)| (t, *c)).unwrap();
+        assert_eq!(
+            b.length,
+            Ticks::quarters(48),
+            "six seconds of sound, four times slower"
+        );
     }
 
     #[test]

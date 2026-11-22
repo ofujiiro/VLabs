@@ -647,9 +647,16 @@ fn pattern_tools(ui: &mut Ui, session: &mut Session, keymap: &Keymap, intents: &
 }
 
 /// For a plugin track, the button that opens the plugin's own window; for
-/// a synth track, the synth's.
+/// a synth track, the synth's; for an instrument that plays recorded
+/// sounds, its note shape.
 fn plugin_button(ui: &mut Ui, session: &mut Session) {
     let track = session.track_id();
+    // An instrument that plays recorded sounds: its note shape (decision
+    // 0031).
+    if session.track_shape(track).is_some() {
+        crate::shape_ui::shape_button(ui, session, track, 26.0);
+        return;
+    }
     if session.synth_settings(track).is_some() {
         crate::synth_ui::window_button(ui, session, track, 26.0);
         return;

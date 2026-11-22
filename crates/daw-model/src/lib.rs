@@ -28,10 +28,10 @@ pub use plugin::{PluginFormat, PluginRef, PluginSetup, PluginState, STATE_KEY, b
 pub use project::Project;
 pub use quantize::quantize_starts;
 pub use song::{
-    ACOUSTIC_KIT, AudioFile, AudioId, BUILTIN_PIANO, ChannelStrip, Clip, ClipContent, ClipId,
-    DEFAULT_VELOCITY, ELECTRONIC_KIT, EffectId, Instrument, KIT_FIRST_KEY, KIT_MAX_PADS, KitPad,
-    MAX_KEY, Note, NoteId, PadSetting, Pattern, PatternId, PlayedNote, SoundSource, Swing, Track,
-    TrackId, default_step, free_kit_key,
+    ACOUSTIC_KIT, AudioFile, AudioId, BUILTIN_PIANO, CLIP_PITCH_RANGE, ChannelStrip, Clip,
+    ClipContent, ClipId, DEFAULT_VELOCITY, ELECTRONIC_KIT, EffectId, Instrument, KIT_FIRST_KEY,
+    KIT_MAX_PADS, KitPad, MAX_KEY, Note, NoteId, NoteShape, PadSetting, Pattern, PatternId,
+    PlayedNote, SoundSource, Swing, Track, TrackId, default_step, free_kit_key, pitch_speed,
 };
 pub use synth::{
     LfoShape, SynthEnvelope, SynthFilter, SynthOscillator, SynthPreset, SynthSettings, SynthWave,

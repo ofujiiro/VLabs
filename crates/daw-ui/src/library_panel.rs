@@ -6,7 +6,7 @@
 //! all at once. A click plays a sound; dragging an item onto the song, or
 //! double-clicking it, puts it in the song.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 
@@ -262,8 +262,20 @@ impl LibraryPanel {
                 }
                 if let Some(index) = removed {
                     settings.sound_folders.remove(index);
+                    // Stay on the folder shown (or the one before, when
+                    // it is the one removed).
+                    let shown = if self.current > index || (self.current == index && index > 0) {
+                        self.current - 1
+                    } else {
+                        self.current
+                    };
+                    if self.current == index {
+                        self.folder.clear();
+                    }
+                    self.current = shown;
                 }
             });
+        self.follow_settings(settings);
         ui.add_space(4.0);
         if ui
             .button(text::ADD_SOUND_FOLDER)
@@ -271,9 +283,15 @@ impl LibraryPanel {
             .clicked()
             && let Some(folder) = host.choose_folder(text::ADD_SOUND_FOLDER)
         {
-            add_folder(settings, folder);
-            self.current = settings.sound_folders.len() - 1;
+            add_folder(settings, &folder);
+            // Take the new folder in now: the files column, drawn next,
+            // shows the folder chosen and must find it among the roots.
+            self.follow_settings(settings);
+            if let Some(index) = self.roots.iter().position(|r| r.path == folder) {
+                self.current = index;
+            }
             self.folder.clear();
+            self.search.clear();
         }
     }
 
@@ -617,9 +635,9 @@ fn follow_pointer(ui: &Ui, id: egui::Id, label: &str) {
 }
 
 /// Adds a folder to the library's folders (once).
-pub(crate) fn add_folder(settings: &mut Settings, folder: PathBuf) {
-    if !settings.sound_folders.contains(&folder) {
-        settings.sound_folders.push(folder);
+pub(crate) fn add_folder(settings: &mut Settings, folder: &Path) {
+    if !settings.sound_folders.iter().any(|f| f == folder) {
+        settings.sound_folders.push(folder.to_path_buf());
     }
 }
 

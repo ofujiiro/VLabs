@@ -37,6 +37,7 @@ considered instead.
 | [0028](0028-singing-expression.md) | Singing expression: the sung pitch drawn over the notes, vibrato, loudness, colour and breath | Accepted |
 | [0029](0029-voicebank-pictures.md) | A voicebank's picture on its voice track | Accepted |
 | [0030](0030-releases.md) | Releases: version 1.0, published on GitHub from a tag | Accepted |
+| [0031](0031-shaping-sounds.md) | Shaping sounds: note shapes for instruments, a sound editor for clips | Accepted |
 
 ## Writing a new record
 

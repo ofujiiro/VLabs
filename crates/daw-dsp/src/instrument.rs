@@ -137,4 +137,30 @@ pub enum InstrumentSettings {
     Drums(Box<crate::drums::PadTable>),
     /// The synth's settings (decision 0019).
     Synth(crate::synth::SynthParams),
+    /// How notes start and end (decision 0031), for the instruments that
+    /// play recorded sounds.
+    Shape(NoteShape),
+}
+
+/// How notes start and end (decision 0031), in seconds; what is not set
+/// keeps the sound's own. With a release, sounds that would play to their
+/// end whatever the key does (a drum's hit) stop when their key comes up.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NoteShape {
+    /// Time to rise from silence to full level.
+    pub attack: Option<f32>,
+    /// Time to fall silent once the key comes up.
+    pub release: Option<f32>,
+}
+
+impl NoteShape {
+    /// The shape with its times usable (finite, not negative).
+    #[must_use]
+    pub fn sane(self) -> Self {
+        let sane = |v: Option<f32>| v.filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 60.0));
+        Self {
+            attack: sane(self.attack),
+            release: sane(self.release),
+        }
+    }
 }

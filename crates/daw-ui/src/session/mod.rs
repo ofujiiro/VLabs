@@ -18,6 +18,8 @@ mod library;
 mod mixing;
 mod plugins;
 mod recorder;
+mod shape;
+mod sound_edit;
 mod synth;
 mod theory;
 mod voice;
@@ -26,6 +28,7 @@ pub use audio::{LiveTake, SoundState, TakeNote};
 pub use files::SongFile;
 pub use mixing::MAX_GAIN;
 pub use plugins::{LaneChoice, PluginSearch};
+pub use sound_edit::ClipStretch;
 pub use theory::Draw;
 pub use voice::{LineNote, LinePhrase, SungLine, VoicePicture, point_from};
 
@@ -298,6 +301,8 @@ pub struct Session {
     input_meter: f32,
     /// The synth tracks whose windows are open.
     synth_windows: Vec<TrackId>,
+    /// The audio clip the sound editor shows (decision 0031).
+    sound_editor: Option<ClipId>,
     /// Writes a recovery copy at once, before risky moments (decision
     /// 0021).
     safety: Option<Box<dyn SafetyCopy>>,
@@ -386,6 +391,7 @@ impl Session {
             input_until: None,
             input_meter: 0.0,
             synth_windows: Vec::new(),
+            sound_editor: None,
             safety: None,
             preview: library::Preview::default(),
             reading_notice: false,
@@ -1556,6 +1562,7 @@ impl Session {
         self.audio_take = None;
         self.finishing.clear();
         self.synth_windows.clear();
+        self.sound_editor = None;
         // The old song's sound goes; the new song's is read.
         let wanted: HashSet<String> = self
             .project()

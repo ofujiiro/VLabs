@@ -5,7 +5,7 @@
 //! length, and hi-hats that cut each other off.
 
 use super::{DrumKit, PadParams, PadSound, PadTable};
-use crate::instrument::InstrumentSettings;
+use crate::instrument::{InstrumentSettings, NoteShape};
 use crate::{Instrument, db_to_gain};
 
 /// The most sounds the sampler plays at once.
@@ -32,6 +32,11 @@ struct Voice {
     release_step: f32,
     /// When it started, to find the oldest voice.
     started: u64,
+    /// The key that started it.
+    key: u8,
+    /// Rises from 0 to 1 over the shape's attack (decision 0031).
+    attack: f32,
+    attack_step: f32,
 }
 
 /// Plays a [`DrumKit`].
@@ -43,6 +48,9 @@ pub struct DrumSampler {
     voices: [Voice; VOICES],
     sample_rate: f32,
     hits: u64,
+    /// How hits start and end (decision 0031): with a release, a hit stops
+    /// when its key comes up.
+    shape: NoteShape,
 }
 
 impl DrumSampler {
@@ -64,7 +72,13 @@ impl DrumSampler {
             voices: [Voice::default(); VOICES],
             sample_rate,
             hits: 0,
+            shape: NoteShape::default(),
         }
+    }
+
+    /// How hits start and end from now on (decision 0031).
+    pub fn set_shape(&mut self, shape: NoteShape) {
+        self.shape = shape.sane();
     }
 
     /// The settings of the pad a key plays (shared by all its keys).
@@ -150,6 +164,10 @@ impl Instrument for DrumSampler {
         };
         let step = f64::from(sample.sample_rate) / f64::from(self.sample_rate)
             * f64::from(2.0_f32.powf(params.tune.clamp(-24.0, 24.0) / 12.0));
+        let attack_step = match self.shape.attack {
+            Some(attack) if attack > 0.0 => 1.0 / (attack * self.sample_rate).max(1.0),
+            _ => 1.0,
+        };
         self.hits += 1;
         let index = self.free_voice();
         self.voices[index] = Voice {
@@ -165,11 +183,26 @@ impl Instrument for DrumSampler {
             release: 1.0,
             release_step: 0.0,
             started: self.hits,
+            key: key & 0x7F,
+            attack: if attack_step < 1.0 { 0.0 } else { 1.0 },
+            attack_step,
         };
     }
 
-    fn note_off(&mut self, _key: u8) {
-        // Drums are one-shots: a hit plays out whatever the key does.
+    fn note_off(&mut self, key: u8) {
+        // Drums are one-shots: a hit plays out whatever the key does, unless
+        // the shape has a release (decision 0031).
+        let Some(release) = self.shape.release else {
+            return;
+        };
+        let rate = self.sample_rate;
+        for voice in self
+            .voices
+            .iter_mut()
+            .filter(|v| v.active && v.key == key & 0x7F)
+        {
+            Self::fade_out(voice, release.max(0.002), rate);
+        }
     }
 
     fn all_notes_off(&mut self, immediate: bool) {
@@ -220,7 +253,10 @@ impl Instrument for DrumSampler {
                 let next = (whole + 1).min(source_left.len() - 1);
                 let l = source_left[whole] + (source_left[next] - source_left[whole]) * fraction;
                 let r = source_right[whole] + (source_right[next] - source_right[whole]) * fraction;
-                let mut envelope = voice.release;
+                let mut envelope = voice.release * voice.attack;
+                if voice.attack < 1.0 {
+                    voice.attack = (voice.attack + voice.attack_step).min(1.0);
+                }
                 if voice.position > voice.fade_start {
                     #[allow(clippy::cast_possible_truncation, reason = "a ratio")]
                     let tail = ((voice.end - voice.position)
@@ -243,8 +279,10 @@ impl Instrument for DrumSampler {
     }
 
     fn apply_settings(&mut self, settings: &InstrumentSettings) {
-        if let InstrumentSettings::Drums(table) = settings {
-            self.set_pads(table);
+        match settings {
+            InstrumentSettings::Drums(table) => self.set_pads(table),
+            InstrumentSettings::Shape(shape) => self.set_shape(*shape),
+            InstrumentSettings::Synth(_) => {}
         }
     }
 }

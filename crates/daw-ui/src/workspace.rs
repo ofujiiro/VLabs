@@ -451,6 +451,7 @@ impl Workspace {
             });
         self.effects.ui(&ctx, &mut self.session);
         crate::synth_ui::show_windows(&ctx, &mut self.session);
+        crate::sound_editor::show(&ctx, &mut self.session);
         self.show_dialog(&ctx);
 
         for intent in intents {
@@ -564,7 +565,7 @@ impl Workspace {
                     .retain(|f| !folders.iter().any(|p| p.as_path() == f.path()));
             });
             for folder in &folders {
-                library_panel::add_folder(&mut self.settings, folder.clone());
+                library_panel::add_folder(&mut self.settings, folder);
             }
             self.settings.show_library = true;
             self.settings.show_mixer = false;
