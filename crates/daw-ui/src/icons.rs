@@ -56,6 +56,10 @@ pub enum Icon {
     Sound,
     /// Short bars at different heights: notes (a MIDI file).
     Notes,
+    /// A rise, a level and a fall: how notes start and end (decision 0031).
+    Shape,
+    /// A waveform with a pencil line: editing a sound (decision 0031).
+    EditSound,
 }
 
 /// Draws an icon into `rect` with `color`.
@@ -256,6 +260,39 @@ pub fn paint(painter: &Painter, icon: Icon, rect: Rect, color: Color32) {
                     color,
                 );
             }
+        }
+        Icon::Shape => {
+            let w = s * 0.36;
+            let points = vec![
+                pos2(c.x - w, c.y + w * 0.6),
+                pos2(c.x - w * 0.45, c.y - w * 0.6),
+                pos2(c.x + w * 0.25, c.y - w * 0.25),
+                pos2(c.x + w * 0.5, c.y - w * 0.25),
+                pos2(c.x + w, c.y + w * 0.6),
+            ];
+            painter.add(Shape::line(points, stroke));
+        }
+        Icon::EditSound => {
+            let thin = Stroke::new(stroke.width * 0.8, color);
+            for (i, height) in [0.25_f32, 0.6, 0.4, 0.75, 0.3].iter().enumerate() {
+                #[allow(clippy::cast_precision_loss, reason = "a small count")]
+                let x = c.x - s * 0.34 + i as f32 * s * 0.14;
+                painter.line_segment(
+                    [
+                        pos2(x, c.y - s * height * 0.4),
+                        pos2(x, c.y + s * height * 0.4),
+                    ],
+                    thin,
+                );
+            }
+            // A cut through it, on the right.
+            painter.line_segment(
+                [
+                    pos2(c.x + s * 0.3, c.y - s * 0.38),
+                    pos2(c.x + s * 0.3, c.y + s * 0.38),
+                ],
+                stroke,
+            );
         }
         Icon::Automation => {
             let w = s * 0.33;

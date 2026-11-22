@@ -18,6 +18,7 @@ mod library;
 mod mixing;
 mod plugins;
 mod recorder;
+mod shape;
 mod synth;
 mod theory;
 mod voice;

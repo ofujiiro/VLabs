@@ -54,6 +54,27 @@ impl SoundFontBank {
         })
     }
 
+    /// Reads a SoundFont from its bytes, with every sound's attack and
+    /// release changed to the shape's (decision 0031; what the shape does
+    /// not set keeps the file's own). Not for the audio thread: it copies
+    /// the whole file.
+    pub fn from_bytes_shaped(
+        bytes: &[u8],
+        shape: crate::NoteShape,
+    ) -> Result<Self, SoundFontError> {
+        let shape = shape.sane();
+        if shape.attack.is_none() && shape.release.is_none() {
+            return Self::from_bytes(bytes);
+        }
+        let shaped = crate::sf2_shape::shaped(
+            bytes,
+            shape.attack.map(crate::sf2_shape::timecents),
+            shape.release.map(crate::sf2_shape::timecents),
+        )
+        .map_err(|e| SoundFontError(format!("cannot change its note shape: {e}")))?;
+        Self::from_bytes(&shaped)
+    }
+
     /// The presets it contains, sorted by bank and program.
     pub fn presets(&self) -> Vec<PresetInfo> {
         let mut presets: Vec<PresetInfo> = self

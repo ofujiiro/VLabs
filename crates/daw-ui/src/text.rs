@@ -2269,3 +2269,37 @@ pub fn with_sign(value: f64, unit: &str) -> String {
 pub fn voicebank_picture(voicebank: &str) -> String {
     format!("Picture of {voicebank}")
 }
+
+// ----- Shaping sounds (decision 0031)
+
+pub const NOTE_SHAPE: &str = "Note shape";
+pub const NOTE_SHAPE_HINT: &str = "How this track's notes start and end: a slow rise, a long ring, or notes cut off as their key comes up";
+pub const EDIT_NOTE_SHAPE: &str = "change note shape";
+pub const SHAPE_ATTACK: &str = "Attack";
+pub const SHAPE_ATTACK_HINT: &str =
+    "How long a note takes to rise to full level (unticked: as the instrument plays it)";
+pub const SHAPE_RELEASE: &str = "Release";
+pub const SHAPE_RELEASE_HINT: &str = "How long a note takes to fall silent once its key comes up (unticked: as the instrument plays it)";
+pub const SHAPE_NATURAL_VALUE: &str = "as recorded";
+pub const SHAPE_CUT: &str = "Cut at note end";
+pub const SHAPE_CUT_HINT: &str =
+    "Every note stops the moment its key comes up: no ringing tail (a \"release cut\")";
+pub const SHAPE_SOFT: &str = "Soft start";
+pub const SHAPE_SOFT_HINT: &str = "Notes swell in gently";
+pub const SHAPE_LONG: &str = "Long tail";
+pub const SHAPE_LONG_HINT: &str = "Notes ring on for a few seconds after their key comes up";
+pub const SHAPE_RESET: &str = "Natural";
+pub const SHAPE_RESET_HINT: &str = "Notes start and end as the instrument plays them";
+pub const SHAPE_KIT_NOTE: &str =
+    "With a release, each hit stops at the end of its note, however long its sound.";
+pub const SHAPE_PICTURE: &str = "The shape of a note: its rise, then its end once the key comes up";
+pub const SHAPE_KEY_UP: &str = "key up";
+
+/// A time in milliseconds or seconds, as a slider shows it.
+pub fn shape_time(seconds: f32) -> String {
+    if seconds < 1.0 {
+        format!("{:.0} ms", seconds * 1000.0)
+    } else {
+        format!("{seconds:.2} s")
+    }
+}

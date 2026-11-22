@@ -272,6 +272,8 @@ pub struct Engine {
     library: SoundLibrary,
     /// Which track and instrument each slot holds.
     slots: Vec<Option<(TrackId, InstrumentSpec)>>,
+    /// The note shape each slot's instrument plays with (decision 0031).
+    shapes: Vec<daw_model::NoteShape>,
     /// Which effect (and of which kind) each effect table entry holds.
     effects: Vec<Option<(EffectId, EffectKind)>>,
     compiled: Option<(u64, PlaybackScope)>,
@@ -334,6 +336,7 @@ impl Engine {
             outgoing: outgoing_rx,
             library,
             slots: vec![None; MAX_SLOTS],
+            shapes: vec![daw_model::NoteShape::NATURAL; MAX_SLOTS],
             effects: vec![None; MAX_EFFECTS],
             compiled: None,
             problems: Vec::new(),
@@ -463,71 +466,7 @@ impl Engine {
         }
         self.compiled = Some((revision, scope));
 
-        // Free slots whose track is gone.
-        for slot in 0..MAX_SLOTS {
-            if let Some((track, _)) = &self.slots[slot]
-                && project.track(*track).is_none()
-            {
-                let track = *track;
-                self.slots[slot] = None;
-                self.plugins.retire(PluginTarget::Instrument(track));
-                self.send(Command::Instrument {
-                    slot,
-                    instrument: None,
-                });
-            }
-        }
-        // Build instruments for new tracks, or tracks whose instrument changed.
-        for track in &project.tracks {
-            let current = self
-                .slots
-                .iter()
-                .position(|s| s.as_ref().is_some_and(|(id, _)| *id == track.id));
-            let retry = (self.retry_missing
-                && self.missing.contains(&PluginTarget::Instrument(track.id)))
-                || self.rebuild.contains(&track.id);
-            let up_to_date = !retry
-                && current.is_some_and(|slot| {
-                    self.slots[slot]
-                        .as_ref()
-                        .is_some_and(|(_, spec)| *spec == track.instrument)
-                });
-            if up_to_date {
-                continue;
-            }
-            // Same sound source, other settings (a drum pad's tune, say):
-            // the playing instrument takes them without being rebuilt. A
-            // plugin keeps playing as it is (its settings were just captured
-            // from it).
-            if let Some(slot) = current
-                && !retry
-                && self.slots[slot]
-                    .as_ref()
-                    .is_some_and(|(_, spec)| spec.same_source(&track.instrument))
-            {
-                let settings = library::instrument_settings(&track.instrument);
-                if settings.is_some() || track.instrument.plugin().is_some() {
-                    self.slots[slot] = Some((track.id, track.instrument.clone()));
-                    if let Some(settings) = settings {
-                        self.send(Command::InstrumentSettings {
-                            slot,
-                            settings: Box::new(settings),
-                        });
-                    }
-                    continue;
-                }
-            }
-            let Some(slot) = current.or_else(|| self.slots.iter().position(Option::is_none)) else {
-                self.problems.push(Problem::TooManyTracks(MAX_SLOTS));
-                continue;
-            };
-            let instrument = self.build_instrument(track, project);
-            self.slots[slot] = Some((track.id, track.instrument.clone()));
-            self.send(Command::Instrument {
-                slot,
-                instrument: Some(instrument),
-            });
-        }
+        self.sync_instruments(project);
 
         self.sync_effects(project);
         self.retry_missing = false;
@@ -567,6 +506,108 @@ impl Engine {
         self.send(Command::Program(Box::new(program)));
     }
 
+    /// Frees the slots of deleted tracks, and builds instruments for new
+    /// tracks or tracks whose instrument or note shape changed (a changed
+    /// setting or shape alone goes to the playing instrument).
+    fn sync_instruments(&mut self, project: &Project) {
+        // Free slots whose track is gone.
+        for slot in 0..MAX_SLOTS {
+            if let Some((track, _)) = &self.slots[slot]
+                && project.track(*track).is_none()
+            {
+                let track = *track;
+                self.slots[slot] = None;
+                self.plugins.retire(PluginTarget::Instrument(track));
+                self.send(Command::Instrument {
+                    slot,
+                    instrument: None,
+                });
+            }
+        }
+        // Build instruments for new tracks, or tracks whose instrument changed.
+        for track in &project.tracks {
+            let current = self
+                .slots
+                .iter()
+                .position(|s| s.as_ref().is_some_and(|(id, _)| *id == track.id));
+            let retry = (self.retry_missing
+                && self.missing.contains(&PluginTarget::Instrument(track.id)))
+                || self.rebuild.contains(&track.id);
+            // The shape only matters to instruments that play recorded
+            // sounds (decision 0031).
+            let shape = if track.instrument.takes_shape() {
+                track.shape
+            } else {
+                daw_model::NoteShape::NATURAL
+            };
+            let same_shape = current.is_some_and(|slot| self.shapes[slot] == shape);
+            let up_to_date = !retry
+                && same_shape
+                && current.is_some_and(|slot| {
+                    self.slots[slot]
+                        .as_ref()
+                        .is_some_and(|(_, spec)| *spec == track.instrument)
+                });
+            if up_to_date {
+                continue;
+            }
+            // Only the shape changed: the playing instrument takes it,
+            // except a SoundFont, which is read again with it.
+            if let Some(slot) = current
+                && !retry
+                && !same_shape
+                && !matches!(track.instrument, InstrumentSpec::SoundFont { .. })
+                && self.slots[slot]
+                    .as_ref()
+                    .is_some_and(|(_, spec)| *spec == track.instrument)
+            {
+                self.shapes[slot] = shape;
+                self.send(Command::InstrumentSettings {
+                    slot,
+                    settings: Box::new(daw_dsp::InstrumentSettings::Shape(dsp_shape(shape))),
+                });
+                continue;
+            }
+            // Same sound source, other settings (a drum pad's tune, say):
+            // the playing instrument takes them without being rebuilt. A
+            // plugin keeps playing as it is (its settings were just captured
+            // from it).
+            if let Some(slot) = current
+                && !retry
+                && same_shape
+                && self.slots[slot]
+                    .as_ref()
+                    .is_some_and(|(_, spec)| spec.same_source(&track.instrument))
+            {
+                let settings = library::instrument_settings(&track.instrument);
+                if settings.is_some() || track.instrument.plugin().is_some() {
+                    self.slots[slot] = Some((track.id, track.instrument.clone()));
+                    if let Some(settings) = settings {
+                        self.send(Command::InstrumentSettings {
+                            slot,
+                            settings: Box::new(settings),
+                        });
+                    }
+                    continue;
+                }
+            }
+            let Some(slot) = current.or_else(|| self.slots.iter().position(Option::is_none)) else {
+                self.problems.push(Problem::TooManyTracks(MAX_SLOTS));
+                continue;
+            };
+            let mut instrument = self.build_instrument(track, project);
+            if shape != daw_model::NoteShape::NATURAL {
+                instrument.apply_settings(&daw_dsp::InstrumentSettings::Shape(dsp_shape(shape)));
+            }
+            self.slots[slot] = Some((track.id, track.instrument.clone()));
+            self.shapes[slot] = shape;
+            self.send(Command::Instrument {
+                slot,
+                instrument: Some(instrument),
+            });
+        }
+    }
+
     /// A track's instrument, built (or loaded) anew. Whatever played for the
     /// track before goes: a plugin is retired.
     fn build_instrument(
@@ -598,7 +639,14 @@ impl Engine {
                 }
             },
             spec => {
-                let built = self.library.build_for_track(spec, self.config.sample_rate);
+                let shape = if spec.takes_shape() {
+                    track.shape
+                } else {
+                    daw_model::NoteShape::NATURAL
+                };
+                let built = self
+                    .library
+                    .build_for_track(spec, shape, self.config.sample_rate);
                 if let Some(problem) = built.problem {
                     self.problems.push(problem);
                 }
@@ -1281,4 +1329,13 @@ pub fn render_offline(
     let mut right = vec![0.0; frames];
     render.render(&mut left, &mut right);
     (left, right)
+}
+
+/// A note shape as the instruments take it (decision 0031).
+pub(crate) fn dsp_shape(shape: daw_model::NoteShape) -> daw_dsp::NoteShape {
+    let shape = shape.clamped();
+    daw_dsp::NoteShape {
+        attack: shape.attack,
+        release: shape.release,
+    }
 }

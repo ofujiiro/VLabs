@@ -8,7 +8,7 @@ use std::sync::Arc;
 use super::{EnvelopeSpec, LoopMode, OffMode, Region, Sample, SamplerBank, Trigger};
 use crate::synth::FilterMode;
 use crate::synth::parts::{Random, VoiceFilter};
-use crate::{Instrument, db_to_gain};
+use crate::{Instrument, InstrumentSettings, NoteShape, db_to_gain};
 
 /// The most sounds the sampler plays at once.
 pub const VOICES: usize = 96;
@@ -452,6 +452,8 @@ pub struct Sampler {
     /// Voices started so far.
     starts: u64,
     random: Random,
+    /// How notes start and end, over the regions' own (decision 0031).
+    shape: NoteShape,
 }
 
 impl Sampler {
@@ -489,7 +491,15 @@ impl Sampler {
             clock: 0,
             starts: 0,
             random: Random::new(0x5EED_5A3F),
+            shape: NoteShape::default(),
         }
+    }
+
+    /// How notes start and end from now on (decision 0031): the attack and
+    /// release replace the regions' own; with a release, sounds that play
+    /// to their end (one-shots) stop when their key comes up.
+    pub fn set_shape(&mut self, shape: NoteShape) {
+        self.shape = shape.sane();
     }
 
     /// The regions a key starts now, into `chosen`; how many there are.
@@ -678,7 +688,17 @@ impl Sampler {
             * f64::from(sample.sample_rate)
             / f64::from(self.sample_rate);
 
-        let amp_rates = EnvRates::new(&region.ampeg, vel, self.sample_rate);
+        let mut ampeg = region.ampeg;
+        if let Some(attack) = self.shape.attack {
+            ampeg.attack = attack;
+            ampeg.vel2attack = 0.0;
+        }
+        // A release region's sound (a damper) plays out as it is.
+        if let Some(release) = self.shape.release.filter(|_| !from_release) {
+            ampeg.release = release;
+            ampeg.vel2release = 0.0;
+        }
+        let amp_rates = EnvRates::new(&ampeg, vel, self.sample_rate);
         let mut amp = Envelope::default();
         amp.start(&amp_rates);
         let mut filter_env = Envelope::default();
@@ -701,7 +721,8 @@ impl Sampler {
             active: true,
             sample: sample_index,
             key,
-            follows_key: !from_release && place.mode != LoopMode::OneShot,
+            follows_key: !from_release
+                && (place.mode != LoopMode::OneShot || self.shape.release.is_some()),
             released: false,
             wait,
             position: place.first as f64,
@@ -878,6 +899,12 @@ impl Instrument for Sampler {
         self.start_all(&chosen[..count], key, velocity, |region| {
             db_to_gain(-(region.rt_decay.max(0.0) * held_for).min(144.0))
         });
+    }
+
+    fn apply_settings(&mut self, settings: &InstrumentSettings) {
+        if let InstrumentSettings::Shape(shape) = settings {
+            self.set_shape(*shape);
+        }
     }
 
     fn all_notes_off(&mut self, immediate: bool) {

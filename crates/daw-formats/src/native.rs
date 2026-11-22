@@ -21,7 +21,7 @@ use crate::atomic::write_atomically_with;
 /// The version of the file format this program writes. Every version ever
 /// released keeps sample files in `tests/data`, and a test proves they still
 /// open.
-pub const FORMAT_VERSION: u32 = 10;
+pub const FORMAT_VERSION: u32 = 11;
 
 /// The name of the song description inside the container.
 const PROJECT_ENTRY: &str = "project.json";
@@ -342,7 +342,11 @@ fn migrate(value: Value, from: u32) -> Result<Value, FileError> {
     // Version 10 added how each note is sung (decision 0028: pitch points,
     // vibrato, colour, breath); older notes are sung the plain way, which
     // is what an absent expression says.
-    // Each future format change adds a step here: `11 => migrate_10_to_11(value)`.
+    // Version 11 added note shapes and audio clips played backwards or at
+    // another pitch (decision 0031); older tracks keep their instrument's
+    // own shape and older clips play forwards at their own pitch, which is
+    // what the absent fields say.
+    // Each future format change adds a step here: `12 => migrate_11_to_12(value)`.
     Ok(value)
 }
 
@@ -365,6 +369,31 @@ fn repair(project: &mut Project) {
             .collect();
         for (id, expression) in sung {
             pattern.set_expression(id, expression);
+        }
+    }
+    // Note shapes and clips' pitch changes stay in their ranges too.
+    for track in &mut project.tracks {
+        let shape = track.shape.clamped();
+        let wild_pitch = track.clips.iter().any(|c| match c.content {
+            daw_model::ClipContent::Audio { pitch, .. } => {
+                !pitch.is_finite()
+                    || !(daw_model::CLIP_PITCH_RANGE.0..=daw_model::CLIP_PITCH_RANGE.1)
+                        .contains(&pitch)
+            }
+            daw_model::ClipContent::Pattern { .. } => false,
+        });
+        if shape != track.shape || wild_pitch {
+            let track = std::sync::Arc::make_mut(track);
+            track.shape = shape;
+            for clip in &mut track.clips {
+                if let daw_model::ClipContent::Audio { pitch, .. } = &mut clip.content {
+                    *pitch = if pitch.is_finite() {
+                        pitch.clamp(daw_model::CLIP_PITCH_RANGE.0, daw_model::CLIP_PITCH_RANGE.1)
+                    } else {
+                        0.0
+                    };
+                }
+            }
         }
     }
     // The synth's numbers stay in their ranges, whatever wrote them.

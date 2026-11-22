@@ -1222,6 +1222,8 @@ impl SongView {
             gain,
             fade_in,
             fade_out,
+            reverse,
+            pitch,
         } = clip.content
         else {
             return;
@@ -1237,13 +1239,13 @@ impl SongView {
             SoundState::Ready(peaks) => {
                 if area.height() >= 4.0 {
                     let start_frame = file.seconds_in(offset) * f64::from(peaks.sample_rate());
+                    let speed = daw_model::pitch_speed(pitch) * if reverse { -1.0 } else { 1.0 };
                     self.paint_waveform(
                         painter,
                         layout,
                         session,
                         area,
-                        clip.start,
-                        start_frame,
+                        (clip.start, start_frame, speed),
                         &peaks,
                         gain,
                         color.gamma_multiply(0.95),
@@ -1285,7 +1287,8 @@ impl SongView {
     }
 
     /// The waveform of sound summed up in `peaks`, from frame `start_frame`
-    /// at tick `start`, in `area` (one line of loudness per pixel).
+    /// at tick `start`, played at `speed` (negative: backwards), in `area`
+    /// (one line of loudness per pixel).
     #[allow(clippy::too_many_arguments, reason = "the parts of one drawing")]
     fn paint_waveform(
         &self,
@@ -1293,8 +1296,7 @@ impl SongView {
         layout: &Layout,
         session: &Session,
         area: Rect,
-        start: Ticks,
-        start_frame: f64,
+        (start, start_frame, speed): (Ticks, f64, f64),
         peaks: &Peaks,
         gain: f32,
         color: Color32,
@@ -1304,7 +1306,7 @@ impl SongView {
         let start_seconds = tempo.seconds_at(start);
         let frame_at = |x: f32| {
             let seconds = tempo.seconds_at(self.x_to_tick(layout, x)) - start_seconds;
-            (start_frame + seconds * rate).max(0.0) as usize
+            (start_frame + seconds * rate * speed).max(0.0) as usize
         };
         let (mid, half) = (area.center().y, area.height() / 2.0 - 1.0);
         let right = area.right().min(layout.timeline.right());
@@ -1312,8 +1314,14 @@ impl SongView {
         let mut from = frame_at(x);
         let stroke = Stroke::new(1.0, color);
         while x < right {
-            let to = frame_at(x + 1.0).max(from + 1);
-            if let Some((low, high)) = peaks.range(from, to) {
+            let next = frame_at(x + 1.0);
+            let (low_frame, high_frame, to) = if speed < 0.0 {
+                (next, from.max(next + 1), next)
+            } else {
+                let to = next.max(from + 1);
+                (from, to, to)
+            };
+            if let Some((low, high)) = peaks.range(low_frame, high_frame) {
                 let high = (high * gain).clamp(-1.0, 1.0);
                 let low = (low * gain).clamp(-1.0, 1.0);
                 let top = mid - high * half;
@@ -1419,7 +1427,14 @@ impl SongView {
                 pos2(rect.right(), rect.bottom() - 4.0),
             );
             self.paint_waveform(
-                painter, layout, session, area, live.start, 0.0, peaks, 1.0, p.record,
+                painter,
+                layout,
+                session,
+                area,
+                (live.start, 0.0, 1.0),
+                peaks,
+                1.0,
+                p.record,
             );
         }
         painter.text(
@@ -1884,6 +1899,7 @@ impl SongView {
                 } else if instrument.synth().is_some() {
                     crate::synth_ui::window_button(ui, session, track, 20.0);
                 }
+                crate::shape_ui::shape_button(ui, session, track, 20.0);
                 ui.with_layout(EguiLayout::left_to_right(Align::Center), |ui| {
                     let recording_here = session.live_take().is_some_and(|l| l.track == track)
                         || (session.is_recording_audio() && session.focused_track() == track);

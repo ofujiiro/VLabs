@@ -14,6 +14,7 @@ pub mod pitch_line;
 pub mod plugin_manager;
 pub mod session;
 pub mod settings;
+pub mod shape_ui;
 pub mod signature_row;
 pub mod song_view;
 pub mod step_grid;

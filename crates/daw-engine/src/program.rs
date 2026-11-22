@@ -553,6 +553,8 @@ fn audio_spans(
             gain,
             fade_in,
             fade_out,
+            reverse,
+            pitch,
         } = clip.content
         else {
             continue;
@@ -572,7 +574,11 @@ fn audio_spans(
             start,
             end,
             offset: file.seconds_in(offset) * sound_rate,
-            step: sound_rate / rate,
+            // Backwards, and faster or slower for a pitch change (decision
+            // 0031).
+            step: sound_rate / rate
+                * daw_model::pitch_speed(pitch)
+                * if reverse { -1.0 } else { 1.0 },
             sound,
             gain: if gain.is_finite() { gain.max(0.0) } else { 1.0 },
             fade_in: 0,

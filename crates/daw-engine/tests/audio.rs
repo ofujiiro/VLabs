@@ -139,6 +139,59 @@ fn volume_and_fades_shape_the_clip() {
     assert!(at(1.9999) < 0.01);
 }
 
+/// How many times a signal crosses zero going up, per second.
+fn rising_crossings_per_second(samples: &[f32]) -> f64 {
+    let crossings = samples
+        .windows(2)
+        .filter(|w| w[0] <= 0.0 && w[1] > 0.0)
+        .count();
+    crossings as f64 * f64::from(RATE) / samples.len() as f64
+}
+
+#[test]
+fn a_reversed_clip_plays_its_sound_backwards() {
+    // The ramp again, the whole second of it, backwards from bar 2: from
+    // near 1 down to 0.
+    let ramp: Vec<f32> = (0..48_000).map(|i| i as f32 / 48_000.0).collect();
+    let sound = AudioBuffer::new(RATE, vec![ramp]);
+    let (mut project, _, clip, library) = song(sound, Ticks::WHOLE, 1.0, 0);
+    project.set_clip_reverse(clip, true);
+    let (left, _) = render_offline(&project, library, config(), 3.5);
+    let start = BAR_FRAMES;
+    for k in [1000, 12_000, 24_000, 40_000] {
+        let expected = (48_000 - k) as f32 / 48_000.0;
+        assert!(
+            (left[start + k] - expected).abs() < 1e-3,
+            "frame {k}: {} against {expected}",
+            left[start + k]
+        );
+    }
+    assert!(
+        left[start + 48_100..].iter().all(|&s| s == 0.0),
+        "and then silence"
+    );
+}
+
+#[test]
+fn a_clip_pitched_up_a_fifth_plays_higher_and_shorter() {
+    // A second of 440 Hz, seven semitones up: 659 Hz, for two thirds of a
+    // second.
+    let (mut project, _, clip, library) = song(sine(440.0, 1.0, RATE), Ticks::WHOLE, 1.0, 0);
+    project.set_clip_pitch(clip, 7.0);
+    let (left, _) = render_offline(&project, library, config(), 3.5);
+    let start = BAR_FRAMES;
+    let heard = &left[start + 2_000..start + 30_000];
+    let hz = rising_crossings_per_second(heard);
+    let fifth = 440.0 * 2.0_f64.powf(7.0 / 12.0);
+    assert!((hz - fifth).abs() < 3.0, "{hz} Hz against {fifth}");
+    let length = (f64::from(RATE) / daw_model::pitch_speed(7.0)) as usize;
+    assert!(
+        left[start + length + 100..].iter().all(|&s| s == 0.0),
+        "shorter"
+    );
+    assert!(left[start + length - 2_000].abs() > 0.0 || left[start + length - 2_001].abs() > 0.0);
+}
+
 #[test]
 fn a_split_clip_sounds_exactly_like_the_whole() {
     let (whole, _, _, library) = song(sine(440.0, 2.0, RATE), Ticks::WHOLE, 2.0, 0);

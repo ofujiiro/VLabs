@@ -21,7 +21,7 @@ use daw_engine::{
     Engine, EngineConfig, EngineProcessor, PluginFileFormat, PluginInfo, PluginKind, PluginSystem,
     PluginTarget, ScanProblem, SoundLibrary,
 };
-use daw_model::{AutomationPoint, AutomationTarget, ChainPlace, EffectKind, Ticks};
+use daw_model::{AutomationPoint, AutomationTarget, ChainPlace, EffectKind, NoteShape, Ticks};
 use daw_ui::{
     BridgeState, Host, KeyLabels, LayoutFamily, PluginJobDone, PluginPlaces, PluginSearch, Request,
     Session, Settings, View, Workspace, text,
@@ -3454,4 +3454,93 @@ fn a_voice_s_picture_shows_faintly_on_its_track_and_behind_its_notes() {
         "{picture:?}"
     );
     std::fs::remove_dir_all(folder).ok();
+}
+
+#[test]
+fn the_piano_is_cut_at_the_end_of_its_notes_from_its_shape_panel() {
+    let mut f = fixture();
+    let track = f.session().track_id();
+    assert_eq!(f.session().track_shape(track), Some(NoteShape::NATURAL));
+    // The button on the pattern's location line opens the panel.
+    f.harness.get_by_label(text::NOTE_SHAPE).click();
+    f.harness.run_steps(4);
+    f.harness.get_by_label(text::SHAPE_PICTURE);
+    assert!(
+        f.harness.query_by_label(text::SHAPE_KIT_NOTE).is_none(),
+        "the note about kits is for kits"
+    );
+    // One click cuts every note off at its end, as one undo step.
+    let depth = f.session().document().undo_depth();
+    let cut = f.harness.get_by_label(text::SHAPE_CUT).rect().center();
+    f.click(cut, Modifiers::NONE);
+    let shape = f.session().track_shape(track).unwrap();
+    assert!(shape.is_cut(), "{shape:?}");
+    assert_eq!(shape.attack, None, "the attack stays the instrument's own");
+    assert_eq!(f.session().document().undo_depth(), depth + 1);
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_NOTE_SHAPE)
+    );
+    // The panel stays open: tick the attack and drag its slider longer,
+    // as one more step.
+    let attack = f
+        .harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, text::SHAPE_ATTACK)
+        .rect()
+        .center();
+    f.click(attack, Modifiers::NONE);
+    let ticked = f.session().track_shape(track).unwrap().attack;
+    assert!(ticked.is_some(), "ticked, it is set");
+    let slider = f
+        .harness
+        .get_by_role_and_label(egui::accesskit::Role::Slider, text::SHAPE_ATTACK)
+        .rect();
+    let depth = f.session().document().undo_depth();
+    f.drag(
+        slider.left_center() + vec2(6.0, 0.0),
+        slider.left_center() + vec2(60.0, 0.0),
+        Modifiers::NONE,
+    );
+    let longer = f.session().track_shape(track).unwrap().attack.unwrap();
+    assert!(longer > ticked.unwrap(), "{longer} after {ticked:?}");
+    assert_eq!(f.session().document().undo_depth(), depth + 1, "one step");
+    assert!(
+        f.session().track_shape(track).unwrap().is_cut(),
+        "still cut"
+    );
+    // Back to the instrument's own shape.
+    let natural = f.harness.get_by_label(text::SHAPE_RESET).rect().center();
+    f.click(natural, Modifiers::NONE);
+    assert_eq!(f.session().track_shape(track), Some(NoteShape::NATURAL));
+    // Undo brings the cut back.
+    f.key(Key::Z, Key::Z, true, Modifiers::COMMAND);
+    f.key(Key::Z, Key::Z, false, Modifiers::COMMAND);
+    assert!(f.session().track_shape(track).unwrap().is_cut());
+}
+
+#[test]
+fn a_kit_has_a_shape_too_and_says_what_a_release_does_to_its_hits() {
+    let mut f = beat();
+    f.harness.get_by_label(text::NOTE_SHAPE).click();
+    f.harness.run_steps(4);
+    f.harness.get_by_label(text::SHAPE_KIT_NOTE);
+    let long = f.harness.get_by_label(text::SHAPE_LONG).rect().center();
+    f.click(long, Modifiers::NONE);
+    let track = f.session().track_id();
+    assert_eq!(
+        f.session().track_shape(track).and_then(|s| s.release),
+        Some(2.5)
+    );
+}
+
+#[test]
+fn the_song_view_shows_a_shape_button_for_tracks_that_take_one() {
+    let mut f = new_song();
+    // The starter song's drums and piano both take a shape.
+    let buttons = f.harness.query_all_by_label(text::NOTE_SHAPE).count();
+    assert_eq!(buttons, 2);
+    // A synth has envelopes of its own: no shape button for it.
+    f.workspace_mut().session_mut().add_synth_track();
+    f.harness.run_steps(3);
+    assert_eq!(f.harness.query_all_by_label(text::NOTE_SHAPE).count(), 2);
 }

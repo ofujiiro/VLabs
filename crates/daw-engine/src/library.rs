@@ -27,6 +27,13 @@ use daw_dsp::voice::VoiceBank;
 /// the file formats' reader (decision 0024).
 pub type SfzReader = fn(&Path) -> Result<SamplerBank, String>;
 
+/// A SoundFont with a note shape: its source, attack and release (in
+/// SoundFont timecents, so nearby times share one copy).
+type ShapedKey = (SoundSource, Option<i16>, Option<i16>);
+
+/// How many shaped SoundFonts are kept (each is a whole copy of its file).
+const SHAPED_KEPT: usize = 3;
+
 /// An SFZ instrument being read, or read.
 type SfzLoad = Arc<OnceLock<Result<Arc<SamplerBank>, Problem>>>;
 
@@ -36,6 +43,9 @@ type SfzLoad = Arc<OnceLock<Result<Arc<SamplerBank>, Problem>>>;
 pub struct SoundLibrary {
     builtin: HashMap<String, &'static [u8]>,
     loaded: HashMap<SoundSource, Result<SoundFontBank, Problem>>,
+    /// SoundFonts read again with another note shape (decision 0031), the
+    /// most recent few, by source and shape (in timecents).
+    shaped: Vec<(ShapedKey, Result<SoundFontBank, Problem>)>,
     kits: HashMap<String, &'static [u8]>,
     loaded_kits: HashMap<(String, u32), Result<DrumKit, Problem>>,
     soundfont_reverb: Option<f32>,
@@ -66,6 +76,7 @@ impl SoundLibrary {
         Self {
             builtin: HashMap::new(),
             loaded: HashMap::new(),
+            shaped: Vec::new(),
             kits: HashMap::new(),
             loaded_kits: HashMap::new(),
             soundfont_reverb: None,
@@ -313,6 +324,52 @@ impl SoundLibrary {
         result
     }
 
+    /// The SoundFont for a source with a note shape (decision 0031): the
+    /// file read again with every sound's attack and release changed.
+    pub fn shaped_soundfont(
+        &mut self,
+        source: &SoundSource,
+        shape: daw_model::NoteShape,
+    ) -> Result<SoundFontBank, Problem> {
+        let shape = crate::dsp_shape(shape);
+        if shape.attack.is_none() && shape.release.is_none() {
+            return self.soundfont(source);
+        }
+        let key: ShapedKey = (
+            source.clone(),
+            shape.attack.map(daw_dsp::sf2_shape::timecents),
+            shape.release.map(daw_dsp::sf2_shape::timecents),
+        );
+        if let Some((_, result)) = self.shaped.iter().find(|(k, _)| *k == key) {
+            return result.clone();
+        }
+        // The plain one first: a missing or unreadable file says so the
+        // usual way.
+        self.soundfont(source)?;
+        let unreadable = |sound: &str, reason: String| Problem::UnreadableSound {
+            sound: sound.to_owned(),
+            reason,
+        };
+        let result = match source {
+            SoundSource::Builtin(name) => match self.builtin.get(name) {
+                Some(bytes) => SoundFontBank::from_bytes_shaped(bytes, shape)
+                    .map_err(|e| unreadable(name, e.to_string())),
+                None => Err(Problem::MissingSound(name.clone())),
+            },
+            SoundSource::File(path) => std::fs::read(path)
+                .map_err(|e| unreadable(path, e.to_string()))
+                .and_then(|bytes| {
+                    SoundFontBank::from_bytes_shaped(&bytes, shape)
+                        .map_err(|e| unreadable(path, e.to_string()))
+                }),
+        };
+        if self.shaped.len() >= SHAPED_KEPT {
+            let _oldest = self.shaped.remove(0);
+        }
+        self.shaped.push((key, result.clone()));
+        result
+    }
+
     /// Builds an instrument for a track. If its sound cannot be loaded, a
     /// plain sine synth plays instead, so notes are still heard, and the
     /// reason is returned alongside.
@@ -321,15 +378,22 @@ impl SoundLibrary {
         spec: &InstrumentSpec,
         sample_rate: u32,
     ) -> (Box<dyn Instrument>, Option<Problem>) {
-        let built = self.build_for_track(spec, sample_rate);
+        let built = self.build_for_track(spec, daw_model::NoteShape::NATURAL, sample_rate);
         (built.instrument, built.problem)
     }
 
-    /// Builds an instrument for a track, saying whether it only stands in
-    /// (silent) while its sounds are read in the background.
-    pub(crate) fn build_for_track(&mut self, spec: &InstrumentSpec, sample_rate: u32) -> Built {
+    /// Builds an instrument for a track with its note shape (decision 0031;
+    /// a SoundFont takes it here, other instruments as a setting), saying
+    /// whether it only stands in (silent) while its sounds are read in the
+    /// background.
+    pub(crate) fn build_for_track(
+        &mut self,
+        spec: &InstrumentSpec,
+        shape: daw_model::NoteShape,
+        sample_rate: u32,
+    ) -> Built {
         let mut waiting = false;
-        let (instrument, problem) = self.build_now(spec, sample_rate, &mut waiting);
+        let (instrument, problem) = self.build_now(spec, shape, sample_rate, &mut waiting);
         Built {
             instrument,
             problem,
@@ -340,6 +404,7 @@ impl SoundLibrary {
     fn build_now(
         &mut self,
         spec: &InstrumentSpec,
+        shape: daw_model::NoteShape,
         sample_rate: u32,
         waiting: &mut bool,
     ) -> (Box<dyn Instrument>, Option<Problem>) {
@@ -349,7 +414,7 @@ impl SoundLibrary {
                 bank,
                 program,
             } => {
-                let result = self.soundfont(source).and_then(|font| {
+                let result = self.shaped_soundfont(source, shape).and_then(|font| {
                     SoundFontPlayer::new(&font, sample_rate, *bank, *program).map_err(|e| {
                         Problem::UnreadableSound {
                             sound: match source {

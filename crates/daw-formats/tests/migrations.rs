@@ -20,7 +20,7 @@ use daw_model::expression::{NoteExpression, PitchPoint, PitchShape, Vibrato};
 use daw_model::{
     ACOUSTIC_KIT, AudioFile, AudioId, AutomationLane, AutomationPoint, AutomationTarget,
     ChainPlace, ClipContent, DEFAULT_VELOCITY, EffectKind, EqSettings, Instrument, Note, NoteId,
-    PluginFormat, PluginRef, PluginSetup, PluginState, Project, Scale, ScaleKind, Swing,
+    NoteShape, PluginFormat, PluginRef, PluginSetup, PluginState, Project, Scale, ScaleKind, Swing,
     SynthPreset, SynthSettings, SynthWave, Ticks, TimeSignature,
 };
 
@@ -90,7 +90,9 @@ fn write_hum(folder: &std::path::Path) {
 /// version 7 a track playing an SFZ instrument, and a custom kit whose pad
 /// plays the version 4 sample's sound; version 8 a bent tempo glide;
 /// version 9 a singing voice whose notes have lyrics; version 10 how those
-/// notes are sung: a bent pitch with vibrato, a colour, a breath).
+/// notes are sung: a bent pitch with vibrato, a colour, a breath; version
+/// 11 the piano's notes cut at their end, and a second audio clip played
+/// backwards, a fifth up).
 fn reference_project() -> Project {
     let mut project = Project::starter("Pattern 1", "Piano");
     let (_, pattern) = project.first_pattern().unwrap();
@@ -172,6 +174,7 @@ fn reference_project() -> Project {
     }
     add_newer_instruments(&mut project);
     add_voice(&mut project);
+    add_shapes(&mut project, voice, hum);
     let triplet = Ticks::note_value(1, 12);
     for (i, key) in [60_u8, 64, 67, 72].iter().enumerate() {
         project.add_note(
@@ -264,6 +267,7 @@ fn every_released_format_version_still_opens() {
         check_newer_instruments(&project, version, &path);
         check_bent_glide(&project, version, &path);
         check_voice(&project, version, &path);
+        check_shapes(&project, version, &path);
         if version >= 5 {
             check_theory_and_rhythm(&project, &path);
         } else {
@@ -302,6 +306,51 @@ fn every_released_format_version_still_opens() {
         found >= FORMAT_VERSION as usize,
         "a sample file is missing for some format version (found {found})"
     );
+}
+
+/// The version 11 sample's shapes (decision 0031): the piano's notes cut
+/// at their end with a soft attack, and a second clip of the hum, played
+/// backwards a fifth up.
+fn add_shapes(project: &mut Project, voice: daw_model::TrackId, hum: AudioId) {
+    let piano = project.tracks[0].id;
+    if let Some(track) = project.track_mut(piano) {
+        track.shape = NoteShape {
+            attack: Some(0.05),
+            release: Some(NoteShape::CUT_RELEASE),
+        };
+    }
+    let clip = project
+        .add_audio_clip(voice, Ticks::WHOLE * 2, Ticks::QUARTER / 20, hum, 1200)
+        .unwrap();
+    project.set_clip_reverse(clip, true);
+    project.set_clip_pitch(clip, 7.0);
+}
+
+/// The version 11 sample's shapes came back (older samples have none).
+fn check_shapes(project: &Project, version: u32, path: &std::path::Path) {
+    let name = path.display();
+    let piano = &project.tracks[0];
+    let backwards: Vec<(bool, f32)> = project
+        .tracks
+        .iter()
+        .flat_map(|t| t.clips.iter())
+        .filter_map(|c| match c.content {
+            ClipContent::Audio { reverse, pitch, .. } => Some((reverse, pitch)),
+            ClipContent::Pattern { .. } => None,
+        })
+        .filter(|(reverse, pitch)| *reverse || *pitch != 0.0)
+        .collect();
+    if version < 11 {
+        assert!(
+            piano.shape.is_natural(),
+            "{name}: natural before version 11"
+        );
+        assert!(backwards.is_empty(), "{name}: forwards before version 11");
+        return;
+    }
+    assert!(piano.shape.is_cut(), "{name}");
+    assert_eq!(piano.shape.attack, Some(0.05), "{name}");
+    assert_eq!(backwards, [(true, 7.0)], "{name}");
 }
 
 /// The version 9 sample's voice: a track singing "ka sa ne".
