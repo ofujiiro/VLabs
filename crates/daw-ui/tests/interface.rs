@@ -2519,14 +2519,13 @@ fn a_second_library_folder_opens_beside_the_first() {
     open_library(&mut f, &first);
     // A second folder, added the same way, opens at once (this crashed
     // the program in 1.0: it showed the new folder before listing it).
-    let second = first.with_file_name(format!(
-        "{}",
+    let second = first.with_file_name(
         first
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .replace("library", "second")
-    ));
+            .replace("library", "second"),
+    );
     std::fs::create_dir_all(&second).unwrap();
     std::fs::copy(tone_file("tone.wav", 0.5), second.join("Bass.wav")).unwrap();
     *f.host.folder.lock().unwrap() = Some(second.clone());
@@ -2539,14 +2538,13 @@ fn a_second_library_folder_opens_beside_the_first() {
     );
     assert!(f.harness.query_by_label("Loops").is_none());
     // And a third, then back to the first.
-    let third = first.with_file_name(format!(
-        "{}",
+    let third = first.with_file_name(
         first
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .replace("library", "third")
-    ));
+            .replace("library", "third"),
+    );
     std::fs::create_dir_all(&third).unwrap();
     std::fs::copy(tone_file("tone.wav", 0.5), third.join("Pad.wav")).unwrap();
     *f.host.folder.lock().unwrap() = Some(third.clone());
