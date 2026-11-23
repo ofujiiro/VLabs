@@ -3,8 +3,10 @@
 //! Writing the song to a sound file (WAV or FLAC) in the background. A second engine renders
 //! it offline through exactly the same processing as live playback, block by
 //! block, so a long song never has to fit in memory; the window keeps working
-//! and shows the progress, and the export can be cancelled. The song plays to
-//! its end and on until the effects' tails have faded out.
+//! and shows the progress, and the export can be cancelled. The song plays
+//! once from its start (its loop region is for playing, not exporting) to
+//! the end of its last clip, and on while notes and effects still ring; the
+//! file ends where the sound does, with no silence after it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -142,7 +144,9 @@ impl ExportFormat {
 
 /// How quiet the end must be for the tail to count as over (-80 dBFS).
 const QUIET: f32 = 1e-4;
-/// How long it must stay that quiet, in seconds.
+/// How long it must stay that quiet, in seconds, for the tail to be over
+/// (a delay's next echo can come after a short silence). This silence is
+/// not written.
 const QUIET_SECONDS: u32 = 1;
 /// The longest tail written after the song's end, in seconds.
 const MAX_TAIL_SECONDS: u32 = 15;
@@ -271,31 +275,50 @@ impl Job {
             .map_err(|e| e.to_string())?;
         let mut left = vec![0.0_f32; BLOCK];
         let mut right = vec![0.0_f32; BLOCK];
-        let mut quiet: u64 = 0;
+        // After the song's end, quiet frames wait here: they are written
+        // only if sound comes after them, so the file ends where the sound
+        // does.
+        let mut held_left: Vec<f32> = Vec::new();
+        let mut held_right: Vec<f32> = Vec::new();
         loop {
             if self.cancel.load(Ordering::Relaxed) {
                 writer.cancel();
                 return Ok(None);
             }
+            let before = render.frames();
             render.render(&mut left, &mut right);
             let done = render.frames();
-            if let Err(error) = writer.write(&left, &right) {
-                writer.cancel();
-                return Err(error.to_string());
-            }
-            if done >= song_frames {
-                let peak = left
-                    .iter()
-                    .chain(&right)
-                    .fold(0.0_f32, |m, s| m.max(s.abs()));
-                quiet = if peak < QUIET {
-                    quiet + BLOCK as u64
-                } else {
-                    0
-                };
-                if quiet >= quiet_needed || done >= tail_limit {
-                    break;
+            // The frames up to the song's end are always written.
+            #[allow(clippy::cast_possible_truncation, reason = "within one block")]
+            let in_song = song_frames.saturating_sub(before).min(BLOCK as u64) as usize;
+            let last_loud = (in_song..BLOCK)
+                .rev()
+                .find(|&i| left[i].abs() >= QUIET || right[i].abs() >= QUIET);
+            let keep = last_loud.map_or(in_song, |i| i + 1);
+            if keep > in_song || in_song == BLOCK {
+                // Sound goes on: what waited is part of the song after all.
+                let written = writer
+                    .write(&held_left, &held_right)
+                    .and_then(|()| writer.write(&left[..keep], &right[..keep]));
+                if let Err(error) = written {
+                    writer.cancel();
+                    return Err(error.to_string());
                 }
+                held_left.clear();
+                held_right.clear();
+                held_left.extend_from_slice(&left[keep..]);
+                held_right.extend_from_slice(&right[keep..]);
+            } else {
+                if let Err(error) = writer.write(&left[..in_song], &right[..in_song]) {
+                    writer.cancel();
+                    return Err(error.to_string());
+                }
+                held_left.extend_from_slice(&left[in_song..]);
+                held_right.extend_from_slice(&right[in_song..]);
+            }
+            if done >= song_frames && (held_left.len() as u64 >= quiet_needed || done >= tail_limit)
+            {
+                break;
             }
             #[allow(clippy::cast_precision_loss, reason = "a fraction for display")]
             let fraction = (done as f32 / song_frames.max(1) as f32).min(0.99);
