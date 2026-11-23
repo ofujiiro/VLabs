@@ -30,7 +30,7 @@ for audio clips; merged into `main` and released as **VLabs 1.1**
 (November 22, 2026); the owner tried it: everything works. Their next
 requests: selecting and moving several tracks or clips at once, and an
 export that plays the song once and ends with its sound (decision 0032),
-built on the development branch, awaiting the owner's check. Next: 7c,
+merged into `main` and released as **VLabs 1.2** (November 23, 2026). Next: 7c,
 UST and USTX projects in and out, unless the owner's check of 7b asks for
 more tuning first.
 The repository has been public since November 2026 (the owner's
@@ -1011,6 +1011,8 @@ beat on the timeline."
       the old code: 23 s); interface tests for selecting and moving tracks
       and clips; the real program on the virtual screen (a track dragged
       above another; a clip moved); `cargo xtask ci`
+- [x] Version 1.2.0 (it adds features, decision 0030), notes in
+      `docs/releases/v1.2.0.md`, published by "Program builds" from `main`
 - [ ] The owner's hands-on check
 
 ### Moving several at once: things to try

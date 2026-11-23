@@ -270,7 +270,7 @@ commit too.
   installer and zip were built and packed on Windows by the workflow but
   not run (no Windows here).
 
-## Built on November 23, 2026, on branch `claude/gracious-ramanujan-d1aikb`, not yet tried by the owner
+## Released as 1.2 on November 23, 2026, not yet tried by the owner
 
 - **The export's end** (the owner: "the sound loops back to the start
   and it is heard"). `OfflineRender::new` played the song with its loop
@@ -343,10 +343,9 @@ commit too.
 
 ## Next session: start here
 
-0. Ask the owner to try selecting and moving several tracks and clips,
-   and an export with a loop set (ROADMAP.md: "Moving several at once:
-   things to try"); then merge and release as 1.2.0 (it adds features)
-   with notes in `docs/releases/v1.2.0.md`.
+0. Ask the owner how 1.2 goes (ROADMAP.md: "Moving several at once:
+   things to try"): selecting and moving several tracks and clips, and an
+   export with a loop set.
 1. Look at the release (the repository's Releases page, VLabs 1.0) and the
    "Program builds" run that published it; ask the owner whether the
    downloads install and start on their computers.
