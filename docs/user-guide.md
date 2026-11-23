@@ -73,6 +73,22 @@ places patterns along time.
 - In a pattern, the menu of the location line makes new patterns, copies
   (duplicates) and renames them.
 
+### Selecting and moving several at once
+
+- **Tracks:** click a track's name to select it, <kbd>Ctrl</kbd>+click
+  others to add (or remove) them, <kbd>Shift</kbd>+click to select every
+  track between. Then **drag a selected track's name up or down**: the
+  selected tracks move there together, in their order. The mixer follows
+  the new order.
+- **Clips:** <kbd>Ctrl</kbd>+click clips to add them to the selection
+  (again to take one out), or hold <kbd>Ctrl</kbd> (or <kbd>Shift</kbd>)
+  and drag from an empty spot to draw a box around them;
+  <kbd>Ctrl+A</kbd> selects them all. **Drag one of them** by its middle:
+  they all move together. <kbd>Delete</kbd> removes them,
+  <kbd>Ctrl+D</kbd> places a copy of them right after, and the keys that
+  move a clip by a bar move them all. <kbd>Escape</kbd> clears the
+  selection.
+
 ![A clip's right-click menu offers the track's other patterns](guide-images/patterns.png)
 
 ## The step grid (drums)
@@ -464,7 +480,9 @@ including a recording that was in progress.
 - **Export…** (<kbd>Ctrl+E</kbd>) makes, from the song:
   - **a sound file**: WAV or FLAC (FLAC is about half the size, with nothing
     lost), in studio quality (24-bit, 48 kHz) or CD quality (16-bit,
-    44.1 kHz);
+    44.1 kHz). The song plays once from its start (a loop you set for
+    playing is left out) to the end of its last clip, and on only while
+    notes and effects still ring: the file ends where the sound does;
   - **a project for another music program**: a DAWproject file, which
     Bitwig Studio, Studio One, Cubase and others open with the tracks,
     notes, sound, mixer, plugins and automation;

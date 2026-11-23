@@ -27,8 +27,12 @@ second library folder crashed the program (fixed), and sounds could not
 be shaped in the program: **shaping sounds** (decision 0031) adds note
 shapes for the instruments (a one-click release cut) and a sound editor
 for audio clips; merged into `main` and released as **VLabs 1.1**
-(November 22, 2026), awaiting the owner's hands-on check. Next: 7c, UST and USTX projects in and out,
-unless the owner's check of 7b asks for more tuning first.
+(November 22, 2026); the owner tried it: everything works. Their next
+requests: selecting and moving several tracks or clips at once, and an
+export that plays the song once and ends with its sound (decision 0032),
+built on the development branch, awaiting the owner's check. Next: 7c,
+UST and USTX projects in and out, unless the owner's check of 7b asks for
+more tuning first.
 The repository has been public since November 2026 (the owner's
 decision).
 
@@ -955,7 +959,7 @@ instruments, for instance to make a release cut piano."
       with the cut, -9 to -16 dB without), screenshots of both windows
 - [x] Version 1.1.0 (it adds features, decision 0030), notes in
       `docs/releases/v1.1.0.md`, published by "Program builds" from `main`
-- [ ] The owner's hands-on check
+- [x] The owner's hands-on check (November 23, 2026): everything works
 
 ### Shaping sounds: things to try
 
@@ -986,6 +990,48 @@ instruments, for instance to make a release cut piano."
   clips (such clips go out forwards at their own pitch).
 - Pitch changes speed with it (as a tape); changing pitch while keeping the
   length (time-stretching) is for later.
+
+## After 1.1 — Moving several at once, and the export's end (the owner's requests, November 2026)
+
+Decision 0032. "Select several tracks at once (to move them) and change
+where each instrument is"; "when exporting, the sound loops back to the
+start and it is heard: start at the start and end when there is no more
+beat on the timeline."
+
+- [x] The export plays the song once from its start (the loop region was
+      sending it back: a four-bar song looping two bars exported 23 s) and
+      the file ends where the sound does (no second of silence after it)
+- [x] Tracks: click, Ctrl+click and Shift+click their headers to select
+      them; drag a header up or down to move the selected tracks there,
+      in their order, as one undo step
+- [x] Clips: Ctrl+click, Shift+click, a selection box (Ctrl or Shift and a
+      drag from an empty spot), Ctrl+A; drag one of several to move them
+      all; Delete, Ctrl+D and the bar nudges act on all of them
+- [x] Checked: a session test of the export with a loop set (it failed on
+      the old code: 23 s); interface tests for selecting and moving tracks
+      and clips; the real program on the virtual screen (a track dragged
+      above another; a clip moved); `cargo xtask ci`
+- [ ] The owner's hands-on check
+
+### Moving several at once: things to try
+
+1. Click a track's name, Ctrl+click another, then drag one of them to the
+   top of the list: both move there together. Ctrl+Z puts them back.
+2. Ctrl+click two clips on different tracks (they are outlined), then drag
+   one by its middle: both move together. Delete removes both.
+3. Hold Ctrl and drag a box around a few clips from an empty spot; Ctrl+D
+   copies them right after.
+4. Set a loop over the first bars, then export the song as WAV: it plays
+   through once and ends when the last sound has faded, with no silence
+   after it.
+
+### Moving several at once: known gaps
+
+- Several selected clips move in time only (a single clip of sound can
+  still be dragged to another audio track).
+- Ctrl and Shift clicks could not be sent to the program on the virtual
+  screen (synthetic key presses do not reach it there); they are checked
+  by the interface tests.
 
 ## Later (not in v1, not designed out)
 

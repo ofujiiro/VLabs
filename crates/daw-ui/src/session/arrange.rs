@@ -131,11 +131,11 @@ impl Session {
 
     /// Keeps the focus on things that exist (after undo, for instance).
     pub(super) fn keep_focus_valid(&mut self) {
-        if let Some(clip) = self.selected_clip
-            && self.project().clip(clip).is_none()
-        {
-            self.selected_clip = None;
-        }
+        let project = self.doc.project();
+        self.selected_clips
+            .retain(|&clip| project.clip(clip).is_some());
+        self.selected_tracks
+            .retain(|&track| project.track(track).is_some());
         if let Some(track) = self.audio_focus
             && !self.is_audio_track(track)
         {
@@ -499,7 +499,7 @@ impl Session {
             p.add_clip(track, start, length, pattern)
         })?;
         self.current.insert(track, pattern);
-        self.selected_clip = Some(clip);
+        self.selected_clips = vec![clip];
         Some(clip)
     }
 
@@ -525,7 +525,7 @@ impl Session {
             });
         });
         self.current.insert(track, pattern);
-        self.selected_clip = Some(clip);
+        self.selected_clips = vec![clip];
     }
 
     /// A track's patterns, by name, in the order they were made.
@@ -583,9 +583,7 @@ impl Session {
         }
         self.doc
             .edit(text::EDIT_REMOVE_CLIP, |p| p.remove_clip(clip));
-        if self.selected_clip == Some(clip) {
-            self.selected_clip = None;
-        }
+        self.selected_clips.retain(|&c| c != clip);
     }
 
     /// Places a copy of a clip right after it; returns the copy, selected.
@@ -603,18 +601,18 @@ impl Session {
             p.update_clip(copy, |c| c.content = original.content);
             Some(copy)
         })?;
-        self.selected_clip = Some(copy);
+        self.selected_clips = vec![copy];
         Some(copy)
     }
 
     /// The clip selected on the timeline.
     pub fn selected_clip(&self) -> Option<ClipId> {
-        self.selected_clip
+        self.selected_clips.last().copied()
     }
 
     /// Selects a clip (or none); its track comes into focus.
     pub fn select_clip(&mut self, clip: Option<ClipId>) {
-        self.selected_clip = clip;
+        self.selected_clips = clip.into_iter().collect();
         if let Some((track, true)) = clip
             .and_then(|id| self.project().clip(id))
             .map(|(track, c)| (track, c.is_audio()))
@@ -635,7 +633,7 @@ impl Session {
 
     /// Moves the selected clip by whole bars (negative is earlier).
     pub fn nudge_clip(&mut self, bars: i64) {
-        let Some((_, clip)) = self.selected_clip.and_then(|id| self.project().clip(id)) else {
+        let Some((_, clip)) = self.selected_clip().and_then(|id| self.project().clip(id)) else {
             return;
         };
         let (id, start) = (clip.id, clip.start);

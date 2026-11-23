@@ -270,7 +270,35 @@ commit too.
   installer and zip were built and packed on Windows by the workflow but
   not run (no Windows here).
 
-## Released as 1.1 on November 22, 2026, not yet tried by the owner
+## Built on November 23, 2026, on branch `claude/gracious-ramanujan-d1aikb`, not yet tried by the owner
+
+- **The export's end** (the owner: "the sound loops back to the start
+  and it is heard"). `OfflineRender::new` played the song with its loop
+  region (`PlaybackScope::Song`); it is now unlooped, and
+  `OfflineRender::with_scope` keeps the loop for `render_offline` (tests
+  of looping). `daw-ui::export` holds the quiet frames after the song's
+  end and writes them only if sound follows, so the file ends with the
+  sound. `tests/song.rs`: a four-bar song looping two bars exported 23 s
+  before, now 8 s plus the kick's ring.
+- **Selecting and moving several** (decision 0032). `Project::move_tracks`;
+  `session/selection.rs` (`Pick`, `pick_track`, `move_selected_tracks`,
+  `toggle_clip`, `select_clips`, `select_all_clips`, `move_clips`,
+  `remove_selected_clips`, `duplicate_selected_clips`,
+  `nudge_selected_clips`); the session's `selected_clip` became
+  `selected_clips` (the last is the one single-clip commands use) and
+  `selected_tracks`. `song_view`: `header_input` (click, Ctrl/Shift+click,
+  drag a header), `Drag::MoveGroup`, `Drag::Band` (`clips_in`,
+  `group_overlaps`), selected tracks outlined; the headers' labels are not
+  selectable (a drag on a name moves the track). `run_in_song`: Delete,
+  Duplicate, the nudges and Ctrl+A act on the selection.
+- Checked: `cargo xtask ci`; the export test (failed on the old code);
+  interface tests for tracks (select, Ctrl, Shift, drag up and down, undo)
+  and clips (Ctrl+click, group move, Delete, undo, Ctrl+A, Ctrl+D, Escape,
+  the box); the real program on the virtual screen: a track dragged above
+  another, a clip moved. Ctrl and Shift could not be sent to the real
+  program there.
+
+## Released as 1.1 on November 22, 2026, tried by the owner: everything works
 
 - **Second library folder crash** (the owner's report: "adding more than
   one folder in the folders tab crashes the program"). Adding a folder
@@ -315,9 +343,10 @@ commit too.
 
 ## Next session: start here
 
-0. Ask the owner how 1.1's shaping sounds feel (ROADMAP.md: "Shaping
-   sounds: things to try"): the cut piano, the kits cut to their notes, the
-   sound editor; and whether the downloads install and start.
+0. Ask the owner to try selecting and moving several tracks and clips,
+   and an export with a loop set (ROADMAP.md: "Moving several at once:
+   things to try"); then merge and release as 1.2.0 (it adds features)
+   with notes in `docs/releases/v1.2.0.md`.
 1. Look at the release (the repository's Releases page, VLabs 1.0) and the
    "Program builds" run that published it; ask the owner whether the
    downloads install and start on their computers.

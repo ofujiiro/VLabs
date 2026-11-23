@@ -3664,3 +3664,175 @@ fn a_sound_is_cut_reversed_pitched_and_levelled_in_the_sound_editor() {
     f.harness.run_steps(3);
     assert!(f.harness.query_by_label(text::SOUND_WAVEFORM).is_none());
 }
+
+impl Fixture {
+    /// A point on a track's header in the song view, clear of its buttons.
+    fn header(&self, index: usize) -> Pos2 {
+        let song = self.harness.get_by_label(text::SONG_VIEW).rect();
+        Pos2::new(song.left() + 60.0, self.row_top(index) + 32.0)
+    }
+
+    fn track_names(&self) -> Vec<String> {
+        self.session()
+            .project()
+            .tracks
+            .iter()
+            .map(|t| t.name.clone())
+            .collect()
+    }
+
+    /// Holds a modifier key for the next clicks and drags (or lets go).
+    fn hold(&mut self, modifiers: Modifiers) {
+        self.harness.event(Event::ModifiersChanged(modifiers));
+        self.harness.run_steps(1);
+    }
+}
+
+#[test]
+fn several_tracks_are_selected_and_dragged_to_another_place() {
+    let mut f = new_song();
+    f.workspace_mut().session_mut().add_audio_track();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(3);
+    assert_eq!(f.track_names(), ["Drums", "Piano", "Audio"]);
+    let ids: Vec<daw_model::TrackId> = f.session().project().tracks.iter().map(|t| t.id).collect();
+
+    // A click selects the piano; Ctrl+click adds the audio track.
+    let piano = f.header(1);
+    f.click(piano, Modifiers::NONE);
+    assert_eq!(f.session().selected_tracks(), [ids[1]]);
+    f.hold(Modifiers::COMMAND);
+    let audio = f.header(2);
+    f.click(audio, Modifiers::COMMAND);
+    f.hold(Modifiers::NONE);
+    assert_eq!(f.session().selected_tracks(), [ids[1], ids[2]]);
+
+    // Dragged above the drums by the piano's header, both go to the top,
+    // in their order, as one step.
+    let depth = f.session().document().undo_depth();
+    let top = f.header(0) - vec2(0.0, 26.0);
+    f.drag(piano, top, Modifiers::NONE);
+    assert_eq!(f.track_names(), ["Piano", "Audio", "Drums"]);
+    assert_eq!(f.session().document().undo_depth(), depth + 1, "one step");
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_MOVE_TRACKS)
+    );
+    f.key(Key::Z, Key::Z, true, Modifiers::COMMAND);
+    f.key(Key::Z, Key::Z, false, Modifiers::COMMAND);
+    assert_eq!(f.track_names(), ["Drums", "Piano", "Audio"]);
+
+    // One track dragged down, alone: the drums go last.
+    let drums = f.header(0);
+    f.click(drums, Modifiers::NONE);
+    let bottom = f.header(2) + vec2(0.0, 26.0);
+    f.drag(drums, bottom, Modifiers::NONE);
+    assert_eq!(f.track_names(), ["Piano", "Audio", "Drums"]);
+
+    // Shift+click selects a range.
+    let first = f.header(0);
+    f.click(first, Modifiers::NONE);
+    f.hold(Modifiers::SHIFT);
+    let last = f.header(2);
+    f.click(last, Modifiers::SHIFT);
+    f.hold(Modifiers::NONE);
+    assert_eq!(f.session().selected_tracks().len(), 3);
+}
+
+#[test]
+fn several_clips_are_selected_and_moved_removed_and_duplicated_together() {
+    let mut f = new_song();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(3);
+    let clips: Vec<daw_model::ClipId> = f
+        .session()
+        .project()
+        .tracks
+        .iter()
+        .map(|t| t.clips[0].id)
+        .collect();
+    let start = |f: &Fixture, clip| f.session().project().clip(clip).unwrap().1.start;
+    let drum_middle = Pos2::new(f.song_x(Ticks::WHOLE), f.row_top(0) + 34.0);
+    let piano_middle = Pos2::new(f.song_x(Ticks::WHOLE * 2), f.row_top(1) + 34.0);
+
+    // Click the beat, Ctrl+click the piano's clip: both are selected.
+    f.click(drum_middle, Modifiers::NONE);
+    f.hold(Modifiers::COMMAND);
+    f.click(piano_middle, Modifiers::COMMAND);
+    f.hold(Modifiers::NONE);
+    assert_eq!(f.session().selected_clips(), clips.as_slice());
+
+    // Dragging one moves both, by a bar, as one step.
+    let depth = f.session().document().undo_depth();
+    let bar = f.song_x(Ticks::WHOLE) - f.song_x(Ticks::ZERO);
+    f.drag(drum_middle, drum_middle + vec2(bar, 0.0), Modifiers::NONE);
+    assert_eq!(start(&f, clips[0]), Ticks::WHOLE);
+    assert_eq!(start(&f, clips[1]), Ticks::WHOLE);
+    assert_eq!(f.session().document().undo_depth(), depth + 1, "one step");
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_MOVE_CLIPS)
+    );
+    assert_eq!(f.session().selected_clips().len(), 2, "still both");
+
+    // Delete removes both; undo brings them back.
+    f.key(Key::Delete, Key::Delete, true, Modifiers::NONE);
+    f.key(Key::Delete, Key::Delete, false, Modifiers::NONE);
+    let left: usize = f
+        .session()
+        .project()
+        .tracks
+        .iter()
+        .map(|t| t.clips.len())
+        .sum();
+    assert_eq!(left, 0);
+    f.key(Key::Z, Key::Z, true, Modifiers::COMMAND);
+    f.key(Key::Z, Key::Z, false, Modifiers::COMMAND);
+    let back: usize = f
+        .session()
+        .project()
+        .tracks
+        .iter()
+        .map(|t| t.clips.len())
+        .sum();
+    assert_eq!(back, 2);
+
+    // Ctrl+A selects every clip; Ctrl+D places a copy of the block after
+    // it.
+    f.key(Key::A, Key::A, true, Modifiers::COMMAND);
+    f.key(Key::A, Key::A, false, Modifiers::COMMAND);
+    assert_eq!(f.session().selected_clips().len(), 2);
+    f.key(Key::D, Key::D, true, Modifiers::COMMAND);
+    f.key(Key::D, Key::D, false, Modifiers::COMMAND);
+    let copies = f.session().selected_clips().to_vec();
+    assert_eq!(copies.len(), 2, "the copies are selected");
+    for copy in copies {
+        assert_eq!(start(&f, copy), Ticks::WHOLE * 5, "right after the block");
+    }
+
+    // Escape, then a selection box drawn with Ctrl from an empty spot
+    // takes the clips it touches.
+    f.key(Key::Escape, Key::Escape, true, Modifiers::NONE);
+    f.key(Key::Escape, Key::Escape, false, Modifiers::NONE);
+    assert!(f.session().selected_clips().is_empty());
+    let from = Pos2::new(f.song_x(Ticks::ZERO) + 4.0, f.row_top(0) + 6.0);
+    let to = Pos2::new(f.song_x(Ticks::WHOLE * 2), f.row_top(1) + 50.0);
+    f.hold(Modifiers::COMMAND);
+    f.drag(from, to, Modifiers::COMMAND);
+    f.hold(Modifiers::NONE);
+    assert_eq!(f.session().selected_clips().len(), 2, "the first two");
+    assert!(
+        f.session()
+            .selected_clips()
+            .iter()
+            .all(|&c| start(&f, c) == Ticks::WHOLE)
+    );
+    let total: usize = f
+        .session()
+        .project()
+        .tracks
+        .iter()
+        .map(|t| t.clips.len())
+        .sum();
+    assert_eq!(total, 4, "the box placed nothing");
+}

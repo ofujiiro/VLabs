@@ -38,6 +38,7 @@ considered instead.
 | [0029](0029-voicebank-pictures.md) | A voicebank's picture on its voice track | Accepted |
 | [0030](0030-releases.md) | Releases: version 1.0, published on GitHub from a tag | Accepted |
 | [0031](0031-shaping-sounds.md) | Shaping sounds: note shapes for instruments, a sound editor for clips | Accepted |
+| [0032](0032-selecting-and-moving-several.md) | Selecting several tracks or clips, and moving them; the export plays once | Accepted |
 
 ## Writing a new record
 

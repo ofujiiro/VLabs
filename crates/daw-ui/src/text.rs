@@ -2342,3 +2342,12 @@ pub fn clip_span(start: f64, end: f64, total: f64) -> String {
         end - start
     )
 }
+
+// ----- Selecting and moving several tracks or clips (decision 0032)
+
+pub const EDIT_MOVE_TRACKS: &str = "move tracks";
+pub const EDIT_MOVE_CLIPS: &str = "move clips";
+pub const EDIT_REMOVE_CLIPS: &str = "remove clips";
+pub const EDIT_DUPLICATE_CLIPS: &str = "duplicate clips";
+pub const TRACK_HEADER_HINT: &str = "Click to select · Ctrl+click to add or remove · Shift+click for a range · drag up or down to move · double-click to rename";
+pub const SELECTION_BOX: &str = "Selection box";

@@ -40,7 +40,7 @@ use egui::{
 
 use crate::icons::{Icon, Look, icon_button};
 use crate::library_panel::LibraryDrag;
-use crate::session::{LaneChoice, Session, SoundState};
+use crate::session::{LaneChoice, Pick, Session, SoundState};
 use crate::signature_row::{Axis, SignatureRow};
 use crate::step_grid::PAD_ORDER;
 use crate::text;
@@ -78,6 +78,17 @@ enum Drag {
         origin: Pos2,
         moved: bool,
     },
+    /// Moving the selected clips together (decision 0032), by the one
+    /// taken; their starts when taken are in `SongView::group`.
+    MoveGroup {
+        clip: ClipId,
+        grab: Ticks,
+        origin: Pos2,
+        moved: bool,
+    },
+    /// Drawing a selection box (Ctrl or Shift and a drag from an empty
+    /// spot); what was selected before stays in `SongView::band_base`.
+    Band { origin: Pos2 },
     /// Changing a clip's length.
     Resize { clip: ClipId },
     /// Moving a clip's start, what it plays staying where it is.
@@ -125,6 +136,16 @@ pub struct SongView {
     lane_search: String,
     /// The tempo and signature changes, under the ruler.
     signatures: SignatureRow,
+    /// The selected clips' starts when a group move began.
+    group: Vec<(ClipId, Ticks)>,
+    /// The clips selected before a selection box began (kept with Shift
+    /// or Ctrl).
+    band_base: Vec<ClipId>,
+    /// The selection box being drawn.
+    band: Option<Rect>,
+    /// Whether the selected tracks are being dragged up or down by a
+    /// header.
+    moving_tracks: bool,
 }
 
 impl Default for SongView {
@@ -144,6 +165,10 @@ impl Default for SongView {
             lane_menu: None,
             lane_search: String::new(),
             signatures: SignatureRow::default(),
+            group: Vec::new(),
+            band_base: Vec::new(),
+            band: None,
+            moving_tracks: false,
         }
     }
 }
@@ -318,6 +343,16 @@ impl SongView {
         };
         self.signatures
             .ui(ui, session, layout.conductor, layout.headers.right(), axis);
+        if let Some(band) = self.band {
+            let painter = ui.painter_at(layout.timeline);
+            painter.rect_filled(band, CornerRadius::same(2), p.accent.gamma_multiply(0.12));
+            painter.rect_stroke(
+                band,
+                CornerRadius::same(2),
+                Stroke::new(1.0, p.accent),
+                StrokeKind::Inside,
+            );
+        }
         self.headers(ui, session, &layout, intents);
         self.clip_menu(ui, session);
         self.empty_spot_menu(ui, session);
@@ -394,9 +429,15 @@ impl SongView {
         if self.drag == Drag::None {
             return false;
         }
-        if !matches!(self.drag, Drag::Pan { .. }) {
-            session.cancel_gesture();
+        match self.drag {
+            Drag::Pan { .. } => {}
+            Drag::Band { .. } => {
+                session.select_clips(std::mem::take(&mut self.band_base));
+                self.band = None;
+            }
+            _ => session.cancel_gesture(),
         }
+        self.group.clear();
         self.drag = Drag::None;
         true
     }
@@ -547,6 +588,24 @@ impl SongView {
         })
     }
 
+    /// The clips a rectangle of the timeline touches.
+    fn clips_in(&self, layout: &Layout, session: &Session, band: Rect) -> Vec<ClipId> {
+        let project = session.project();
+        layout
+            .rows
+            .iter()
+            .filter(|row| row.kind == RowKind::Track)
+            .filter_map(|row| project.tracks.get(row.index).map(|t| (row.index, t)))
+            .flat_map(|(index, track)| {
+                track
+                    .clips
+                    .iter()
+                    .filter(move |clip| self.clip_rect(layout, index, clip).intersects(band))
+                    .map(|clip| clip.id)
+            })
+            .collect()
+    }
+
     /// The automation point under a point of a lane's row, if any.
     fn point_at(
         &self,
@@ -666,6 +725,8 @@ impl SongView {
                     i.time,
                 )
             });
+        // Ctrl (Cmd on a Mac) or Shift: the selection grows (decision 0032).
+        let (toggle, extend) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
         let Some(pos) = pos else {
             return;
         };
@@ -700,6 +761,38 @@ impl SongView {
                     origin: pos,
                     looping: false,
                 };
+            } else if let Some((clip, _, _)) = self.clip_at(layout, session, pos)
+                && (toggle || extend)
+            {
+                // Ctrl+click puts a clip in or out of the selection;
+                // Shift+click adds it.
+                if toggle || !session.is_clip_selected(clip) {
+                    session.toggle_clip(clip);
+                }
+            } else if let Some((clip, _, rect)) = self.clip_at(layout, session, pos)
+                && session.is_clip_selected(clip)
+                && session.selected_clips().len() > 1
+                && self
+                    .fade_handle_at(layout, session, clip, rect, pos)
+                    .is_none()
+                && pos.x < rect.right() - EDGE_GRAB
+                && pos.x > rect.left() + EDGE_GRAB
+                && let Some(start) = session.project().clip(clip).map(|(_, c)| c.start)
+            {
+                // One of several selected clips, taken by its middle: they
+                // all move together.
+                self.group = session
+                    .selected_clips()
+                    .iter()
+                    .filter_map(|&id| session.project().clip(id).map(|(_, c)| (id, c.start)))
+                    .collect();
+                session.begin_gesture(text::EDIT_MOVE_CLIPS);
+                self.drag = Drag::MoveGroup {
+                    clip,
+                    grab: self.x_to_tick(layout, pos.x) - start,
+                    origin: pos,
+                    moved: false,
+                };
             } else if let Some((clip, _, rect)) = self.clip_at(layout, session, pos) {
                 session.select_clip(Some(clip));
                 if let Some(out) = self.fade_handle_at(layout, session, clip, rect, pos) {
@@ -720,6 +813,11 @@ impl SongView {
                         moved: false,
                     };
                 }
+            } else if (toggle || extend) && layout.timeline.contains(pos) {
+                // From an empty spot, with Ctrl or Shift: a selection box.
+                self.band_base = session.selected_clips().to_vec();
+                self.band = Some(Rect::from_two_pos(pos, pos));
+                self.drag = Drag::Band { origin: pos };
             } else if let Some(row) = layout.row_at(pos.y)
                 && let RowKind::Lane(target) = row.kind
             {
@@ -821,6 +919,39 @@ impl SongView {
                     moved,
                 };
             }
+            Drag::MoveGroup {
+                clip,
+                grab,
+                origin,
+                moved,
+            } if any_down => {
+                let moved = moved || pos.distance(origin) > DRAG_THRESHOLD;
+                if moved && let Some(&(_, lead)) = self.group.iter().find(|(c, _)| *c == clip) {
+                    let start =
+                        Self::snap_nearest(session, self.x_to_tick(layout, pos.x) - grab, alt);
+                    // None earlier than the song's start.
+                    let earliest = self.group.iter().map(|(_, s)| *s).min().unwrap_or(lead);
+                    let by = (start - lead).max(Ticks::ZERO - earliest);
+                    let targets: Vec<(ClipId, Ticks)> =
+                        self.group.iter().map(|&(c, s)| (c, s + by)).collect();
+                    if !group_overlaps(session, &targets) {
+                        session.move_clips(&targets);
+                    }
+                }
+                self.drag = Drag::MoveGroup {
+                    clip,
+                    grab,
+                    origin,
+                    moved,
+                };
+            }
+            Drag::Band { origin } if any_down => {
+                let band = Rect::from_two_pos(origin, pos);
+                self.band = Some(band);
+                let mut chosen = self.band_base.clone();
+                chosen.extend(self.clips_in(layout, session, band));
+                session.select_clips(chosen);
+            }
             Drag::Resize { clip } if any_down => {
                 if let Some((_, c)) = session.project().clip(clip).map(|(t, c)| (t, *c)) {
                     let start = c.start;
@@ -917,8 +1048,21 @@ impl SongView {
                         ..
                     } => session.locate_song(anchor),
                     Drag::Pan { .. } => {}
+                    Drag::Band { .. } => {
+                        self.band = None;
+                        self.band_base.clear();
+                    }
+                    Drag::MoveGroup {
+                        clip, moved: false, ..
+                    } => {
+                        // A click on one of several selected clips, without
+                        // moving: it alone is selected.
+                        session.end_gesture();
+                        session.select_clip(Some(clip));
+                    }
                     _ => session.end_gesture(),
                 }
+                self.group.clear();
                 self.drag = Drag::None;
             }
         }
@@ -1151,7 +1295,7 @@ impl SongView {
                     continue;
                 }
                 let pattern = clip.pattern().and_then(|id| project.pattern(id));
-                let selected = session.selected_clip() == Some(clip.id);
+                let selected = session.is_clip_selected(clip.id);
                 let muted = track.strip.mute;
                 let fill = color.gamma_multiply(if muted { 0.12 } else { 0.28 });
                 painter.rect_filled(rect, CornerRadius::same(6), fill);
@@ -1714,6 +1858,58 @@ impl SongView {
         }
     }
 
+    /// A click or a drag on a track's header (decision 0032): a click
+    /// selects the track (Ctrl: in or out of the selection; Shift: a
+    /// range); a drag up or down moves the selected tracks there.
+    fn header_input(
+        &mut self,
+        ui: &Ui,
+        session: &mut Session,
+        layout: &Layout,
+        track: TrackId,
+        response: &Response,
+    ) {
+        let (toggle, extend) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+        if response.clicked() {
+            let pick = if toggle {
+                Pick::Toggle
+            } else if extend {
+                Pick::Range
+            } else {
+                Pick::Only
+            };
+            session.pick_track(track, pick);
+        }
+        if response.drag_started() {
+            if !session.is_track_selected(track) {
+                session.pick_track(track, Pick::Only);
+            }
+            session.begin_gesture(text::EDIT_MOVE_TRACKS);
+            self.moving_tracks = true;
+        }
+        if self.moving_tracks
+            && response.dragged()
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            // Where among the other tracks the pointer is: the selected
+            // ones go there.
+            let to = layout
+                .rows
+                .iter()
+                .filter(|row| row.kind == RowKind::Track && !session.is_track_selected(row.track))
+                .filter(|row| layout.top_of(row) + row.height / 2.0 < pointer.y)
+                .count();
+            session.move_selected_tracks(to);
+            ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+        } else if response.hovered() && ui.ctx().dragged_id().is_none() {
+            ui.ctx().set_cursor_icon(CursorIcon::Grab);
+        }
+        if self.moving_tracks && response.drag_stopped() {
+            self.moving_tracks = false;
+            session.end_gesture();
+        }
+    }
+
     /// One track's header: name, mute, solo and a menu; what it plays; its
     /// plugin's window and its lanes.
     #[allow(clippy::too_many_lines, reason = "one header, top to bottom")]
@@ -1743,17 +1939,24 @@ impl SongView {
         let background = ui.interact(
             rect.intersect(layout.headers),
             ui.scope_id().with(("track", track.0)),
-            Sense::click(),
+            Sense::click_and_drag(),
         );
-        if background.clicked() {
-            session.focus_track(track);
-        }
+        self.header_input(ui, session, layout, track, &background);
         if background.double_clicked() {
             intents.push(Intent::RenameTrack(track));
         }
         let painter = ui.painter_at(layout.headers);
         if focused {
             painter.rect_filled(rect, CornerRadius::ZERO, p.raised);
+        }
+        // Several tracks selected (decision 0032): each is outlined.
+        if session.is_track_selected(track) && session.selected_tracks().len() > 1 {
+            painter.rect_stroke(
+                rect.shrink(1.0),
+                CornerRadius::same(3),
+                Stroke::new(1.5, p.accent),
+                StrokeKind::Inside,
+            );
         }
         painter.rect_filled(
             Rect::from_min_max(
@@ -1854,7 +2057,12 @@ impl SongView {
                     session.toggle_mute(track);
                 }
                 ui.with_layout(EguiLayout::left_to_right(Align::Center), |ui| {
-                    ui.add(Label::new(RichText::new(&name).strong().size(size::BODY)).truncate());
+                    // Not selectable: a drag on the name moves the track.
+                    ui.add(
+                        Label::new(RichText::new(&name).strong().size(size::BODY))
+                            .truncate()
+                            .selectable(false),
+                    );
                 });
             });
         });
@@ -1912,7 +2120,9 @@ impl SongView {
                         input_meter(ui, session.input_level());
                     } else {
                         ui.add(
-                            Label::new(RichText::new(kind).small().color(p.text_weak)).truncate(),
+                            Label::new(RichText::new(kind).small().color(p.text_weak))
+                                .truncate()
+                                .selectable(false),
                         );
                     }
                 });
@@ -2245,6 +2455,24 @@ fn overlaps_on(
         t.clips
             .iter()
             .any(|c| c.id != clip && c.start < end && start < c.end())
+    })
+}
+
+/// Whether clips moved together to new starts would overlap a clip that
+/// stays where it is on their track (they cannot meet each other: they all
+/// move by the same amount).
+fn group_overlaps(session: &Session, moves: &[(ClipId, Ticks)]) -> bool {
+    let project = session.project();
+    moves.iter().any(|&(clip, start)| {
+        let Some((track, current)) = project.clip(clip) else {
+            return true;
+        };
+        let end = start + current.length;
+        project.track(track).is_some_and(|t| {
+            t.clips
+                .iter()
+                .any(|c| !moves.iter().any(|(m, _)| *m == c.id) && c.start < end && start < c.end())
+        })
     })
 }
 
