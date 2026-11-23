@@ -400,6 +400,22 @@ impl Project {
         id
     }
 
+    /// Moves some tracks together (decision 0032), keeping their order
+    /// among themselves: the first of them lands at `to` in the list of the
+    /// other tracks (counted without them; past the end, they go last).
+    /// Returns whether anything moved.
+    pub fn move_tracks(&mut self, ids: &[TrackId], to: usize) -> bool {
+        let before: Vec<TrackId> = self.tracks.iter().map(|t| t.id).collect();
+        let (moving, mut tracks): (Vec<_>, Vec<_>) = std::mem::take(&mut self.tracks)
+            .into_iter()
+            .partition(|t| ids.contains(&t.id));
+        let tail = tracks.split_off(to.min(tracks.len()));
+        tracks.extend(moving);
+        tracks.extend(tail);
+        self.tracks = tracks;
+        self.tracks.iter().map(|t| t.id).ne(before)
+    }
+
     /// Removes a track with its clips and its patterns.
     pub fn remove_track(&mut self, id: TrackId) {
         self.tracks.retain(|t| t.id != id);
@@ -1601,6 +1617,28 @@ mod tests {
             Ticks::quarters(48),
             "six seconds of sound, four times slower"
         );
+    }
+
+    #[test]
+    fn tracks_move_together_keeping_their_order() {
+        let mut project = Project::empty();
+        let ids: Vec<TrackId> = ["A", "B", "C", "D", "E"]
+            .iter()
+            .map(|name| project.add_track(name, Instrument::builtin_piano()))
+            .collect();
+        let names = |p: &Project| p.tracks.iter().map(|t| t.name.clone()).collect::<String>();
+        // B and D, taken together, go to the top.
+        assert!(project.move_tracks(&[ids[3], ids[1]], 0));
+        assert_eq!(names(&project), "BDACE");
+        // Then after C (the others are A, C, E: index 2 is before E).
+        assert!(project.move_tracks(&[ids[1], ids[3]], 2));
+        assert_eq!(names(&project), "ACBDE");
+        // Past the end: last.
+        assert!(project.move_tracks(&[ids[0]], 99));
+        assert_eq!(names(&project), "CBDEA");
+        // Where they are already: nothing moves.
+        assert!(!project.move_tracks(&[ids[4], ids[0]], 3));
+        assert_eq!(names(&project), "CBDEA");
     }
 
     #[test]

@@ -18,6 +18,7 @@ mod library;
 mod mixing;
 mod plugins;
 mod recorder;
+mod selection;
 mod shape;
 mod sound_edit;
 mod synth;
@@ -28,6 +29,7 @@ pub use audio::{LiveTake, SoundState, TakeNote};
 pub use files::SongFile;
 pub use mixing::MAX_GAIN;
 pub use plugins::{LaneChoice, PluginSearch};
+pub use selection::Pick;
 pub use sound_edit::ClipStretch;
 pub use theory::Draw;
 pub use voice::{LineNote, LinePhrase, SungLine, VoicePicture, point_from};
@@ -229,7 +231,12 @@ pub struct Session {
     /// The pattern last opened on each track (what clicking the track
     /// places and opens).
     current: HashMap<TrackId, PatternId>,
-    selected_clip: Option<ClipId>,
+    /// The clips selected on the timeline (decision 0032); the last is
+    /// the one picked last, which single-clip commands act on.
+    selected_clips: Vec<ClipId>,
+    /// The tracks selected in the song view's headers, to move together
+    /// (decision 0032).
+    selected_tracks: Vec<TrackId>,
     /// Whether a pattern plays in a loop while it is open.
     loop_pattern: bool,
     /// The scope the engine was last given (to notice changes).
@@ -343,7 +350,8 @@ impl Session {
             track,
             pattern,
             current: HashMap::new(),
-            selected_clip: None,
+            selected_clips: Vec::new(),
+            selected_tracks: Vec::new(),
             loop_pattern: true,
             scope: None,
             export: None,
@@ -1552,7 +1560,8 @@ impl Session {
         self.track = track;
         self.pattern = pattern;
         self.current.clear();
-        self.selected_clip = None;
+        self.selected_clips.clear();
+        self.selected_tracks.clear();
         self.scope = None;
         self.selection.clear();
         self.paste_at = None;

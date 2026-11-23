@@ -435,7 +435,7 @@ impl Session {
         });
         if let Some((track, clip)) = result {
             self.audio_focus = Some(track);
-            self.selected_clip = Some(clip);
+            self.selected_clips = vec![clip];
         }
     }
 
@@ -460,13 +460,13 @@ impl Session {
         let second = self
             .doc
             .edit(text::EDIT_SPLIT_CLIP, |p| p.split_clip(clip, at))?;
-        self.selected_clip = Some(second);
+        self.selected_clips = vec![second];
         Some(second)
     }
 
     /// Splits the selected clip at the play position, if it is inside it.
     pub fn split_at_play_position(&mut self) -> Option<ClipId> {
-        let clip = self.selected_clip?;
+        let clip = self.selected_clip()?;
         self.split_clip(clip, self.song_position())
     }
 

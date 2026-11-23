@@ -1254,14 +1254,27 @@ pub struct OfflineRender {
 }
 
 impl OfflineRender {
-    /// Prepares to play the whole song from the start.
+    /// Prepares to play the whole song from the start, once, as an export
+    /// does: the song's loop region is for playing, not for exporting, so
+    /// it never sends the render back.
     pub fn new(project: &Project, library: SoundLibrary, config: EngineConfig) -> Self {
+        Self::with_scope(project, library, config, PlaybackScope::Unlooped)
+    }
+
+    /// Prepares to play what `scope` plays from the start (the song with
+    /// its loop, for tests of looping).
+    pub fn with_scope(
+        project: &Project,
+        library: SoundLibrary,
+        config: EngineConfig,
+        scope: PlaybackScope,
+    ) -> Self {
         // An export waits for every instrument to be read.
         let mut library = library;
         library.set_background_loading(false);
         let (mut engine, processor) = Engine::new(config, library);
         engine.set_metronome(false, false, 0.0);
-        engine.sync(project, 0, PlaybackScope::Song);
+        engine.sync(project, 0, scope);
         engine.play();
         Self {
             engine,
@@ -1303,8 +1316,8 @@ impl OfflineRender {
 }
 
 /// Renders a project offline, through exactly the same processing as live
-/// playback: plays it from the start for `seconds` and returns the stereo
-/// result as (left, right).
+/// playback: plays it from the start for `seconds`, looping its loop region
+/// as playback does, and returns the stereo result as (left, right).
 pub fn render_offline(
     project: &Project,
     library: SoundLibrary,
@@ -1317,13 +1330,14 @@ pub fn render_offline(
         reason = "a positive duration"
     )]
     let frames = (seconds * f64::from(config.sample_rate)).ceil() as usize;
-    let mut render = OfflineRender::new(
+    let mut render = OfflineRender::with_scope(
         project,
         library,
         EngineConfig {
             max_block: 256.min(config.max_block),
             ..config
         },
+        PlaybackScope::Song,
     );
     let mut left = vec![0.0; frames];
     let mut right = vec![0.0; frames];

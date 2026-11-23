@@ -29,7 +29,7 @@ the program for the user guide.
 
 ## Status
 
-**Version 1.1.** Make a beat on the step
+**Version 1.2.** Make a beat on the step
 grid with a recorded acoustic kit or an electronic kit, write melodies in
 the piano roll with the bundled piano, the built-in synthesizer (two
 oscillators, a filter, envelopes, an LFO and presets) or a CLAP or VST3
@@ -64,7 +64,9 @@ track. Shape how an instrument's notes start and end (a slow attack, a long
 ring, or every note cut off as its key comes up: a "release cut" piano in
 one click), and open any sound clip in the sound editor to cut it exactly,
 fade it, play it backwards, change its pitch or make it as loud as it can
-be (new in 1.1). Each release has a Windows installer and a Linux AppImage, with a
+be. Select several tracks or clips and move them together; drag a track's
+name to put it elsewhere in the list (new in 1.2). Each release has a
+Windows installer and a Linux AppImage, with a
 user guide (F1 in the program, or [docs/user-guide.md](docs/user-guide.md)).
 See [ROADMAP.md](ROADMAP.md) for what to try and what comes next.
 

@@ -952,23 +952,16 @@ impl Workspace {
     }
 
     /// Commands that mean something else in the song view: they act on the
-    /// selected clip. Returns whether the command was handled here.
+    /// selected clips (decision 0032). Returns whether the command was
+    /// handled here.
     fn run_in_song(&mut self, command: Command) -> bool {
         let s = &mut self.session;
-        let clip = s.selected_clip();
         match command {
-            Command::Delete => {
-                if let Some(clip) = clip {
-                    s.remove_clip(clip);
-                }
-            }
-            Command::Duplicate => {
-                if let Some(clip) = clip {
-                    s.duplicate_clip(clip);
-                }
-            }
-            Command::MoveEarlier => s.nudge_clip(-1),
-            Command::MoveLater => s.nudge_clip(1),
+            Command::Delete => s.remove_selected_clips(),
+            Command::Duplicate => s.duplicate_selected_clips(),
+            Command::MoveEarlier => s.nudge_selected_clips(-1),
+            Command::MoveLater => s.nudge_selected_clips(1),
+            Command::SelectAll => s.select_all_clips(),
             Command::Split => {
                 s.split_at_play_position();
             }
@@ -979,8 +972,7 @@ impl Workspace {
             }
             Command::ZoomIn => self.song.zoom(1.25),
             Command::ZoomOut => self.song.zoom(0.8),
-            Command::SelectAll
-            | Command::Copy
+            Command::Copy
             | Command::Cut
             | Command::Paste
             | Command::TransposeUp

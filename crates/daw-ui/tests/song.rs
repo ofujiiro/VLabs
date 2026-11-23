@@ -437,6 +437,53 @@ fn the_song_exports_to_a_wav_file() {
     std::fs::remove_file(&wanted).ok();
 }
 
+/// A 16-bit stereo WAV file's left channel, as numbers from -1 to 1.
+fn wav_left(bytes: &[u8]) -> Vec<f32> {
+    let data = u32::from_le_bytes(bytes[54..58].try_into().unwrap()) as usize;
+    bytes[58..58 + data]
+        .chunks_exact(4)
+        .map(|frame| f32::from(i16::from_le_bytes([frame[0], frame[1]])) / 32768.0)
+        .collect()
+}
+
+#[test]
+fn an_export_plays_the_song_once_and_ends_with_its_sound() {
+    let (mut s, _processor) = new_song();
+    // The one-bar beat, repeated over four bars, with a kick on its first
+    // and last beats; and a loop on the first two bars, as someone working
+    // on the start has.
+    s.add_hit(36, Ticks::ZERO, 1.0);
+    s.add_hit(36, Ticks::QUARTER * 3, 1.0);
+    s.set_loop_region(Region::new(Ticks::ZERO, Ticks::WHOLE * 2));
+    let path = temp_path("once");
+    s.start_export(&path, ExportFormat::Cd);
+    s.finish_export();
+    let wanted = format!("{}.wav", path.display());
+    let left = wav_left(&std::fs::read(&wanted).unwrap());
+    let rate = 44_100.0;
+    let at = |seconds: f64| (seconds * rate) as usize;
+    let peak = |from: f64, to: f64| {
+        left[at(from).min(left.len())..at(to).min(left.len())]
+            .iter()
+            .fold(0.0_f32, |m, s| m.max(s.abs()))
+    };
+    // The song plays straight through to its last beat's kick. It ends
+    // with that kick's sound: the four bars (eight seconds), then only as
+    // long as the kick still rings, with no silence after it. (Sent back by
+    // the loop, it would never fall quiet and run on for fifteen seconds
+    // more.)
+    assert!(peak(0.0, 0.1) > 0.1, "the first kick");
+    assert!(peak(7.5, 7.6) > 0.1, "the last beat's kick");
+    let seconds = left.len() as f64 / rate;
+    assert!((8.0..8.6).contains(&seconds), "{seconds} s");
+    let end = &left[left.len().saturating_sub(at(0.05))..];
+    assert!(
+        seconds < 8.001 || end.iter().any(|s| s.abs() > 1e-4),
+        "the file ends where the sound does"
+    );
+    std::fs::remove_file(&wanted).ok();
+}
+
 #[test]
 fn a_cancelled_export_writes_nothing() {
     let (mut s, _processor) = new_song();
