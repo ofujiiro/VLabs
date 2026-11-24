@@ -16,6 +16,7 @@ mod controls;
 mod files;
 mod kits;
 mod library;
+mod midi;
 mod mixing;
 mod plugins;
 mod recorder;
@@ -321,6 +322,12 @@ pub struct Session {
     /// What the controllers did during the take being recorded (decision
     /// 0033), written into the pattern when it ends.
     recorded_moves: Vec<controls::RecordedMove>,
+    /// The setting waiting for a MIDI controller's knob, if one is.
+    midi_learning: Option<daw_model::LinkTarget>,
+    /// The knob being turned (its moves join one undo step).
+    midi_turn: Option<midi::Turn>,
+    /// The last undo merge key a knob turn took.
+    next_turn: u64,
 }
 
 /// Writes a recovery copy of the song at once and waits until it is on
@@ -408,6 +415,9 @@ impl Session {
             preview: library::Preview::default(),
             reading_notice: false,
             recorded_moves: Vec::new(),
+            midi_learning: None,
+            midi_turn: None,
+            next_turn: midi::FIRST_TURN,
         };
         session.selection_revision = session.doc.revision();
         session.load_song_audio();

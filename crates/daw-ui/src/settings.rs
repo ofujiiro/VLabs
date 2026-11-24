@@ -78,6 +78,11 @@ pub struct Settings {
     pub sound_folders: Vec<PathBuf>,
     /// Whether the library is shown (in place of the keyboard).
     pub show_library: bool,
+    /// The MIDI controllers' buttons and pads that run commands (decision
+    /// 0033), by command.
+    pub midi_buttons: BTreeMap<String, daw_model::MidiControl>,
+    /// The MIDI controllers switched off, by name (decision 0033).
+    pub midi_off: Vec<String>,
 }
 
 impl Default for Settings {
@@ -99,6 +104,8 @@ impl Default for Settings {
             plugin_folders: Vec::new(),
             sound_folders: Vec::new(),
             show_library: false,
+            midi_buttons: BTreeMap::new(),
+            midi_off: Vec::new(),
         }
     }
 }
@@ -134,6 +141,16 @@ impl Settings {
             folders.retain(|f| f.is_absolute() && seen.insert(f.clone()));
             folders.truncate(MAX_FOLDERS);
         }
+        // One command per button, commands this version knows.
+        let mut taken = std::collections::BTreeSet::new();
+        self.midi_buttons.retain(|id, control| {
+            *control = control.sane();
+            crate::keys::Command::from_id(id).is_some() && taken.insert(*control)
+        });
+        let mut seen = std::collections::BTreeSet::new();
+        self.midi_off
+            .retain(|name| !name.is_empty() && seen.insert(name.clone()));
+        self.midi_off.truncate(MAX_FOLDERS);
     }
 
     /// Puts a file at the top of the recent list.
@@ -189,6 +206,32 @@ mod tests {
         let settings = Settings::from_json(&json.to_string());
         assert_eq!(settings.sound_folders, vec![sounds]);
         assert_eq!(settings.plugin_folders.len(), MAX_FOLDERS);
+    }
+
+    #[test]
+    fn midi_buttons_and_switched_off_controllers_are_remembered() {
+        let pad = daw_model::MidiControl {
+            channel: 9,
+            source: daw_model::MidiSource::Note(36),
+        };
+        let mut settings = Settings::default();
+        settings.midi_buttons.insert("play_stop".to_owned(), pad);
+        settings.midi_off.push("Keystation 49 MIDI 1".to_owned());
+        assert_eq!(Settings::from_json(&settings.to_json()), settings);
+        // A command this version does not know, or a second command on the
+        // same pad, is dropped.
+        let json = serde_json::json!({
+            "midi_buttons": {
+                "frobnicate": {"channel": 0, "source": {"controller": 20}},
+                "play_stop": {"channel": 9, "source": {"note": 36}},
+                "record": {"channel": 9, "source": {"note": 36}},
+            },
+            "midi_off": ["A", "A", ""],
+        });
+        let settings = Settings::from_json(&json.to_string());
+        assert_eq!(settings.midi_buttons.len(), 1);
+        assert_eq!(settings.midi_buttons.get("play_stop"), Some(&pad));
+        assert_eq!(settings.midi_off, ["A"]);
     }
 
     #[test]

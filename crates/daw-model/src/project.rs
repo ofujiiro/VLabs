@@ -46,6 +46,10 @@ pub struct Project {
     /// The audio files the song's audio clips play (decision 0017).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub audio: Vec<AudioFile>,
+    /// The knobs and faders of a MIDI controller given a setting of the
+    /// song to move (decision 0033).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub midi_links: Vec<crate::MidiLink>,
     /// The next unused identifier.
     next_id: u64,
 }
@@ -63,7 +67,134 @@ impl Project {
             loop_region: None,
             master: MasterBus::default(),
             audio: Vec::new(),
+            midi_links: Vec::new(),
             next_id: 1,
+        }
+    }
+
+    // ----- MIDI controllers (decision 0033)
+
+    /// Gives a MIDI controller's knob or fader a setting to move. One
+    /// control has one job: a setting it moved before is let go.
+    pub fn link_midi(&mut self, control: crate::MidiControl, target: crate::LinkTarget) {
+        let control = control.sane();
+        self.midi_links
+            .retain(|l| l.control != control && l.target != target);
+        self.midi_links.push(crate::MidiLink { control, target });
+    }
+
+    /// Lets go of the control that moves a setting, if one does.
+    pub fn forget_midi(&mut self, target: crate::LinkTarget) {
+        self.midi_links.retain(|l| l.target != target);
+    }
+
+    /// The control that moves a setting, if one does.
+    pub fn midi_control_of(&self, target: crate::LinkTarget) -> Option<crate::MidiControl> {
+        self.midi_links
+            .iter()
+            .find(|l| l.target == target)
+            .map(|l| l.control)
+    }
+
+    /// Whether a link's setting is still in the song (its track or effect
+    /// may have been removed since).
+    pub fn has_link_target(&self, target: crate::LinkTarget) -> bool {
+        match target {
+            crate::LinkTarget::Track { track, setting } => {
+                self.track(track).is_some_and(|t| match setting {
+                    crate::AutomationTarget::Volume | crate::AutomationTarget::Pan => true,
+                    crate::AutomationTarget::Effect { effect, param } => t
+                        .effects
+                        .iter()
+                        .any(|e| e.id == effect && (param as usize) < e.kind.params().len()),
+                    crate::AutomationTarget::Instrument { param } => t
+                        .instrument
+                        .synth()
+                        .is_some_and(|_| (param as usize) < crate::SynthSettings::params().len()),
+                })
+            }
+            crate::LinkTarget::MasterVolume => true,
+            crate::LinkTarget::MasterEffect { effect, param } => self
+                .master
+                .effects
+                .iter()
+                .any(|e| e.id == effect && (param as usize) < e.kind.params().len()),
+        }
+    }
+
+    /// Moves a linked setting to a value from 0 to 1 (a knob's position):
+    /// volume on the mixer fader's scale, pan from left to right, an
+    /// effect's or the synth's setting over its range. Returns whether the
+    /// setting is in the song.
+    pub fn set_linked(&mut self, target: crate::LinkTarget, value: f32) -> bool {
+        if !self.has_link_target(target) {
+            return false;
+        }
+        let value = if value.is_finite() {
+            value.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        match target {
+            crate::LinkTarget::Track { track, setting } => {
+                let Some(t) = self.track_mut(track) else {
+                    return false;
+                };
+                match setting {
+                    crate::AutomationTarget::Volume => {
+                        t.strip.gain = crate::volume_gain(value);
+                    }
+                    crate::AutomationTarget::Pan => t.strip.pan = crate::value_pan(value),
+                    crate::AutomationTarget::Effect { effect, param } => {
+                        if let Some(e) = t.effects.iter_mut().find(|e| e.id == effect) {
+                            e.kind.set_param(param as usize, value);
+                        }
+                    }
+                    crate::AutomationTarget::Instrument { param } => {
+                        if let Instrument::Synth(settings) = &mut t.instrument {
+                            settings.set_param(param as usize, value);
+                        }
+                    }
+                }
+            }
+            crate::LinkTarget::MasterVolume => self.master.gain = crate::volume_gain(value),
+            crate::LinkTarget::MasterEffect { effect, param } => {
+                if let Some(e) = self.master.effects.iter_mut().find(|e| e.id == effect) {
+                    e.kind.set_param(param as usize, value);
+                }
+            }
+        }
+        true
+    }
+
+    /// A linked setting's value from 0 to 1, as a knob would stand for it.
+    pub fn linked_value(&self, target: crate::LinkTarget) -> Option<f32> {
+        if !self.has_link_target(target) {
+            return None;
+        }
+        match target {
+            crate::LinkTarget::Track { track, setting } => {
+                let t = self.track(track)?;
+                match setting {
+                    crate::AutomationTarget::Volume => Some(crate::gain_volume(t.strip.gain)),
+                    crate::AutomationTarget::Pan => Some(crate::pan_value(t.strip.pan)),
+                    crate::AutomationTarget::Effect { effect, param } => t
+                        .effects
+                        .iter()
+                        .find(|e| e.id == effect)
+                        .and_then(|e| e.kind.param(param as usize)),
+                    crate::AutomationTarget::Instrument { param } => {
+                        t.instrument.synth()?.param(param as usize)
+                    }
+                }
+            }
+            crate::LinkTarget::MasterVolume => Some(crate::gain_volume(self.master.gain)),
+            crate::LinkTarget::MasterEffect { effect, param } => self
+                .master
+                .effects
+                .iter()
+                .find(|e| e.id == effect)
+                .and_then(|e| e.kind.param(param as usize)),
         }
     }
 
@@ -2021,5 +2152,81 @@ mod tests {
         // A note the pattern does not have gets none.
         project.set_expressions(pattern, &[(NoteId(999), bent)]);
         assert!(project.pattern(pattern).unwrap().expression.is_empty());
+    }
+
+    #[test]
+    fn knobs_given_settings_move_them_and_one_control_has_one_job() {
+        use crate::{AutomationTarget, LinkTarget, MidiControl, MidiSource, SynthSettings};
+        let mut project = Project::starter("P", "T");
+        let (piano, _) = project.first_pattern().unwrap();
+        let synth = project.add_track("Lead", Instrument::Synth(SynthSettings::default()));
+        let reverb = project
+            .add_effect(
+                ChainPlace::Track(piano),
+                EffectKind::Reverb(crate::ReverbSettings::default()),
+            )
+            .unwrap();
+        let knob = |n| MidiControl {
+            channel: 0,
+            source: MidiSource::Controller(n),
+        };
+        let volume = LinkTarget::Track {
+            track: piano,
+            setting: AutomationTarget::Volume,
+        };
+        let cutoff = LinkTarget::Track {
+            track: synth,
+            setting: AutomationTarget::Instrument { param: 0 },
+        };
+        let amount = LinkTarget::Track {
+            track: piano,
+            setting: AutomationTarget::Effect {
+                effect: reverb,
+                param: 0,
+            },
+        };
+        project.link_midi(knob(7), volume);
+        project.link_midi(knob(74), cutoff);
+        assert_eq!(project.midi_control_of(volume), Some(knob(7)));
+        // The same knob given another job leaves the first.
+        project.link_midi(knob(7), amount);
+        assert_eq!(project.midi_control_of(volume), None);
+        assert_eq!(project.midi_control_of(amount), Some(knob(7)));
+        assert_eq!(project.midi_links.len(), 2);
+
+        // Values from 0 to 1 move each setting over its range.
+        assert!(project.set_linked(volume, 1.0));
+        let gain = project.track(piano).unwrap().strip.gain;
+        assert!(
+            (gain - 10.0_f32.powf(6.0 / 20.0)).abs() < 1e-4,
+            "+6 dB at the top"
+        );
+        assert!(project.set_linked(volume, 0.0));
+        assert_eq!(
+            project.track(piano).unwrap().strip.gain,
+            0.0,
+            "silence at the bottom"
+        );
+        let pan = LinkTarget::Track {
+            track: piano,
+            setting: AutomationTarget::Pan,
+        };
+        project.set_linked(pan, 0.0);
+        assert_eq!(project.track(piano).unwrap().strip.pan, -1.0);
+        project.set_linked(cutoff, 0.5);
+        let settings = project.track(synth).unwrap().instrument.synth().unwrap();
+        assert!((settings.param(0).unwrap() - 0.5).abs() < 1e-4);
+        assert!((project.linked_value(cutoff).unwrap() - 0.5).abs() < 1e-4);
+        project.set_linked(amount, 1.0);
+        assert!((project.linked_value(amount).unwrap() - 1.0).abs() < 1e-4);
+        project.set_linked(LinkTarget::MasterVolume, 0.5);
+        assert!((project.linked_value(LinkTarget::MasterVolume).unwrap() - 0.5).abs() < 1e-4);
+
+        // A link whose track has gone moves nothing.
+        project.remove_track(synth);
+        assert!(!project.has_link_target(cutoff));
+        assert!(!project.set_linked(cutoff, 1.0));
+        project.forget_midi(amount);
+        assert_eq!(project.midi_control_of(amount), None);
     }
 }

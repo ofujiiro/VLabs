@@ -224,6 +224,73 @@ pub fn thinning_tolerance(control: ControlKind) -> f32 {
     (high - low) * 0.006
 }
 
+/// A knob, fader, button or pad of a MIDI controller, as it identifies
+/// itself (decision 0033): a channel and what it sends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct MidiControl {
+    /// The MIDI channel, 0 to 15.
+    pub channel: u8,
+    /// What it sends.
+    pub source: MidiSource,
+}
+
+/// What a control of a MIDI controller sends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MidiSource {
+    /// A numbered controller: knobs, faders and most buttons.
+    Controller(u8),
+    /// A key: pads, and some buttons.
+    Note(u8),
+}
+
+impl MidiControl {
+    /// The same control with its numbers in MIDI's ranges.
+    #[must_use]
+    pub fn sane(self) -> Self {
+        Self {
+            channel: self.channel & 0x0F,
+            source: match self.source {
+                MidiSource::Controller(n) => MidiSource::Controller(n & 0x7F),
+                MidiSource::Note(n) => MidiSource::Note(n & 0x7F),
+            },
+        }
+    }
+}
+
+/// A setting of the song that a knob or fader can move (decision 0033).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "on")]
+pub enum LinkTarget {
+    /// A track's volume, pan, a built-in effect's setting or the synth's
+    /// setting, as automation names them.
+    Track {
+        /// The track.
+        track: crate::TrackId,
+        /// The setting.
+        setting: crate::AutomationTarget,
+    },
+    /// The master's volume.
+    MasterVolume,
+    /// A setting of a built-in effect on the master.
+    MasterEffect {
+        /// The effect.
+        effect: crate::EffectId,
+        /// The setting's number (see [`crate::EffectKind::params`]).
+        param: u32,
+    },
+}
+
+/// A knob or fader of a MIDI controller given a setting of the song to
+/// move (decision 0033).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MidiLink {
+    /// The control.
+    pub control: MidiControl,
+    /// What it moves.
+    pub target: LinkTarget,
+}
+
 #[cfg(test)]
 #[allow(clippy::cast_precision_loss, reason = "test values")]
 mod tests {
@@ -338,6 +405,28 @@ mod tests {
             "the pedal lengthens notes"
         );
         assert!(!ControlKind::Controller(0).is_recordable());
+    }
+
+    #[test]
+    fn links_are_kept_readably_in_the_song_file() {
+        let link = MidiLink {
+            control: MidiControl {
+                channel: 0,
+                source: MidiSource::Controller(74),
+            },
+            target: LinkTarget::Track {
+                track: crate::TrackId(3),
+                setting: crate::AutomationTarget::Volume,
+            },
+        };
+        let json = serde_json::to_string(&link).unwrap();
+        assert_eq!(
+            json,
+            r#"{"control":{"channel":0,"source":{"controller":74}},"target":{"on":"track","track":3,"setting":{"type":"volume"}}}"#
+        );
+        assert_eq!(serde_json::from_str::<MidiLink>(&json).unwrap(), link);
+        let master: LinkTarget = serde_json::from_str(r#"{"on":"master_volume"}"#).unwrap();
+        assert_eq!(master, LinkTarget::MasterVolume);
     }
 
     #[test]

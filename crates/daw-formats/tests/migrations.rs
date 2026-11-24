@@ -175,6 +175,7 @@ fn reference_project() -> Project {
     add_newer_instruments(&mut project);
     add_voice(&mut project);
     add_shapes(&mut project, voice, hum);
+    add_midi(&mut project);
     let triplet = Ticks::note_value(1, 12);
     for (i, key) in [60_u8, 64, 67, 72].iter().enumerate() {
         project.add_note(
@@ -268,6 +269,7 @@ fn every_released_format_version_still_opens() {
         check_bent_glide(&project, version, &path);
         check_voice(&project, version, &path);
         check_shapes(&project, version, &path);
+        check_midi(&project, version, &path);
         if version >= 5 {
             check_theory_and_rhythm(&project, &path);
         } else {
@@ -351,6 +353,98 @@ fn check_shapes(project: &Project, version: u32, path: &std::path::Path) {
     assert!(piano.shape.is_cut(), "{name}");
     assert_eq!(piano.shape.attack, Some(0.05), "{name}");
     assert_eq!(backwards, [(true, 7.0)], "{name}");
+}
+
+/// The version 12 sample's MIDI controllers (decision 0033): the piano's
+/// pattern bends and moves controller 74; a fader moves the piano's volume
+/// and a knob the lead synth's cutoff.
+fn add_midi(project: &mut Project) {
+    use daw_model::{ControlKind, ControlPoint, LinkTarget, MidiControl, MidiSource};
+    let piano = project.tracks[0].id;
+    let pattern = project.tracks[0].clips[0].pattern().unwrap();
+    let lead = project
+        .tracks
+        .iter()
+        .find(|t| t.instrument.synth().is_some())
+        .unwrap()
+        .id;
+    if let Some(pattern) = project.pattern_mut(pattern) {
+        pattern.set_control(
+            ControlKind::PitchBend,
+            vec![
+                ControlPoint {
+                    at: Ticks::ZERO,
+                    value: 0.0,
+                },
+                ControlPoint {
+                    at: Ticks::QUARTER,
+                    value: -0.75,
+                },
+            ],
+        );
+        pattern.set_control(
+            ControlKind::Controller(74),
+            vec![ControlPoint {
+                at: Ticks::QUARTER * 2,
+                value: 0.5,
+            }],
+        );
+    }
+    project.link_midi(
+        MidiControl {
+            channel: 0,
+            source: MidiSource::Controller(7),
+        },
+        LinkTarget::Track {
+            track: piano,
+            setting: AutomationTarget::Volume,
+        },
+    );
+    project.link_midi(
+        MidiControl {
+            channel: 1,
+            source: MidiSource::Controller(74),
+        },
+        LinkTarget::Track {
+            track: lead,
+            setting: AutomationTarget::Instrument { param: 0 },
+        },
+    );
+}
+
+/// The version 12 sample's curves and assignments came back (older
+/// samples have none).
+fn check_midi(project: &Project, version: u32, path: &std::path::Path) {
+    use daw_model::{ControlKind, MidiSource};
+    let name = path.display();
+    let curves: usize = project.patterns.iter().map(|p| p.controls.len()).sum();
+    if version < 12 {
+        assert_eq!(curves, 0, "{name}: no curves before version 12");
+        assert!(project.midi_links.is_empty(), "{name}");
+        return;
+    }
+    let pattern = project.tracks[0].clips[0].pattern().unwrap();
+    let pattern = project.pattern(pattern).unwrap();
+    let bend = pattern.control(ControlKind::PitchBend).unwrap();
+    assert_eq!(bend.points.len(), 2, "{name}");
+    assert_eq!(bend.points[1].value, -0.75, "{name}");
+    assert!(
+        pattern.control(ControlKind::Controller(74)).is_some(),
+        "{name}"
+    );
+    let sources: Vec<(u8, MidiSource)> = project
+        .midi_links
+        .iter()
+        .map(|l| (l.control.channel, l.control.source))
+        .collect();
+    assert_eq!(
+        sources,
+        [
+            (0, MidiSource::Controller(7)),
+            (1, MidiSource::Controller(74))
+        ],
+        "{name}"
+    );
 }
 
 /// The version 9 sample's voice: a track singing "ka sa ne".

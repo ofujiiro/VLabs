@@ -2425,3 +2425,91 @@ pub fn show_curve(control: daw_model::ControlKind) -> String {
         ),
     }
 }
+
+/// A control of a MIDI controller, as the window names it: "controller 74,
+/// channel 1", "key C1, channel 10".
+pub fn midi_control(control: daw_model::MidiControl) -> String {
+    let channel = control.channel + 1;
+    match control.source {
+        daw_model::MidiSource::Controller(number) => {
+            format!("controller {number}, channel {channel}")
+        }
+        daw_model::MidiSource::Note(key) => format!("key {}, channel {channel}", note_name(key)),
+    }
+}
+
+/// A control of a MIDI controller, at the start of a line.
+pub fn midi_control_title(control: daw_model::MidiControl) -> String {
+    let name = midi_control(control);
+    let mut chars = name.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
+pub const ASSIGN_MIDI_CONTROL: &str = "Assign a MIDI control…";
+pub const ASSIGN_MIDI_CONTROL_HINT: &str =
+    "Then move a knob or fader on your MIDI controller: it will move this setting";
+pub const ASSIGN_OTHER_MIDI_CONTROL: &str = "Assign another MIDI control…";
+pub const FORGET_MIDI_CONTROL: &str = "Forget the MIDI control";
+pub const WAITING_FOR_KNOB: &str =
+    "Move a knob or fader on your MIDI controller to give it this setting (Escape stops waiting)";
+pub const STOPPED_WAITING_FOR_KNOB: &str = "No longer waiting for a MIDI control";
+pub const EDIT_ASSIGN_MIDI: &str = "assign a MIDI control";
+pub const EDIT_FORGET_MIDI: &str = "forget a MIDI control";
+pub const EDIT_MIDI_VOLUME: &str = "change volume from the MIDI controller";
+pub const EDIT_MIDI_SETTING: &str = "change a setting from the MIDI controller";
+
+/// Says which control now moves a setting.
+pub fn midi_learned(control: daw_model::MidiControl, setting: &str) -> String {
+    format!("{} now moves {setting}", midi_control_title(control))
+}
+
+/// A slider's menu line saying which control moves it.
+pub fn moved_by(control: daw_model::MidiControl) -> String {
+    format!("Moved by {}", midi_control(control))
+}
+
+pub const MIDI_CONTROLLERS_MENU: &str = "MIDI controllers…";
+pub const MIDI_CONTROLLERS_HINT: &str =
+    "The MIDI controllers connected, and what their knobs, faders and buttons do";
+pub const MIDI_CONTROLLERS: &str = "MIDI controllers";
+pub const MIDI_WINDOW_INTRO: &str = "Keys, pads, the pitch and modulation wheels, pressure and \
+pedals play the instrument in focus, and recording keeps what they did. Transport buttons play, \
+stop and record. To give a knob or fader a job, right-click a fader, a pan, or an effect's or the \
+synth's setting and choose Assign a MIDI control. Plugins take the other knobs: use their own \
+MIDI learn.";
+pub const MIDI_DEVICES: &str = "Connected";
+pub const NO_MIDI_DEVICES: &str =
+    "No MIDI controller is connected. Plug one in: it is found on its own, even now.";
+pub const MIDI_DEVICE_HINT: &str =
+    "Switched off, the controller is left alone (another program can use it)";
+pub const MIDI_KNOBS: &str = "Knobs and faders in this song";
+pub const NO_MIDI_KNOBS: &str = "None yet: right-click a slider and choose Assign a MIDI control.";
+pub const MIDI_BUTTONS: &str = "Buttons and pads";
+pub const NO_MIDI_BUTTONS: &str = "None yet: give them commands in Keyboard shortcuts.";
+pub const GIVE_BUTTONS_COMMANDS: &str = "Give buttons commands…";
+pub const FORGET: &str = "Forget";
+pub const MIDI_BUTTONS_HINT: &str =
+    "A MIDI controller's buttons and pads can run commands too: click Learn, then press one.";
+pub const PRESS_A_BUTTON: &str = "Press a button or pad…";
+pub const NO_MIDI_BUTTON: &str = "No MIDI button";
+pub const LEARN_BUTTON: &str = "Learn";
+pub const LEARN_BUTTON_HINT: &str =
+    "Then press a button or pad on your MIDI controller: it will run this command";
+pub const CLEAR_BUTTON: &str = "Clear";
+
+/// The accessible name of a command's Learn button.
+pub fn learn_button_for(command: &str) -> String {
+    format!("Learn a MIDI button for {command}")
+}
+
+/// The accessible name of a knob's Forget button in the MIDI window.
+pub fn forget_knob(setting: &str) -> String {
+    format!("Forget the MIDI control of {setting}")
+}
+
+/// Says which button now runs a command.
+pub fn button_learned(control: daw_model::MidiControl, command: &str) -> String {
+    format!("{} now runs {command}", midi_control_title(control))
+}

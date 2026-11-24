@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use daw_engine::PluginKind;
-use daw_model::{AutomationTarget, ChainPlace, Effect, EffectId, EffectKind, TrackId};
+use daw_model::{AutomationTarget, ChainPlace, Effect, EffectId, EffectKind, LinkTarget, TrackId};
 use egui::{
     Align, Button, CornerRadius, Layout, Rect, RichText, Sense, Stroke, Ui, UiBuilder, pos2, vec2,
 };
@@ -205,7 +205,7 @@ fn strip_ui(ui: &mut Ui, session: &mut Session, strip: &StripInfo, intents: &mut
                 if let Some(track) = track {
                     let mut pan = strip.pan;
                     let mut gesture = Gesture::default();
-                    ui.horizontal(|ui| {
+                    let pan_slider = ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         let response = ui
                             .scope(|ui| {
@@ -229,10 +229,20 @@ fn strip_ui(ui: &mut Ui, session: &mut Session, strip: &StripInfo, intents: &mut
                             pan = 0.0;
                         }
                         ui.label(RichText::new(text::pan(pan)).small().color(p.text_weak));
+                        response
                     });
-                    apply(session, gesture, text::EDIT_PAN, |s| {
+                    apply(session, &gesture, text::EDIT_PAN, |s| {
                         s.set_track_pan(track, pan);
                     });
+                    // A MIDI controller's knob can move it (decision 0033).
+                    crate::midi_ui::assign_menu(
+                        &pan_slider.inner,
+                        session,
+                        LinkTarget::Track {
+                            track,
+                            setting: AutomationTarget::Pan,
+                        },
+                    );
                 } else {
                     ui.add_space(20.0);
                 }
@@ -269,14 +279,21 @@ fn strip_ui(ui: &mut Ui, session: &mut Session, strip: &StripInfo, intents: &mut
                     let gain = db_to_gain(db).min(MAX_GAIN);
                     match track {
                         Some(track) => {
-                            apply(session, gesture, text::EDIT_VOLUME, |s| {
+                            apply(session, &gesture, text::EDIT_VOLUME, |s| {
                                 s.set_track_gain(track, gain);
                             });
                         }
-                        None => apply(session, gesture, text::EDIT_MASTER_VOLUME, |s| {
+                        None => apply(session, &gesture, text::EDIT_MASTER_VOLUME, |s| {
                             s.set_master_gain(gain);
                         }),
                     }
+                    // A MIDI controller's fader can move it (decision 0033).
+                    let target =
+                        track.map_or(LinkTarget::MasterVolume, |track| LinkTarget::Track {
+                            track,
+                            setting: AutomationTarget::Volume,
+                        });
+                    crate::midi_ui::assign_menu(&response, session, target);
                     meter(ui, strip.level);
                     ui.label(
                         RichText::new(text::db(gain_to_db(strip.gain)))
@@ -489,7 +506,7 @@ fn effect_menu(
 }
 
 /// Applies a slider's change inside a gesture when it is being dragged.
-fn apply(session: &mut Session, gesture: Gesture, label: &str, change: impl FnOnce(&mut Session)) {
+fn apply(session: &mut Session, gesture: &Gesture, label: &str, change: impl FnOnce(&mut Session)) {
     if gesture.started {
         session.begin_gesture(label);
     }

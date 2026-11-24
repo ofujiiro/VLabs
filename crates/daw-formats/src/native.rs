@@ -21,7 +21,7 @@ use crate::atomic::write_atomically_with;
 /// The version of the file format this program writes. Every version ever
 /// released keeps sample files in `tests/data`, and a test proves they still
 /// open.
-pub const FORMAT_VERSION: u32 = 11;
+pub const FORMAT_VERSION: u32 = 12;
 
 /// The name of the song description inside the container.
 const PROJECT_ENTRY: &str = "project.json";
@@ -346,8 +346,36 @@ fn migrate(value: Value, from: u32) -> Result<Value, FileError> {
     // another pitch (decision 0031); older tracks keep their instrument's
     // own shape and older clips play forwards at their own pitch, which is
     // what the absent fields say.
-    // Each future format change adds a step here: `12 => migrate_11_to_12(value)`.
+    // Version 12 added what a MIDI controller does (decision 0033): each
+    // pattern's controller curves and the song's knobs given settings to
+    // move; older files have neither, which is what the absent fields say.
+    // Each future format change adds a step here: `13 => migrate_12_to_13(value)`.
     Ok(value)
+}
+
+/// What a MIDI controller does (decision 0033), made consistent: one curve
+/// per controller, in order and range; links only to settings the song
+/// has, one job per control.
+fn repair_midi(project: &mut Project) {
+    for pattern in &mut project.patterns {
+        if pattern.controls.is_empty() {
+            continue;
+        }
+        let pattern = std::sync::Arc::make_mut(pattern);
+        let lanes = std::mem::take(&mut pattern.controls);
+        let mut seen = std::collections::HashSet::new();
+        for lane in lanes {
+            if seen.insert(lane.control) {
+                pattern.set_control(lane.control, lane.points);
+            }
+        }
+    }
+    let links = std::mem::take(&mut project.midi_links);
+    for link in links {
+        if project.has_link_target(link.target) {
+            project.link_midi(link.control, link.target);
+        }
+    }
 }
 
 /// Makes a loaded project internally consistent, whatever wrote it: notes
@@ -396,6 +424,7 @@ fn repair(project: &mut Project) {
             }
         }
     }
+    repair_midi(project);
     // The synth's numbers stay in their ranges, whatever wrote them.
     for track in &mut project.tracks {
         if let daw_model::Instrument::Synth(settings) = &track.instrument {

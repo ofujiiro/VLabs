@@ -139,6 +139,10 @@ type Handler = Arc<dyn Fn(MidiMessage) + Send + Sync>;
 
 struct Shared {
     connected: Mutex<Vec<String>>,
+    /// Every input found at the last look, connected or switched off.
+    seen: Mutex<Vec<String>>,
+    /// Inputs switched off by name: not connected (decision 0033).
+    off: Mutex<Vec<String>>,
     problem: Mutex<Option<String>>,
     stop: AtomicBool,
 }
@@ -150,14 +154,18 @@ pub struct MidiInputs {
 }
 
 impl MidiInputs {
-    /// Starts watching for MIDI inputs; every message from any of them is
-    /// passed to `on_message` (on a MIDI thread, not the audio thread).
+    /// Starts watching for MIDI inputs, except those named in `off`;
+    /// every message from any of them is passed to `on_message` (on a MIDI
+    /// thread, not the audio thread).
     pub fn start(
         client_name: &str,
+        off: Vec<String>,
         on_message: impl Fn(MidiMessage) + Send + Sync + 'static,
     ) -> Self {
         let shared = Arc::new(Shared {
             connected: Mutex::new(Vec::new()),
+            seen: Mutex::new(Vec::new()),
+            off: Mutex::new(off),
             problem: Mutex::new(None),
             stop: AtomicBool::new(false),
         });
@@ -178,6 +186,29 @@ impl MidiInputs {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// The names of every input found, connected or switched off, sorted.
+    pub fn seen(&self) -> Vec<String> {
+        self.shared
+            .seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Switches inputs off by name (decision 0033): they are disconnected
+    /// at the next look (within two seconds) and left for other programs;
+    /// the others are connected again.
+    pub fn set_off(&self, names: &[String]) {
+        let mut off = self
+            .shared
+            .off
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if off.as_slice() != names {
+            names.clone_into(&mut off);
+        }
     }
 
     /// Why MIDI is unavailable, if it is.
@@ -249,7 +280,20 @@ fn scan(
             (!skip).then(|| (port.id(), name))
         })
         .collect();
-    // Unplugged keyboards.
+    let mut seen: Vec<String> = ports.iter().map(|(_, name)| name.clone()).collect();
+    seen.sort();
+    seen.dedup();
+    *shared.seen.lock().unwrap_or_else(PoisonError::into_inner) = seen;
+    let off = shared
+        .off
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let ports: Vec<(String, String)> = ports
+        .into_iter()
+        .filter(|(_, name)| !off.contains(name))
+        .collect();
+    // Unplugged keyboards, and keyboards switched off.
     connections.retain(|id, _| ports.iter().any(|(port_id, _)| port_id == id));
     // Newly plugged keyboards.
     for (id, name) in ports {

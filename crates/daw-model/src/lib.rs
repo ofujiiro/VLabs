@@ -20,7 +20,9 @@ pub use automation::{
     AutomationLane, AutomationPoint, AutomationTarget, gain_volume, pan_value, value_pan,
     volume_gain,
 };
-pub use controls::{ControlKind, ControlLane, ControlPoint};
+pub use controls::{
+    ControlKind, ControlLane, ControlPoint, LinkTarget, MidiControl, MidiLink, MidiSource,
+};
 pub use document::{Document, HISTORY_LIMIT};
 pub use mixer::{
     ChainPlace, CompressorSettings, DelaySettings, DelayTime, Effect, EffectKind, EffectParam,

@@ -9,10 +9,12 @@
 //! the window keeps up to date ([`RouteTable`]); [`MidiRouter`] carries it
 //! out. Both are plain data and tested without a device.
 
+use std::collections::BTreeSet;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use daw_engine::{Control, MidiSender};
+use daw_model::{MidiControl, MidiSource};
 
 /// The controller number of the sustain pedal: the engine holds notes for
 /// it.
@@ -116,10 +118,80 @@ pub enum Live {
 /// What the window tells the MIDI thread, so it can decide where messages
 /// go without asking the window each time.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RouteTable {}
+pub struct RouteTable {
+    /// What the window waits for, if it waits: a knob or fader to give a
+    /// setting, or a button or pad to give a command.
+    pub learning: Option<Learning>,
+    /// The controls with a job in the program (a setting of the song, a
+    /// command): they go to the window, not the instrument.
+    pub taken: BTreeSet<MidiControl>,
+}
+
+/// What the window waits for a controller to send.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Learning {
+    /// A knob or fader (a numbered controller), to move a setting.
+    Knob,
+    /// A button or pad (a controller or a key), to run a command.
+    Button,
+}
+
+impl ControllerInput {
+    /// Whether it presses a button: a key going down, or a controller
+    /// going to half way or more (buttons send 127 down, 0 up).
+    pub fn is_press(&self) -> bool {
+        match *self {
+            Self::NoteOn { velocity, .. } => velocity > 0,
+            Self::Controller { value, .. } => value >= 64,
+            Self::NoteOff { .. }
+            | Self::PitchBend { .. }
+            | Self::Pressure { .. }
+            | Self::Transport(_) => false,
+        }
+    }
+
+    /// The control that sent it, for a key or a numbered controller.
+    pub fn control(&self) -> Option<MidiControl> {
+        let (channel, source) = match *self {
+            Self::NoteOn { channel, key, .. } | Self::NoteOff { channel, key } => {
+                (channel, MidiSource::Note(key & 0x7F))
+            }
+            Self::Controller {
+                channel, number, ..
+            } => (channel, MidiSource::Controller(number & 0x7F)),
+            Self::PitchBend { .. } | Self::Pressure { .. } | Self::Transport(_) => return None,
+        };
+        Some(MidiControl {
+            channel: channel & 0x0F,
+            source,
+        })
+    }
+}
+
+/// Whether a numbered controller can be given a job: not bank select or
+/// the channel mode messages; nor, as a knob, the sustain pedal.
+pub fn can_learn(number: u8, learning: Learning) -> bool {
+    match number {
+        0 | 32 | 120..=127 => false,
+        SUSTAIN => learning == Learning::Button,
+        _ => true,
+    }
+}
 
 /// Where a message goes, given the window's table.
-pub fn route(_table: &RouteTable, input: &ControllerInput) -> Route {
+pub fn route(table: &RouteTable, input: &ControllerInput) -> Route {
+    let control = input.control();
+    let learnt = match (*input, table.learning) {
+        (
+            ControllerInput::NoteOn { .. } | ControllerInput::NoteOff { .. },
+            Some(Learning::Button),
+        ) => true,
+        (ControllerInput::Controller { number, .. }, Some(learning)) => can_learn(number, learning),
+        _ => false,
+    };
+    if learnt || control.is_some_and(|c| table.taken.contains(&c)) {
+        return Route::Window;
+    }
     match *input {
         ControllerInput::NoteOn { key, velocity, .. } if velocity > 0 => {
             Route::Play(Live::NoteOn {
@@ -301,6 +373,116 @@ mod tests {
                 "controller {number}"
             );
         }
+    }
+
+    #[test]
+    fn controls_with_a_job_go_to_the_window_and_the_rest_still_plays() {
+        let fader = MidiControl {
+            channel: 0,
+            source: MidiSource::Controller(7),
+        };
+        let pad = MidiControl {
+            channel: 9,
+            source: MidiSource::Note(36),
+        };
+        let table = RouteTable {
+            learning: None,
+            taken: [fader, pad].into_iter().collect(),
+        };
+        let fader_moved = ControllerInput::Controller {
+            channel: 0,
+            number: 7,
+            value: 90,
+        };
+        assert_eq!(route(&table, &fader_moved), Route::Window);
+        let same_on_another_channel = ControllerInput::Controller {
+            channel: 1,
+            number: 7,
+            value: 90,
+        };
+        assert!(matches!(
+            route(&table, &same_on_another_channel),
+            Route::Play(_)
+        ));
+        let pad_hit = ControllerInput::NoteOn {
+            channel: 9,
+            key: 36,
+            velocity: 100,
+        };
+        assert_eq!(route(&table, &pad_hit), Route::Window);
+        assert_eq!(
+            route(
+                &table,
+                &ControllerInput::NoteOff {
+                    channel: 9,
+                    key: 36
+                }
+            ),
+            Route::Window,
+            "its release too, so no note is left hanging"
+        );
+        assert!(matches!(
+            route(
+                &table,
+                &ControllerInput::NoteOn {
+                    channel: 9,
+                    key: 38,
+                    velocity: 100
+                }
+            ),
+            Route::Play(_)
+        ));
+    }
+
+    #[test]
+    fn while_waiting_for_a_knob_knobs_go_to_the_window_and_keys_still_play() {
+        let table = RouteTable {
+            learning: Some(Learning::Knob),
+            taken: BTreeSet::new(),
+        };
+        let knob = ControllerInput::Controller {
+            channel: 0,
+            number: 74,
+            value: 10,
+        };
+        assert_eq!(route(&table, &knob), Route::Window);
+        let pedal = ControllerInput::Controller {
+            channel: 0,
+            number: SUSTAIN,
+            value: 127,
+        };
+        assert_eq!(
+            route(&table, &pedal),
+            Route::Play(Live::Sustain(true)),
+            "the pedal is no knob"
+        );
+        let key = ControllerInput::NoteOn {
+            channel: 0,
+            key: 60,
+            velocity: 90,
+        };
+        assert!(matches!(route(&table, &key), Route::Play(_)));
+        // Waiting for a button, keys and pads are taken too.
+        let table = RouteTable {
+            learning: Some(Learning::Button),
+            taken: BTreeSet::new(),
+        };
+        assert_eq!(route(&table, &key), Route::Window);
+        assert_eq!(
+            route(&table, &pedal),
+            Route::Window,
+            "a foot switch can be a button"
+        );
+        assert!(matches!(
+            route(
+                &table,
+                &ControllerInput::PitchBend {
+                    channel: 0,
+                    value: 100
+                }
+            ),
+            Route::Play(_)
+        ));
     }
 
     #[test]

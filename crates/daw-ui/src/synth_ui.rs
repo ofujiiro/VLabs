@@ -118,6 +118,15 @@ fn editor(ui: &mut Ui, session: &mut Session, track: TrackId, settings: SynthSet
     if gesture.stopped {
         session.end_gesture();
     }
+    // Each setting's slider can be given a MIDI controller's knob
+    // (decision 0033).
+    for (response, param) in &gesture.sliders {
+        let target = daw_model::LinkTarget::Track {
+            track,
+            setting: daw_model::AutomationTarget::Instrument { param: *param },
+        };
+        crate::midi_ui::assign_menu(response, session, target);
+    }
 }
 
 fn preset_row(ui: &mut Ui, session: &mut Session, track: TrackId, settings: &SynthSettings) {
@@ -255,6 +264,7 @@ fn oscillators(ui: &mut Ui, gesture: &mut Gesture, s: &mut SynthSettings, track:
             0.0..=1.0,
             Scale::linear(text::percent),
             "",
+            Some(8),
         );
         slider_row(
             ui,
@@ -264,11 +274,15 @@ fn oscillators(ui: &mut Ui, gesture: &mut Gesture, s: &mut SynthSettings, track:
             0.05..=0.95,
             Scale::linear(text::percent),
             text::PULSE_WIDTH_HINT,
+            Some(9),
         );
     });
 }
 
 fn oscillator(ui: &mut Ui, gesture: &mut Gesture, osc: &mut SynthOscillator, id: (u64, usize)) {
+    // Each oscillator's level and fine tune are automatable settings 4 to
+    // 7, two each.
+    let index = u32::try_from(id.1).unwrap_or(0);
     choice_row(
         ui,
         ("synth-wave", id),
@@ -287,6 +301,7 @@ fn oscillator(ui: &mut Ui, gesture: &mut Gesture, osc: &mut SynthOscillator, id:
         -100.0..=100.0,
         Scale::linear(text::cents),
         text::FINE_TUNE_HINT,
+        Some(5 + 2 * index),
     );
     slider_row(
         ui,
@@ -296,6 +311,7 @@ fn oscillator(ui: &mut Ui, gesture: &mut Gesture, osc: &mut SynthOscillator, id:
         0.0..=1.0,
         Scale::linear(text::percent),
         "",
+        Some(4 + 2 * index),
     );
 }
 
@@ -319,6 +335,7 @@ fn filter(ui: &mut Ui, gesture: &mut Gesture, s: &mut SynthSettings, track: Trac
             20.0..=20_000.0,
             Scale::log(text::hz),
             text::CUTOFF_HINT,
+            Some(0),
         );
         slider_row(
             ui,
@@ -328,6 +345,7 @@ fn filter(ui: &mut Ui, gesture: &mut Gesture, s: &mut SynthSettings, track: Trac
             0.0..=1.0,
             Scale::linear(text::percent),
             text::RESONANCE_HINT,
+            Some(1),
         );
         slider_row(
             ui,
@@ -337,6 +355,7 @@ fn filter(ui: &mut Ui, gesture: &mut Gesture, s: &mut SynthSettings, track: Trac
             -6.0..=6.0,
             Scale::linear(text::octaves),
             text::ENVELOPE_AMOUNT_HINT,
+            Some(2),
         );
         slider_row(
             ui,
@@ -346,6 +365,7 @@ fn filter(ui: &mut Ui, gesture: &mut Gesture, s: &mut SynthSettings, track: Trac
             0.0..=1.0,
             Scale::linear(text::percent),
             text::KEY_TRACKING_HINT,
+            Some(3),
         );
     });
 }
@@ -361,17 +381,20 @@ fn envelopes(ui: &mut Ui, gesture: &mut Gesture, s: &mut SynthSettings, track: T
         let p = Palette::of(ui.ctx());
         ui.label(RichText::new(heading).strong().color(p.text_weak));
         envelope_shape(ui, envelope);
+        // The volume envelope's settings are numbers 10 to 13, the
+        // filter's 14 to 17.
+        let base = if index == 0 { 10 } else { 14 };
         grid(ui, ("synth-envelope", track.0, index), |ui| {
-            envelope_rows(ui, gesture, envelope);
+            envelope_rows(ui, gesture, envelope, base);
         });
         ui.add_space(6.0);
     }
 }
 
-fn envelope_rows(ui: &mut Ui, gesture: &mut Gesture, envelope: &mut SynthEnvelope) {
-    for (label, value) in [
-        (text::ATTACK, &mut envelope.attack),
-        (text::DECAY, &mut envelope.decay),
+fn envelope_rows(ui: &mut Ui, gesture: &mut Gesture, envelope: &mut SynthEnvelope, base: u32) {
+    for (param, label, value) in [
+        (base, text::ATTACK, &mut envelope.attack),
+        (base + 1, text::DECAY, &mut envelope.decay),
     ] {
         slider_row(
             ui,
@@ -381,6 +404,7 @@ fn envelope_rows(ui: &mut Ui, gesture: &mut Gesture, envelope: &mut SynthEnvelop
             0.001..=10.0,
             Scale::log(text::time),
             "",
+            Some(param),
         );
     }
     slider_row(
@@ -391,6 +415,7 @@ fn envelope_rows(ui: &mut Ui, gesture: &mut Gesture, envelope: &mut SynthEnvelop
         0.0..=1.0,
         Scale::linear(text::percent),
         "",
+        Some(base + 2),
     );
     slider_row(
         ui,
@@ -400,6 +425,7 @@ fn envelope_rows(ui: &mut Ui, gesture: &mut Gesture, envelope: &mut SynthEnvelop
         0.001..=10.0,
         Scale::log(text::time),
         "",
+        Some(base + 3),
     );
 }
 
@@ -421,6 +447,7 @@ fn movement(ui: &mut Ui, gesture: &mut Gesture, s: &mut SynthSettings, track: Tr
             0.05..=20.0,
             Scale::log(text::rate),
             "",
+            Some(18),
         );
         slider_row(
             ui,
@@ -430,6 +457,7 @@ fn movement(ui: &mut Ui, gesture: &mut Gesture, s: &mut SynthSettings, track: Tr
             0.0..=100.0,
             Scale::linear(text::cents),
             text::VIBRATO_HINT,
+            Some(19),
         );
         slider_row(
             ui,
@@ -439,6 +467,7 @@ fn movement(ui: &mut Ui, gesture: &mut Gesture, s: &mut SynthSettings, track: Tr
             0.0..=4.0,
             Scale::linear(text::octaves),
             text::WOBBLE_HINT,
+            Some(20),
         );
         slider_row(
             ui,
@@ -448,6 +477,7 @@ fn movement(ui: &mut Ui, gesture: &mut Gesture, s: &mut SynthSettings, track: Tr
             0.0..=1.0,
             Scale::linear(text::percent),
             text::TREMOLO_HINT,
+            Some(21),
         );
     });
 }
@@ -472,6 +502,7 @@ fn playing(ui: &mut Ui, gesture: &mut Gesture, s: &mut SynthSettings, track: Tra
             .labelled_by(label.id)
             .on_hover_text(text::SYNTH_GLIDE_HINT);
         gesture.add(&response);
+        gesture.link(&response, 22);
         ui.end_row();
         slider_row(
             ui,
@@ -481,6 +512,7 @@ fn playing(ui: &mut Ui, gesture: &mut Gesture, s: &mut SynthSettings, track: Tra
             0.0..=1.0,
             Scale::linear(text::percent),
             text::VELOCITY_AMOUNT_HINT,
+            Some(23),
         );
         slider_row(
             ui,
@@ -490,6 +522,7 @@ fn playing(ui: &mut Ui, gesture: &mut Gesture, s: &mut SynthSettings, track: Tra
             -24.0..=6.0,
             Scale::linear(text::db),
             "",
+            Some(24),
         );
     });
 }

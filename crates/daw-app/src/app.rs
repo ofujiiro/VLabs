@@ -103,7 +103,8 @@ impl App {
         // given a job go to the window, which is woken for them.
         let router = workspace.midi_router();
         let repaint = ctx.clone();
-        let midi = MidiInputs::start(daw_ident::PRODUCT_NAME, move |message| {
+        let off = settings.midi_off.clone();
+        let midi = MidiInputs::start(daw_ident::PRODUCT_NAME, off, move |message| {
             if router.handle(controller_input(message)) {
                 repaint.request_repaint();
             }
@@ -298,6 +299,9 @@ impl App {
         self.workspace.set_notice(notice);
 
         if let Some(midi) = &self.midi {
+            // Controllers switched off in the MIDI window are let go.
+            midi.set_off(&self.workspace.settings().midi_off);
+            self.workspace.set_midi_devices(midi.seen());
             let connected = midi.connected();
             for name in connected.iter().filter(|n| !self.known_midi.contains(n)) {
                 self.workspace
