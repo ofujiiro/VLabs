@@ -108,6 +108,10 @@ impl Session {
     /// time): kept in the pattern's time, where it plays back as heard in a
     /// swung pattern (decision 0018).
     pub(crate) fn add_recorded_move(&mut self, control: ControlKind, value: f32, at: Ticks) {
+        // Drums and voices neither play nor show curves: nothing to keep.
+        if !self.takes_controls() {
+            return;
+        }
         let placement = self.placement();
         let length = self.pattern().length;
         let swing = self.pattern().swing;

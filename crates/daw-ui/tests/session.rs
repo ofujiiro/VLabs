@@ -503,3 +503,24 @@ fn recording_the_pitch_wheel_keeps_its_curve_with_the_take() {
         "and its curve"
     );
 }
+
+#[test]
+fn a_take_on_drums_keeps_no_curves() {
+    let (mut s, mut processor) = new_song();
+    let drums = s.project().tracks[0].id;
+    s.open_track(drums);
+    s.update();
+    s.set_count_in_bars(0);
+    s.toggle_record();
+    run(&mut s, &mut processor, 0.1);
+    let midi = s.engine().midi_sender();
+    midi.note_on(36, 0.8);
+    midi.control(daw_engine::Control::PitchBend(1.0));
+    run(&mut s, &mut processor, 0.2);
+    midi.note_off(36);
+    run(&mut s, &mut processor, 0.05);
+    s.toggle_record();
+    run(&mut s, &mut processor, 0.05);
+    assert_eq!(keys(&s), [36], "the hit is recorded");
+    assert!(s.pattern().controls.is_empty(), "drums are not bent");
+}
