@@ -3836,3 +3836,53 @@ fn several_clips_are_selected_and_moved_removed_and_duplicated_together() {
         .sum();
     assert_eq!(total, 4, "the box placed nothing");
 }
+
+#[test]
+fn a_controllers_keys_light_up_and_its_transport_buttons_play_stop_and_record() {
+    use daw_ui::midi::{ControllerInput, TransportButton};
+    let mut f = fixture();
+    let router = f.workspace_mut().midi_router();
+
+    // A key goes to the instrument and lights up on the on-screen keyboard.
+    assert!(router.handle(ControllerInput::NoteOn {
+        channel: 0,
+        key: 64,
+        velocity: 100
+    }));
+    f.tick();
+    assert!(f.session().is_key_lit(64), "the key lights up");
+    router.handle(ControllerInput::NoteOff {
+        channel: 0,
+        key: 64,
+    });
+    f.tick();
+    assert!(!f.session().is_key_lit(64), "and goes out");
+
+    // The wheels go to the instrument only: nothing for the window.
+    assert!(!router.handle(ControllerInput::PitchBend {
+        channel: 0,
+        value: 4000
+    }));
+
+    let button = |f: &mut Fixture, button| {
+        assert!(router.handle(ControllerInput::Transport(button)));
+        f.tick();
+        f.tick();
+    };
+    button(&mut f, TransportButton::Play);
+    assert!(f.session().is_playing(), "Play plays");
+    button(&mut f, TransportButton::Play);
+    assert!(f.session().is_playing(), "a second Play keeps playing");
+    button(&mut f, TransportButton::Stop);
+    assert!(!f.session().is_playing(), "Stop stops");
+    button(&mut f, TransportButton::Record);
+    assert!(f.session().is_recording(), "Record records");
+    button(&mut f, TransportButton::Record);
+    assert!(!f.session().is_recording(), "and stops recording");
+    button(&mut f, TransportButton::Rewind);
+    assert_eq!(
+        f.session().song_position(),
+        Ticks::ZERO,
+        "back to the start"
+    );
+}

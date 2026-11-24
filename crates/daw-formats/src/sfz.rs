@@ -706,8 +706,9 @@ impl<'a> RegionReader<'a> {
                     _ => Trigger::Attack,
                 };
             }
-            // The program plays on channel 1, with no pitch bend or
-            // aftertouch: regions for other values never play.
+            // The program plays on channel 1, and chooses regions as if the
+            // pitch wheel and aftertouch were at rest: regions for other
+            // values never play.
             "lochan" => self.silent |= f().is_some_and(|v| v > 1.0),
             "hichan" => self.silent |= f().is_some_and(|v| v < 1.0),
             "lobend" | "lochanaft" | "lopolyaft" => self.silent |= f().is_some_and(|v| v > 0.0),
@@ -715,6 +716,9 @@ impl<'a> RegionReader<'a> {
             "transpose" => r.transpose = int(value).unwrap_or(0),
             "tune" | "pitch" => r.tune = f().unwrap_or(0.0),
             "pitch_keytrack" => r.pitch_keytrack = f().unwrap_or(100.0),
+            // The pitch wheel's range (decision 0033).
+            "bend_up" => r.bend_up = f().unwrap_or(200.0).clamp(-9600.0, 9600.0),
+            "bend_down" => r.bend_down = f().unwrap_or(-200.0).clamp(-9600.0, 9600.0),
             "pitch_veltrack" => r.pitch_veltrack = f().unwrap_or(0.0),
             "pitch_random" => r.pitch_random = f().unwrap_or(0.0),
             "volume" | "gain" => r.volume = f().unwrap_or(0.0),
@@ -1135,9 +1139,7 @@ fn family(name: &str) -> Option<Family> {
         || name.contains("polyaft")
         || matches!(
             name,
-            "bend_up"
-                | "bend_down"
-                | "bend_step"
+            "bend_step"
                 | "bend_smooth"
                 | "image"
                 | "md5"
@@ -1779,6 +1781,31 @@ mod tests {
             (curve[32] - 0.125).abs() < 1e-6,
             "filled in a straight line"
         );
+    }
+
+    #[test]
+    fn the_pitch_wheel_bends_by_the_range_the_file_says() {
+        // Decision 0033: two semitones each way unless the file says.
+        let text = "
+<global> bend_up=1200
+<region> sample=a.wav
+<region> sample=b.wav bend_down=-700
+<region> sample=c.wav bend_up=0 bend_down=0
+";
+        let parsed = parse(text, Path::new(".")).unwrap();
+        let ranges: Vec<(f32, f32)> = parsed
+            .regions
+            .iter()
+            .map(|r| (r.region.bend_up, r.region.bend_down))
+            .collect();
+        assert_eq!(ranges, [(1200.0, -200.0), (1200.0, -700.0), (0.0, 0.0)]);
+        assert!(
+            parsed.left_out.is_empty(),
+            "a bend range is played, not left out"
+        );
+        let plain = parse("<region> sample=a.wav", Path::new(".")).unwrap();
+        let region = &plain.regions[0].region;
+        assert_eq!((region.bend_up, region.bend_down), (200.0, -200.0));
     }
 
     #[test]

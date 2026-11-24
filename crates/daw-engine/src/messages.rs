@@ -132,6 +132,8 @@ pub(crate) enum LiveNote {
     Note { key: u8, velocity: f32 },
     /// The sustain pedal went down (`true`) or came up.
     Sustain(bool),
+    /// A wheel, pedal or knob moved (decision 0033).
+    Control(daw_dsp::Control),
 }
 
 /// No track receives live input.

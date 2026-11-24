@@ -8,6 +8,7 @@ pub mod icons;
 pub mod keyboard_panel;
 pub mod keys;
 pub mod library_panel;
+pub mod midi;
 pub mod mixer;
 pub mod piano_roll;
 pub mod pitch_line;

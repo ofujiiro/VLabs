@@ -8,7 +8,7 @@ use std::sync::Arc;
 use super::{EnvelopeSpec, LoopMode, OffMode, Region, Sample, SamplerBank, Trigger};
 use crate::synth::FilterMode;
 use crate::synth::parts::{Random, VoiceFilter};
-use crate::{Instrument, InstrumentSettings, NoteShape, db_to_gain};
+use crate::{Control, Instrument, InstrumentSettings, NoteShape, Performance, db_to_gain};
 
 /// The most sounds the sampler plays at once.
 pub const VOICES: usize = 96;
@@ -212,6 +212,12 @@ struct Voice {
     position: f64,
     /// How far it moves each frame of output.
     step: f64,
+    /// How far it moves with the pitch wheel at rest.
+    base_step: f64,
+    /// How far the pitch wheel bends it up and down, in cents (decision
+    /// 0033).
+    bend_up: f32,
+    bend_down: f32,
     /// One past the last frame it plays.
     end: f64,
     /// The loop's first frame, and one past its last.
@@ -454,6 +460,15 @@ pub struct Sampler {
     random: Random,
     /// How notes start and end, over the regions' own (decision 0031).
     shape: NoteShape,
+    /// Where the pitch wheel and the expression pedal stand (decision
+    /// 0033).
+    performance: Performance,
+    /// The expression pedal's gain, gliding towards the pedal's.
+    expression: f32,
+    /// How fast that gain glides, per frame.
+    expression_glide: f32,
+    /// A drum kit made of sounds answers no controller.
+    drum_kit: bool,
 }
 
 impl Sampler {
@@ -492,7 +507,19 @@ impl Sampler {
             starts: 0,
             random: Random::new(0x5EED_5A3F),
             shape: NoteShape::default(),
+            performance: Performance::REST,
+            expression: 1.0,
+            // About 5 ms to follow the pedal: no clicks, no lag.
+            expression_glide: 1.0 - (-1.0 / (0.005 * rate)).exp(),
+            drum_kit: false,
         }
+    }
+
+    /// Makes it a drum kit (a custom kit's sounds, decision 0025): the
+    /// pitch wheel and the expression pedal leave it alone, as drums are
+    /// left alone (decision 0033).
+    pub fn set_drum_kit(&mut self, drum_kit: bool) {
+        self.drum_kit = drum_kit;
     }
 
     /// How notes start and end from now on (decision 0031): the attack and
@@ -677,16 +704,8 @@ impl Sampler {
         let place = self.placement(region, sample, from_release);
         let filter = self.filter(region, key, vel);
 
-        // Its pitch.
-        #[allow(clippy::cast_precision_loss, reason = "semitones")]
-        let cents = (f32::from(key) - f32::from(region.pitch_keycenter)) * region.pitch_keytrack
-            + region.transpose as f32 * 100.0
-            + region.tune
-            + region.pitch_veltrack * vel
-            + region.pitch_random * self.random.next_bipolar();
-        let step = f64::from(2.0_f32.powf(cents.clamp(-12_000.0, 12_000.0) / 1200.0))
-            * f64::from(sample.sample_rate)
-            / f64::from(self.sample_rate);
+        let (base_step, bend_up, bend_down) = self.pitch(region, sample, key, vel);
+        let step = base_step * bend_ratio(self.performance.bend, bend_up, bend_down);
 
         let mut ampeg = region.ampeg;
         if let Some(attack) = self.shape.attack {
@@ -727,6 +746,9 @@ impl Sampler {
             wait,
             position: place.first as f64,
             step,
+            base_step,
+            bend_up,
+            bend_down,
             end: (place.last + 1) as f64,
             loop_start: place.loop_start as f64,
             loop_end: (place.loop_end + 1) as f64,
@@ -755,6 +777,26 @@ impl Sampler {
         };
         voice.retune(self.sample_rate);
         self.voices[slot] = voice;
+    }
+
+    /// How fast a region's sound plays for a key with the pitch wheel at
+    /// rest, and how far the wheel bends it up and down, in cents (decision
+    /// 0033; a drum kit is not bent).
+    fn pitch(&mut self, region: &Region, sample: &Sample, key: u8, vel: f32) -> (f64, f32, f32) {
+        #[allow(clippy::cast_precision_loss, reason = "semitones")]
+        let cents = (f32::from(key) - f32::from(region.pitch_keycenter)) * region.pitch_keytrack
+            + region.transpose as f32 * 100.0
+            + region.tune
+            + region.pitch_veltrack * vel
+            + region.pitch_random * self.random.next_bipolar();
+        let step = f64::from(2.0_f32.powf(cents.clamp(-12_000.0, 12_000.0) / 1200.0))
+            * f64::from(sample.sample_rate)
+            / f64::from(self.sample_rate);
+        if self.drum_kit {
+            (step, 0.0, 0.0)
+        } else {
+            (step, region.bend_up, region.bend_down)
+        }
     }
 
     /// A region's gain for a note: its volume, level, velocity, key and
@@ -932,11 +974,52 @@ impl Instrument for Sampler {
                 voice.active = false;
             }
         }
+        // The expression pedal (decision 0033), easing towards its value.
+        let target = self.performance.expression_gain();
+        if (target - self.expression).abs() > 1e-6 || self.expression < 1.0 {
+            let glide = self.expression_glide;
+            for (l, r) in left[..len].iter_mut().zip(&mut right[..len]) {
+                self.expression += (target - self.expression) * glide;
+                *l *= self.expression;
+                *r *= self.expression;
+            }
+            if (target - self.expression).abs() < 1e-6 {
+                self.expression = target;
+            }
+        }
         self.clock += len as u64;
     }
 
     fn is_sounding(&self) -> bool {
         self.voices.iter().any(|v| v.active)
+    }
+
+    /// The pitch wheel bends every sounding voice by its region's range;
+    /// the expression pedal shapes the loudness (decision 0033).
+    fn control(&mut self, control: Control) {
+        if self.drum_kit {
+            return;
+        }
+        let bend = self.performance.bend;
+        if !self.performance.take(control) || self.performance.bend.to_bits() == bend.to_bits() {
+            return;
+        }
+        let bend = self.performance.bend;
+        for voice in self.voices.iter_mut().filter(|v| v.active) {
+            voice.step = voice.base_step * bend_ratio(bend, voice.bend_up, voice.bend_down);
+        }
+    }
+}
+
+/// How much faster a sound plays with the pitch wheel at `bend` (-1 to 1),
+/// for a region bending `up` cents at the top and `down` cents at the
+/// bottom (negative to bend down).
+fn bend_ratio(bend: f32, up: f32, down: f32) -> f64 {
+    let cents = if bend >= 0.0 { bend * up } else { -bend * down };
+    if cents == 0.0 {
+        1.0
+    } else {
+        f64::from(2.0_f32.powf(cents.clamp(-9600.0, 9600.0) / 1200.0))
     }
 }
 

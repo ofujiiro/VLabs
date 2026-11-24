@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use daw_dsp::{Click, Instrument, NoteEvent, SongPosition};
+use daw_dsp::{BlockEvent, BlockEventKind, Click, Control, Instrument, SongPosition};
 use daw_model::{Region, TICKS_PER_QUARTER, Ticks};
 
 use crate::messages::{
@@ -36,20 +36,45 @@ const MAX_EVENTS: usize = 512;
 /// make one block late.
 const MAX_COMMANDS_PER_BLOCK: usize = 256;
 
+/// Something an instrument is to do at a frame of the stretch being
+/// rendered.
 #[derive(Clone, Copy)]
 struct Scheduled {
     offset: usize,
-    key: u8,
-    velocity: f32,
-    on: bool,
+    kind: BlockEventKind,
 }
 
-const NO_EVENT: Scheduled = Scheduled {
-    offset: 0,
-    key: 0,
-    velocity: 0.0,
-    on: false,
-};
+impl Scheduled {
+    const fn on(offset: usize, key: u8, velocity: f32) -> Self {
+        Self {
+            offset,
+            kind: BlockEventKind::NoteOn { key, velocity },
+        }
+    }
+
+    const fn off(offset: usize, key: u8) -> Self {
+        Self {
+            offset,
+            kind: BlockEventKind::NoteOff { key },
+        }
+    }
+
+    /// The order of events at the same frame: ends first, then controllers
+    /// (so a note starting with a bend starts bent), then starts.
+    fn order(&self) -> (usize, u8) {
+        let rank = match self.kind {
+            BlockEventKind::NoteOff { .. } => 0,
+            BlockEventKind::Control(_) => 1,
+            BlockEventKind::NoteOn { .. } => 2,
+        };
+        (self.offset, rank)
+    }
+}
+
+const NO_EVENT: Scheduled = Scheduled::off(0, 0);
+
+/// No key held from a MIDI keyboard (see `EngineProcessor::live_keys`).
+const NO_SLOT: u16 = u16::MAX;
 
 /// Per-slot playback state.
 struct SlotState {
@@ -60,6 +85,9 @@ struct SlotState {
     /// Keys played live and released while the pedal was down: they keep
     /// sounding (and recording) until the pedal comes up.
     sustained: [bool; 128],
+    /// Whether a MIDI keyboard's wheels or pedals moved this instrument
+    /// since it was last put back to rest (decision 0033).
+    live_moved: bool,
 }
 
 impl SlotState {
@@ -68,6 +96,7 @@ impl SlotState {
             held: [None; 128],
             sustain: false,
             sustained: [false; 128],
+            live_moved: false,
         }
     }
 }
@@ -104,6 +133,13 @@ pub struct EngineProcessor {
     max_block: usize,
     commands: rtrb::Consumer<Command>,
     live: rtrb::Consumer<LiveNote>,
+    /// The slot MIDI keyboards played at the last block ([`NO_TARGET`] for
+    /// none): when the focus moves, the slot left behind goes back to rest.
+    live_slot: usize,
+    /// For each key held down on a MIDI keyboard, the slot it went down on
+    /// ([`NO_SLOT`] for none): it comes up there, wherever the focus is by
+    /// then.
+    live_keys: [u16; 128],
     outgoing: rtrb::Producer<Outgoing>,
     shared: Arc<Shared>,
     program: Option<Box<Program>>,
@@ -130,8 +166,9 @@ pub struct EngineProcessor {
     click_left: Vec<f32>,
     click_right: Vec<f32>,
     events: Vec<Scheduled>,
-    /// The song's notes of one stretch, as instruments take them.
-    notes: Vec<NoteEvent>,
+    /// The song's notes and controllers of one stretch, as instruments
+    /// take them.
+    notes: Vec<BlockEvent>,
     /// Every effect, by its table entry (chains refer to entries).
     effects: Vec<Option<EffectSlot>>,
     /// The loudest output of each slot's track in this block.
@@ -223,6 +260,8 @@ impl EngineProcessor {
             max_block,
             commands,
             live,
+            live_slot: NO_TARGET,
+            live_keys: [NO_SLOT; 128],
             outgoing,
             shared,
             program: None,
@@ -418,17 +457,87 @@ impl EngineProcessor {
         }
         // Notes from MIDI keyboards go to the track that receives live input.
         let target = self.shared.live_target.load(Ordering::Relaxed);
+        let target = if target < MAX_SLOTS {
+            target
+        } else {
+            NO_TARGET
+        };
+        if target != self.live_slot {
+            // The focus moved: the instrument left behind goes back to rest
+            // (decision 0033).
+            if self.live_slot != NO_TARGET {
+                self.rest_live(self.live_slot);
+            }
+            self.live_slot = target;
+        }
         for _ in 0..MAX_COMMANDS_PER_BLOCK {
             let Ok(note) = self.live.pop() else { break };
-            if target == NO_TARGET {
-                continue;
-            }
             match note {
                 LiveNote::Note { key, velocity } if velocity > 0.0 => {
+                    if target == NO_TARGET {
+                        continue;
+                    }
+                    #[allow(clippy::cast_possible_truncation, reason = "slots < MAX_SLOTS")]
+                    {
+                        self.live_keys[usize::from(key & 0x7F)] = target as u16;
+                    }
                     self.note_on(target, key, velocity);
                 }
-                LiveNote::Note { key, .. } => self.note_off(target, key),
-                LiveNote::Sustain(down) => self.sustain(target, down),
+                LiveNote::Note { key, .. } => {
+                    // A key comes up on the instrument it went down on.
+                    let held =
+                        std::mem::replace(&mut self.live_keys[usize::from(key & 0x7F)], NO_SLOT);
+                    let slot = if held == NO_SLOT {
+                        target
+                    } else {
+                        usize::from(held)
+                    };
+                    if slot != NO_TARGET {
+                        self.note_off(slot, key);
+                    }
+                }
+                LiveNote::Sustain(true) => {
+                    if target != NO_TARGET {
+                        self.sustain(target, true);
+                    }
+                }
+                // The pedal comes up wherever it was holding notes.
+                LiveNote::Sustain(false) => {
+                    for slot in 0..MAX_SLOTS {
+                        if self.slots[slot].sustain {
+                            self.sustain(slot, false);
+                        }
+                    }
+                }
+                LiveNote::Control(control) => {
+                    if target != NO_TARGET {
+                        self.live_control(target, control);
+                    }
+                }
+            }
+        }
+    }
+
+    /// A wheel, pedal or knob of a MIDI keyboard moved (decision 0033).
+    fn live_control(&mut self, slot: usize, control: Control) {
+        if let Some(Some(instrument)) = self.instruments.get_mut(slot) {
+            instrument.control(control);
+            self.slots[slot].live_moved = true;
+        }
+    }
+
+    /// Puts what a MIDI keyboard moved on a slot back to rest: the wheel
+    /// centred, no modulation or pressure, full expression.
+    fn rest_live(&mut self, slot: usize) {
+        let Some(state) = self.slots.get_mut(slot) else {
+            return;
+        };
+        if !std::mem::take(&mut state.live_moved) {
+            return;
+        }
+        if let Some(Some(instrument)) = self.instruments.get_mut(slot) {
+            for control in Control::REST {
+                instrument.control(control);
             }
         }
     }
@@ -559,7 +668,11 @@ impl EngineProcessor {
             Command::Panic => {
                 for instrument in self.instruments.iter_mut().flatten() {
                     instrument.all_notes_off(true);
+                    for control in Control::REST {
+                        instrument.control(control);
+                    }
                 }
+                self.live_keys = [NO_SLOT; 128];
                 for slot in &mut self.slots {
                     *slot = SlotState::new();
                 }
@@ -1148,15 +1261,13 @@ impl EngineProcessor {
                 continue;
             }
             let events = &mut self.events[..count];
-            events.sort_unstable_by_key(|e| (e.offset, e.on));
+            events.sort_unstable_by_key(Scheduled::order);
             self.notes.clear();
             for event in events.iter() {
                 if self.notes.len() < self.notes.capacity() {
-                    self.notes.push(NoteEvent {
+                    self.notes.push(BlockEvent {
                         offset: event.offset.min(len),
-                        key: event.key,
-                        velocity: event.velocity,
-                        on: event.on,
+                        kind: event.kind,
                     });
                 }
             }
@@ -1259,12 +1370,7 @@ impl EngineProcessor {
                 && end < to_tick
             {
                 if count < MAX_EVENTS {
-                    self.events[count] = Scheduled {
-                        offset: offset_of(end),
-                        key,
-                        velocity: 0.0,
-                        on: false,
-                    };
+                    self.events[count] = Scheduled::off(offset_of(end), key);
                     count += 1;
                 }
                 state.held[usize::from(key)] = None;
@@ -1283,30 +1389,18 @@ impl EngineProcessor {
             let slot = &mut state.held[usize::from(note.key & 0x7F)];
             if slot.is_some() {
                 // The key is already sounding: end it first.
-                self.events[count] = Scheduled {
-                    offset: at,
-                    key: note.key,
-                    velocity: 0.0,
-                    on: false,
-                };
+                self.events[count] = Scheduled::off(at, note.key);
                 count += 1;
             }
-            self.events[count] = Scheduled {
-                offset: at,
-                key: note.key,
-                velocity: note.velocity,
-                on: true,
-            };
+            self.events[count] = Scheduled::on(at, note.key, note.velocity);
             count += 1;
             if note.end < to_tick {
                 // Starts and ends inside this stretch.
                 if count < MAX_EVENTS {
-                    self.events[count] = Scheduled {
-                        offset: offset_of(note.end).max(at + 1).min(len.saturating_sub(1)),
-                        key: note.key,
-                        velocity: 0.0,
-                        on: false,
-                    };
+                    self.events[count] = Scheduled::off(
+                        offset_of(note.end).max(at + 1).min(len.saturating_sub(1)),
+                        note.key,
+                    );
                     count += 1;
                 }
                 *slot = None;

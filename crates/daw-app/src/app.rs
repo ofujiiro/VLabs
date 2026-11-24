@@ -4,13 +4,12 @@
 //! input, the MIDI keyboards, autosave and the settings file.
 
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use daw_devices::{AudioInput, AudioOutput, MidiInputs, MidiMessage, OutputMode};
-use daw_engine::MidiSender;
+use daw_devices::{AudioInput, AudioOutput, MidiInputs, MidiMessage, OutputMode, TransportMessage};
 use daw_plugin_host::install;
 use daw_plugin_host::scan::{self, Scanner};
+use daw_ui::midi::{ControllerInput, TransportButton};
 use daw_ui::{PluginPlaces, PluginSearch, Request, Settings, Workspace, text};
 
 use crate::paths::Paths;
@@ -37,7 +36,6 @@ pub struct App {
     input_wanted: Option<(Instant, bool)>,
     workspace: Workspace,
     midi: Option<MidiInputs>,
-    midi_notes: mpsc::Receiver<(u8, bool)>,
     known_midi: Vec<String>,
     paths: Option<Paths>,
     autosaver: Option<Autosaver>,
@@ -68,8 +66,6 @@ pub struct Parts {
     pub autosaver: Option<Autosaver>,
     /// The settings as loaded.
     pub settings: Settings,
-    /// Sends MIDI keyboard notes to the engine.
-    pub midi_sender: std::sync::Arc<MidiSender>,
 }
 
 impl App {
@@ -82,7 +78,6 @@ impl App {
             paths,
             mut autosaver,
             settings,
-            midi_sender,
         } = parts;
         // The song's audio files live in the recovery folder, so a crash
         // keeps them.
@@ -103,33 +98,13 @@ impl App {
             workspace.offer_recovery(project, path, details);
         }
 
-        // MIDI keyboards play straight into the engine; the window is told
-        // too, only to light up the keys.
-        let (notes_tx, midi_notes) = mpsc::channel();
+        // MIDI controllers (decision 0033): keys, pads, wheels and pedals
+        // play straight into the engine; transport buttons and controls
+        // given a job go to the window, which is woken for them.
+        let router = workspace.midi_router();
         let repaint = ctx.clone();
         let midi = MidiInputs::start(daw_ident::PRODUCT_NAME, move |message| {
-            let note = match message {
-                MidiMessage::NoteOn { key, velocity, .. } => {
-                    midi_sender.note_on(key, f32::from(velocity) / 127.0);
-                    Some((key, true))
-                }
-                MidiMessage::NoteOff { key, .. } => {
-                    midi_sender.note_off(key);
-                    Some((key, false))
-                }
-                // The sustain pedal (controller 64): down from half way.
-                MidiMessage::ControlChange {
-                    controller: 64,
-                    value,
-                    ..
-                } => {
-                    midi_sender.sustain(value >= 64);
-                    None
-                }
-                MidiMessage::ControlChange { .. } | MidiMessage::PitchBend { .. } => None,
-            };
-            if let Some(note) = note {
-                let _ = notes_tx.send(note);
+            if router.handle(controller_input(message)) {
                 repaint.request_repaint();
             }
         });
@@ -160,7 +135,6 @@ impl App {
             input,
             input_wanted: None,
             midi: Some(midi),
-            midi_notes,
             known_midi: Vec::new(),
             paths,
             autosaver,
@@ -361,9 +335,6 @@ impl App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        while let Ok((key, down)) = self.midi_notes.try_recv() {
-            self.workspace.session_mut().show_outside_note(key, down);
-        }
         self.check_devices();
         self.follow_input();
         self.follow_plugin_search();
@@ -407,5 +378,38 @@ impl eframe::App for App {
         if let Some(autosaver) = &mut self.autosaver {
             autosaver.finish();
         }
+    }
+}
+
+/// A device's MIDI message as the window's router takes it.
+fn controller_input(message: MidiMessage) -> ControllerInput {
+    match message {
+        MidiMessage::NoteOn {
+            channel,
+            key,
+            velocity,
+        } => ControllerInput::NoteOn {
+            channel,
+            key,
+            velocity,
+        },
+        MidiMessage::NoteOff { channel, key } => ControllerInput::NoteOff { channel, key },
+        MidiMessage::ControlChange {
+            channel,
+            controller,
+            value,
+        } => ControllerInput::Controller {
+            channel,
+            number: controller,
+            value,
+        },
+        MidiMessage::PitchBend { channel, value } => ControllerInput::PitchBend { channel, value },
+        MidiMessage::Pressure { channel, value } => ControllerInput::Pressure { channel, value },
+        MidiMessage::Transport(transport) => ControllerInput::Transport(match transport {
+            TransportMessage::Play => TransportButton::Play,
+            TransportMessage::Stop => TransportButton::Stop,
+            TransportMessage::Record => TransportButton::Record,
+            TransportMessage::Rewind => TransportButton::Rewind,
+        }),
     }
 }

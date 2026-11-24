@@ -78,6 +78,13 @@ fn render(
                     },
                     Event::NoteOff { key, .. } => Event::NoteOff { frame, key },
                     Event::Param { id, value, .. } => Event::Param { frame, id, value },
+                    Event::PitchBend { value, .. } => Event::PitchBend { frame, value },
+                    Event::Controller { number, value, .. } => Event::Controller {
+                        frame,
+                        number,
+                        value,
+                    },
+                    Event::Pressure { value, .. } => Event::Pressure { frame, value },
                 });
             }
         }
@@ -157,6 +164,95 @@ fn instruments_play_the_notes_they_are_sent() {
         assert!(before < 1e-3, "{}: silent before the note", info.name);
         assert!(during > 0.005, "{}: the note sounds", info.name);
         assert!(peak.is_finite() && peak < 1.0, "{}: no clipping", info.name);
+        plugin.processor.stop();
+        drop(plugin.processor);
+    }
+}
+
+/// How well a sound matches itself `lag` frames later (fractional lags
+/// read between frames), from -1 to 1.
+fn self_match(samples: &[f32], lag: f32, window: usize) -> f32 {
+    let whole = lag.floor() as usize;
+    let part = lag - lag.floor();
+    let (mut together, mut first, mut later) = (0.0_f32, 0.0_f32, 0.0_f32);
+    for i in 0..window {
+        let a = samples[i];
+        let b = samples[i + whole] * (1.0 - part) + samples[i + whole + 1] * part;
+        together += a * b;
+        first += a * a;
+        later += b * b;
+    }
+    together / (first * later).sqrt().max(1e-12)
+}
+
+/// The period of a sound, in frames: the shortest lag (between 1500 and
+/// 70 Hz) at which it matches itself nearly as well as at its best.
+fn period(samples: &[f32]) -> f32 {
+    let (shortest, longest) = ((RATE / 1500) as usize, (RATE / 70) as usize);
+    let window = samples.len() - longest - 2;
+    let scores: Vec<f32> = (shortest..=longest)
+        .map(|lag| self_match(samples, lag as f32, window))
+        .collect();
+    let best = scores.iter().copied().fold(f32::MIN, f32::max);
+    let mut at = scores.iter().position(|&s| s > 0.9 * best).unwrap();
+    while at + 1 < scores.len() && scores[at + 1] > scores[at] {
+        at += 1;
+    }
+    (at + shortest) as f32
+}
+
+/// How far `bent` is from `still` in pitch, in semitones (within seven
+/// either way): the shift whose period `bent` matches itself best at.
+fn shift(still: &[f32], bent: &[f32]) -> f32 {
+    let period = period(still);
+    let window = bent.len() - (period * 1.6) as usize - 2;
+    (-700..=700)
+        .map(|cents| {
+            let lag = period * 2.0_f32.powf(-cents as f32 / 1200.0);
+            (cents, self_match(bent, lag, window))
+        })
+        .fold(
+            (0, f32::MIN),
+            |best, next| if next.1 > best.1 { next } else { best },
+        )
+        .0 as f32
+        / 100.0
+}
+
+#[test]
+fn the_pitch_wheel_bends_instruments() {
+    for (file, format) in INSTRUMENTS {
+        let Some(info) = find(file, format, Kind::Instrument) else {
+            return;
+        };
+        let mut plugin = load(&info, config()).unwrap();
+        let at = |seconds: f64| (seconds * f64::from(RATE)) as usize;
+        let wheel = |seconds: f64, value: f32| (at(seconds), Event::PitchBend { frame: 0, value });
+        // A quarter of the way each way: half a semitone at the usual range,
+        // three at the widest.
+        let sound = render(
+            &mut plugin,
+            &[
+                note(0.2, 57),
+                wheel(0.8, 0.25),
+                wheel(1.4, -0.25),
+                wheel(2.0, 0.0),
+                release(2.6, 57),
+            ],
+            2.7,
+            None,
+        );
+        let still = &sound[at(0.4)..at(0.75)];
+        let up = shift(still, &sound[at(1.0)..at(1.35)]);
+        let down = shift(still, &sound[at(1.6)..at(1.95)]);
+        let back = shift(still, &sound[at(2.2)..at(2.55)]);
+        eprintln!(
+            "{} ({format:?}): a quarter of the wheel up {up:+.2}, down {down:+.2}, back {back:+.2} semitones",
+            info.name
+        );
+        assert!(up > 0.2, "{}: the wheel bends up", info.name);
+        assert!(down < -0.2, "{}: the wheel bends down", info.name);
+        assert!(back.abs() < 0.06, "{}: back at rest", info.name);
         plugin.processor.stop();
         drop(plugin.processor);
     }

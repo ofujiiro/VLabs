@@ -155,6 +155,30 @@ pub enum Event {
         /// Its new value, as a fraction of its range.
         value: f64,
     },
+    /// The pitch wheel moves (decision 0033): sent to a CLAP plugin as
+    /// MIDI, to a VST3 plugin as the parameter it maps the wheel to.
+    PitchBend {
+        /// The frame within the block.
+        frame: u32,
+        /// From -1 (all the way down) through 0 (at rest) to 1.
+        value: f32,
+    },
+    /// A numbered MIDI controller moves (the modulation wheel is 1).
+    Controller {
+        /// The frame within the block.
+        frame: u32,
+        /// The controller's number, 0 to 127.
+        number: u8,
+        /// Its value, from 0 to 1.
+        value: f32,
+    },
+    /// Channel pressure (aftertouch) changes.
+    Pressure {
+        /// The frame within the block.
+        frame: u32,
+        /// From 0 to 1.
+        value: f32,
+    },
 }
 
 impl Event {
@@ -163,7 +187,38 @@ impl Event {
         match *self {
             Self::NoteOn { frame, .. }
             | Self::NoteOff { frame, .. }
-            | Self::Param { frame, .. } => frame,
+            | Self::Param { frame, .. }
+            | Self::PitchBend { frame, .. }
+            | Self::Controller { frame, .. }
+            | Self::Pressure { frame, .. } => frame,
+        }
+    }
+
+    /// The MIDI bytes of a controller's move (pitch bend, a controller,
+    /// pressure) on the first channel; `None` for other events.
+    pub fn midi_bytes(&self) -> Option<[u8; 3]> {
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "rounded and clamped to MIDI's ranges"
+        )]
+        let seven = |value: f32| (value.clamp(0.0, 1.0) * 127.0).round() as u8;
+        match *self {
+            Self::PitchBend { value, .. } => {
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "rounded and clamped to 14 bits"
+                )]
+                let bend = ((value.clamp(-1.0, 1.0) + 1.0) * 8192.0)
+                    .round()
+                    .clamp(0.0, 16_383.0) as u16;
+                #[allow(clippy::cast_possible_truncation, reason = "two 7-bit halves")]
+                Some([0xE0, (bend & 0x7F) as u8, (bend >> 7) as u8])
+            }
+            Self::Controller { number, value, .. } => Some([0xB0, number & 0x7F, seven(value)]),
+            Self::Pressure { value, .. } => Some([0xD0, seven(value), 0]),
+            Self::NoteOn { .. } | Self::NoteOff { .. } | Self::Param { .. } => None,
         }
     }
 }

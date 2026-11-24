@@ -215,6 +215,11 @@ pub struct Workspace {
     /// 0027).
     voicebanks_root: Option<PathBuf>,
     voicebank_list: Vec<daw_formats::utau::VoicebankInfo>,
+    /// Where messages from MIDI controllers go, as the MIDI thread asks it
+    /// (decision 0033).
+    midi_table: std::sync::Arc<std::sync::Mutex<crate::midi::RouteTable>>,
+    /// What MIDI controllers sent the window.
+    midi_inputs: Option<std::sync::mpsc::Receiver<crate::midi::ControllerInput>>,
 }
 
 impl Workspace {
@@ -258,6 +263,57 @@ impl Workspace {
             plugin_messages: Vec::new(),
             voicebanks_root: None,
             voicebank_list: Vec::new(),
+            midi_table: std::sync::Arc::default(),
+            midi_inputs: None,
+        }
+    }
+
+    /// The MIDI thread's end (decision 0033): messages from controllers go
+    /// through it to the instrument in focus or to this window. Call once;
+    /// a second call replaces the first router's way to the window.
+    pub fn midi_router(&mut self) -> crate::midi::MidiRouter {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.midi_inputs = Some(receiver);
+        crate::midi::MidiRouter::new(
+            std::sync::Arc::clone(&self.midi_table),
+            sender,
+            self.session.engine().midi_sender(),
+        )
+    }
+
+    /// Takes what MIDI controllers sent the window since the last frame.
+    fn follow_midi(&mut self) {
+        let Some(inputs) = &self.midi_inputs else {
+            return;
+        };
+        let inputs: Vec<crate::midi::ControllerInput> = inputs.try_iter().collect();
+        for input in inputs {
+            self.midi_input(input);
+        }
+    }
+
+    /// One message from a MIDI controller, for the window.
+    pub fn midi_input(&mut self, input: crate::midi::ControllerInput) {
+        use crate::midi::{ControllerInput, TransportButton};
+        let s = &mut self.session;
+        match input {
+            ControllerInput::NoteOn { key, velocity, .. } => {
+                s.show_outside_note(key, velocity > 0);
+            }
+            ControllerInput::NoteOff { key, .. } => s.show_outside_note(key, false),
+            ControllerInput::Transport(button) => match button {
+                TransportButton::Play => {
+                    if !s.is_playing() && !s.is_recording() {
+                        s.play();
+                    }
+                }
+                TransportButton::Stop => s.stop(),
+                TransportButton::Record => s.toggle_record(),
+                TransportButton::Rewind => s.to_start(),
+            },
+            ControllerInput::Controller { .. }
+            | ControllerInput::PitchBend { .. }
+            | ControllerInput::Pressure { .. } => {}
         }
     }
 
@@ -389,6 +445,7 @@ impl Workspace {
     pub fn ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.apply_theme(&ctx);
+        self.follow_midi();
         self.session.update();
         self.handle_close(&ctx);
         let mut actions = Vec::new();

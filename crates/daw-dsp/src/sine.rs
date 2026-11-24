@@ -3,7 +3,7 @@
 //! A minimal sine-wave instrument: the sound used when no other instrument
 //! is available, and a precise reference in tests.
 
-use crate::{Instrument, key_to_hz};
+use crate::{Control, Instrument, Performance, key_to_hz};
 
 /// The most notes the sine synth plays at once.
 const VOICES: usize = 32;
@@ -15,6 +15,8 @@ struct Voice {
     releasing: bool,
     phase: f32,
     step: f32,
+    /// The step with the pitch wheel at rest.
+    base_step: f32,
     level: f32,
     target: f32,
 }
@@ -24,6 +26,8 @@ pub struct SineSynth {
     voices: [Voice; VOICES],
     sample_rate: f32,
     ramp: f32,
+    /// Where the pitch wheel stands (decision 0033).
+    performance: Performance,
 }
 
 impl SineSynth {
@@ -38,7 +42,13 @@ impl SineSynth {
             voices: [Voice::default(); VOICES],
             sample_rate,
             ramp: 1.0 / (0.005 * sample_rate),
+            performance: Performance::REST,
         }
+    }
+
+    /// How much faster than at rest the pitch wheel makes notes sound.
+    fn bend_ratio(&self) -> f32 {
+        2.0_f32.powf(self.performance.bend_semitones(2.0, 2.0) / 12.0)
     }
 }
 
@@ -53,12 +63,14 @@ impl Instrument for SineSynth {
                     .min_by(|&a, &b| self.voices[a].level.total_cmp(&self.voices[b].level))
                     .unwrap_or(0)
             });
+        let base_step = key_to_hz(f32::from(key)) / self.sample_rate;
         self.voices[index] = Voice {
             key,
             active: true,
             releasing: false,
             phase: 0.0,
-            step: key_to_hz(f32::from(key)) / self.sample_rate,
+            step: base_step * self.bend_ratio(),
+            base_step,
             level: 0.0,
             target: 0.25 * velocity.clamp(0.0, 1.0),
         };
@@ -100,5 +112,15 @@ impl Instrument for SineSynth {
 
     fn is_sounding(&self) -> bool {
         self.voices.iter().any(|v| v.active)
+    }
+
+    /// The pitch wheel bends two semitones each way (decision 0033).
+    fn control(&mut self, control: Control) {
+        if self.performance.take(control) {
+            let ratio = self.bend_ratio();
+            for voice in self.voices.iter_mut().filter(|v| v.active) {
+                voice.step = voice.base_step * ratio;
+            }
+        }
     }
 }

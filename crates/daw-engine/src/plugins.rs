@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use daw_dsp::effects::{Effect, EffectParams};
-use daw_dsp::{Instrument, NoteEvent, SongPosition};
+use daw_dsp::{BlockEvent, BlockEventKind, Control, Instrument, SongPosition};
 use daw_model::{EffectId, TrackId};
 use daw_plugin_host::{Event, MAX_EVENTS, PluginHandle, PluginProcessor, Transport};
 
@@ -62,37 +62,58 @@ impl Queues {
         match event {
             Event::NoteOn { key, .. } => self.held[usize::from(key & 0x7F)] = true,
             Event::NoteOff { key, .. } => self.held[usize::from(key & 0x7F)] = false,
-            Event::Param { .. } => {}
+            Event::Param { .. }
+            | Event::PitchBend { .. }
+            | Event::Controller { .. }
+            | Event::Pressure { .. } => {}
         }
     }
 
-    /// The block's events: what waited (at its start), then `notes`.
-    fn collect(&mut self, notes: &[NoteEvent]) -> &[Event] {
+    /// The block's events: what waited (at its start), then the block's
+    /// own `events` at their frames.
+    fn collect(&mut self, events: &[BlockEvent]) -> &[Event] {
         self.block.clear();
         for event in self.pending.drain(..) {
             if self.block.len() < self.block.capacity() {
                 self.block.push(event);
             }
         }
-        for note in notes {
+        for event in events {
             if self.block.len() == self.block.capacity() {
                 break;
             }
             #[allow(clippy::cast_possible_truncation, reason = "a frame within one block")]
-            let frame = note.offset as u32;
-            let key = note.key;
-            self.held[usize::from(key & 0x7F)] = note.on;
-            self.block.push(if note.on {
-                Event::NoteOn {
-                    frame,
-                    key,
-                    velocity: note.velocity,
+            let frame = event.offset as u32;
+            self.block.push(match event.kind {
+                BlockEventKind::NoteOn { key, velocity } => {
+                    self.held[usize::from(key & 0x7F)] = true;
+                    Event::NoteOn {
+                        frame,
+                        key,
+                        velocity,
+                    }
                 }
-            } else {
-                Event::NoteOff { frame, key }
+                BlockEventKind::NoteOff { key } => {
+                    self.held[usize::from(key & 0x7F)] = false;
+                    Event::NoteOff { frame, key }
+                }
+                BlockEventKind::Control(control) => control_event(frame, control),
             });
         }
         &self.block
+    }
+}
+
+/// A controller's move as a plugin takes it (decision 0033).
+fn control_event(frame: u32, control: Control) -> Event {
+    match control.sane() {
+        Control::PitchBend(value) => Event::PitchBend { frame, value },
+        Control::Controller { number, value } => Event::Controller {
+            frame,
+            number,
+            value,
+        },
+        Control::Pressure(value) => Event::Pressure { frame, value },
     }
 }
 
@@ -140,12 +161,18 @@ impl Instrument for PluginInstrument {
         self.render_block(&[], left, right);
     }
 
-    fn render_block(&mut self, notes: &[NoteEvent], left: &mut [f32], right: &mut [f32]) {
+    fn render_block(&mut self, events: &[BlockEvent], left: &mut [f32], right: &mut [f32]) {
         // An instrument's input is silence.
         left.fill(0.0);
         right.fill(0.0);
-        let events = self.queues.collect(notes);
+        let events = self.queues.collect(events);
         self.processor.process(&self.transport, events, left, right);
+    }
+
+    /// Plugins take every controller (decision 0033): their own MIDI learn
+    /// gives knobs their jobs.
+    fn control(&mut self, control: Control) {
+        self.queues.push(control_event(0, control));
     }
 
     fn set_parameter(&mut self, id: u32, value: f64) {

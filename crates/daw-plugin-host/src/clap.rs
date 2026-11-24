@@ -28,7 +28,8 @@ use clack_extensions::gui::{
 };
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
 use clack_extensions::note_ports::{
-    HostNotePorts, HostNotePortsImpl, NoteDialects, NotePortRescanFlags,
+    HostNotePorts, HostNotePortsImpl, NoteDialects, NotePortInfoBuffer, NotePortRescanFlags,
+    PluginNotePorts,
 };
 use clack_extensions::params::{
     HostParams, HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags, ParamInfoBuffer,
@@ -36,7 +37,7 @@ use clack_extensions::params::{
 };
 use clack_extensions::state::{HostState, HostStateImpl, PluginState};
 use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer, TimerId};
-use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent, ParamValueEvent};
+use clack_host::events::event_types::{MidiEvent, NoteOffEvent, NoteOnEvent, ParamValueEvent};
 use clack_host::prelude::*;
 
 use crate::window::ParentHandle;
@@ -204,7 +205,9 @@ impl HostAudioPortsImpl for MainThread<'_> {
 
 impl HostNotePortsImpl for MainThread<'_> {
     fn supported_dialects(&self) -> NoteDialects {
-        NoteDialects::CLAP
+        // Notes go as CLAP notes; a controller's wheels and knobs as MIDI
+        // (decision 0033).
+        NoteDialects::CLAP | NoteDialects::MIDI
     }
     fn rescan(&self, _flags: NotePortRescanFlags) {}
 }
@@ -311,6 +314,7 @@ pub fn load(info: &PluginInfo, config: AudioConfig) -> Result<(ClapMain, ClapAud
 
     let (inputs, outputs) = port_layout(&mut instance);
     let ranges = param_ranges(&mut instance);
+    let midi_port = midi_port(&mut instance);
     let max_block = config.max_block.max(1);
     let processor = instance
         .activate(
@@ -337,6 +341,7 @@ pub fn load(info: &PluginInfo, config: AudioConfig) -> Result<(ClapMain, ClapAud
         events: EventBuffer::with_capacity(MAX_EVENTS),
         output_events: EventBuffer::with_capacity(MAX_EVENTS),
         ranges,
+        midi_port,
         steady_time: 0,
         processor: Some(PluginAudioProcessor::from(processor)),
     };
@@ -372,6 +377,25 @@ fn port_layout(instance: &mut PluginInstance<Host>) -> (Vec<usize>, Vec<usize>) 
     let inputs = read(true);
     let outputs = read(false);
     (inputs, outputs)
+}
+
+/// The first input note port that takes MIDI, where a controller's wheels
+/// and knobs go (decision 0033); `None` if the plugin takes no MIDI.
+fn midi_port(instance: &mut PluginInstance<Host>) -> Option<u16> {
+    let ports = instance.access_handler(|h| {
+        h.plugin
+            .get()
+            .and_then(InitializedPluginHandle::get_extension::<PluginNotePorts>)
+    })?;
+    let handle = instance.plugin_handle();
+    let mut buffer = NotePortInfoBuffer::new();
+    (0..ports.count(&handle, true))
+        .find(|&index| {
+            ports
+                .get(&handle, index, true, &mut buffer)
+                .is_some_and(|info| info.supported_dialects.contains(NoteDialects::MIDI))
+        })
+        .and_then(|index| u16::try_from(index).ok())
 }
 
 /// Each parameter's range, by id, for turning fractions into values.
@@ -733,6 +757,8 @@ pub struct ClapAudio {
     output_events: EventBuffer,
     /// (id, minimum, maximum, stepped), sorted by id.
     ranges: Vec<(u32, f64, f64, bool)>,
+    /// The note port that takes MIDI, if one does.
+    midi_port: Option<u16>,
     steady_time: u64,
 }
 
@@ -796,6 +822,14 @@ impl AudioSide for ClapAudio {
                             Pckn::match_all(),
                             plain,
                         ));
+                    }
+                }
+                Event::PitchBend { frame, .. }
+                | Event::Controller { frame, .. }
+                | Event::Pressure { frame, .. } => {
+                    if let (Some(port), Some(bytes)) = (self.midi_port, event.midi_bytes()) {
+                        self.events
+                            .push(&MidiEvent::new(frame.min(len as u32 - 1), port, bytes));
                     }
                 }
             }

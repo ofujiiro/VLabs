@@ -227,6 +227,12 @@ pub struct Region {
     pub pitch_veltrack: f32,
     /// How far the pitch wanders at random, in cents.
     pub pitch_random: f32,
+    /// How far the pitch wheel bends it all the way up, in cents (decision
+    /// 0033; SFZ's `bend_up`, 200 by default).
+    pub bend_up: f32,
+    /// How far the pitch wheel bends it all the way down, in cents (SFZ's
+    /// `bend_down`, -200 by default: negative bends down).
+    pub bend_down: f32,
     /// Its volume, in decibels.
     pub volume: f32,
     /// Its level, from 0 to 1 (multiplies the volume).
@@ -327,6 +333,8 @@ impl Default for Region {
             tune: 0.0,
             pitch_veltrack: 0.0,
             pitch_random: 0.0,
+            bend_up: 200.0,
+            bend_down: -200.0,
             volume: 0.0,
             amplitude: 1.0,
             pan: 0.0,
