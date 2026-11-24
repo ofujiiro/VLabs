@@ -270,6 +270,68 @@ commit too.
   installer and zip were built and packed on Windows by the workflow but
   not run (no Windows here).
 
+## Built on November 24, 2026 as 1.3.0, not yet merged or tried by the owner
+
+On the branch `claude/zen-noether-qvaw3z` (the owner's request: "add MIDI
+controller compatibility"), decision 0033, version 1.3.0 with its notes.
+
+- **Playing** (`daw_dsp::Control`, `Instrument::control`, `Performance`):
+  the synth bends ±2 semitones, deepens its LFO vibrato by the modulation
+  wheel and pressure (`WHEEL_VIBRATO`, 50 cents) and follows expression;
+  `SoundFontPlayer` passes bend, CC1 and CC11 to rustysynth; the SFZ
+  `Sampler` bends each voice by its region's `bend_up`/`bend_down` (now
+  read by `daw-formats::sfz`) and scales by expression; custom kits are
+  `set_drum_kit(true)` (no bend, no expression); `SineSynth` bends. Block
+  events (`BlockEvent`, `BlockEventKind`) carry controllers at their frame.
+- **Plugins** (`daw_plugin_host::Event::{PitchBend, Controller, Pressure}`):
+  CLAP as `MidiEvent` on the first note port supporting the MIDI dialect
+  (`midi_port`, host dialects now CLAP | MIDI); VST3 through `midi_map`
+  (`IMidiMapping` asked for all 130 controller numbers at load) as
+  parameter changes, not echoed to the controller.
+- **Engine**: `MidiSender::control`; `LiveNote::Control`; `live_keys` (a
+  key comes up on the slot it went down on), the pedal comes up on every
+  slot it holds, `rest_live` when the focus moves; curves compiled per
+  track (`CompiledControl`, `ControlSpan`), scheduled every 64 frames
+  (`schedule_controls`), rested on stop, locate and panic
+  (`rest_song_controls`) and when a curve leaves a track
+  (`install_program`); recording: `live_values`, `live_override`,
+  `recorded_controls`, `EngineEvent::RecordedControl`, `records()`.
+- **Model**: `daw_model::controls` (`ControlKind`, `ControlLane`,
+  `ControlPoint`, `thin`, `MidiControl`, `MidiSource`, `LinkTarget`,
+  `MidiLink`), `Pattern::controls`, `controls_played_in`, `set_control`,
+  `Instrument::takes_controls`, `Project::midi_links`, `link_midi`,
+  `forget_midi`, `set_linked`, `linked_value`, `has_link_target`. File
+  format 12 (`repair_midi` on load), sample `format-v12.project-sample`.
+- **MIDI files**: `EventKind::{Controller, PitchBend, Pressure}`;
+  `control_events` (export, rest after a clip); `curves` (import: steps
+  after pauses, sweeps as lines, thinned); the file's sustain pedal
+  lengthens notes.
+- **Interface**: `daw-ui::midi` (`ControllerInput`, `route`, `RouteTable`,
+  `Learning`, `can_learn`, `MidiRouter`), `midi_ui::assign_menu` (opened
+  with `container_context_menu`: a click sense would change how sliders
+  start a drag), `widgets::right_pressed` (sliders ignore the right
+  button), `Gesture::sliders`/`link` and `slider_row(…, param)`,
+  `control_lane` (the curve editor), the piano roll's `LaneKind::Control`
+  (Bend, Mod, the pattern's other curves; short button names
+  `text::control_button`), `session/controls.rs` (curves, recorded moves),
+  `session/midi.rs` (learning, links, merged undo per burst), the
+  workspace's `midi_buttons`, `button_learning`, `update_midi_table`,
+  `midi_window`, the shortcuts window's MIDI column, `Settings::{midi_buttons,
+  midi_off}`.
+- **Devices and app**: `MidiMessage::{Pressure, Transport}` (MMC, Start,
+  Continue, Stop), `MidiInputs::start(name, off, …)`, `seen`, `set_off`;
+  `daw-app` turns device messages into `ControllerInput` and hands them to
+  the router.
+- Checked: `cargo xtask ci`; the reference plugins' tests (Surge XT and
+  Dexed bend as CLAP and VST3: a quarter of the wheel is ±0.5 semitones on
+  Surge, ±0.75 on Dexed whose range is 3); the program on the virtual
+  screen: the lane's choices and a drawn bend, the fader's menu and the
+  waiting message, the MIDI window (it says MIDI is unavailable there: no
+  ALSA sequencer in the container), the shortcuts window's MIDI column.
+  That run found and fixed four faults (a right-click moved sliders, the
+  notice hid the waiting message, a lane button too wide, the shortcuts
+  table too wide).
+
 ## Released as 1.2 on November 23, 2026, not yet tried by the owner
 
 - **The export's end** (the owner: "the sound loops back to the start
@@ -343,7 +405,12 @@ commit too.
 
 ## Next session: start here
 
-0. Ask the owner how 1.2 goes (ROADMAP.md: "Moving several at once:
+0. MIDI controllers (1.3.0, on `claude/zen-noether-qvaw3z`): ask the owner
+   whether to merge it into `main` and release it, and to try it with
+   their controller (ROADMAP.md: "MIDI controllers: things to try"): keys,
+   pads, both wheels, pedals, knobs given settings, buttons given
+   commands, transport buttons. Nothing was tried with a real device.
+1. Ask the owner how 1.2 goes (ROADMAP.md: "Moving several at once:
    things to try"): selecting and moving several tracks and clips, and an
    export with a loop set.
 1. Look at the release (the repository's Releases page, VLabs 1.0) and the
@@ -375,6 +442,13 @@ commit too.
    pitch line follows the first placement's tempo (see known gaps).
 
 ## Not verified by the development session (say so if asked)
+
+- MIDI controllers: no real controller (the container has no MIDI system:
+  `/dev/snd/seq` is missing, so midir cannot open the sequencer); device
+  messages were tested from the parse onwards and the program's screens on
+  the virtual screen. Windows' MIDI (winmm) passes MMC as it does on Linux
+  by midir's defaults, unchecked. How the bends and vibrato sound (measured
+  only).
 
 - Shaping sounds: how the shapes sound to a person (measured only); the
   panels in the light theme and on Windows; a shaped SoundFont other than
@@ -425,6 +499,11 @@ commit too.
   desktop.
 
 ## Known gaps carried forward (ROADMAP.md lists them)
+
+- MIDI controllers: no relative knobs, Mackie Control or controller
+  profiles; knob moves of VLabs settings are not recorded as automation;
+  mute and solo cannot be given buttons; SFZ ignores the modulation wheel
+  and pressure; copying notes leaves their curves; DAWproject drops curves.
 
 - Phase 6: synth without unison or its own effects; MIDI without
   controllers; DAWproject without key or clip volume; unsigned installer.

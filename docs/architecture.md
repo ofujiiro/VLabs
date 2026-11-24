@@ -35,7 +35,7 @@ record, notes, the play position); the processing half belongs to
 | --- | --- | --- |
 | Interface | The window, drawing, user input, edits to the project | May not block for long: slow work goes to workers |
 | Audio | The sound card's callback: the engine's processing | Real-time: no allocation, locks, files, network or logging |
-| MIDI input | Receives notes from MIDI keyboards | Only timestamps and queues them |
+| MIDI input | Receives what MIDI controllers send | Asks the window's routing table where each message goes (decision 0033), then queues it for the engine or the window |
 | Autosave | Writes recovery copies of the song in the background | Ordinary thread |
 | Device watchers | Reopen the sound output and connect MIDI keyboards as they come and go | Ordinary threads |
 | Input watcher | Opens the default sound input while recording, reopens it when it fails | Ordinary thread; the input's own callback is real-time and only queues samples |
@@ -172,13 +172,17 @@ The window is `daw-ui::synth_ui`.
   **7** SFZ instruments and custom kits (decisions 0024, 0025); **8** the
   bend of a tempo glide (decision 0026); **9** voice instruments and each
   pattern's lyrics (decision 0027); **10** how each note is sung (decision
-  0028). Each kept beside what it belongs to, with defaults, so older
+  0028); **11** note shapes and backwards or re-pitched clips (decision
+  0031); **12** patterns' controller curves and the song's MIDI
+  assignments (decision 0033). Each kept beside what it belongs to, with defaults, so older
   files are read unchanged.
 - **Interchange** (decision 0020, `daw-formats::midi`, `dawproject`,
   `flac`): Standard MIDI Files and DAWproject, in and out; what a clip
   plays is worked out once, in `Pattern::played_in`, for the engine and
   both exporters. MIDI goes out at 960 ticks per quarter with glides as
-  sixteenth-note tempo steps that keep the timing; DAWproject writes the
+  sixteenth-note tempo steps that keep the timing, and patterns' controller
+  curves as pitch bends, controllers and pressure (and comes back with them,
+  a file's sustain pedal holding its notes, decision 0033); DAWproject writes the
   program's own devices with their exact settings as JSON (and the EQ,
   compressor and limiter also as DAWproject's standard devices), plugin
   settings as `.clap-preset` and `.vstpreset`, pattern clips as the notes
@@ -381,6 +385,60 @@ a note stays a small value that is cheap to copy.
   faintly on its track's header and clips and behind its piano roll's
   notes (`voice_picture`); the session reads each picture once, in the
   background, and keeps it as a texture (`session/voice`, decision 0029).
+
+## MIDI controllers *(decision 0033)*
+
+```text
+ controller ─▶ daw-devices (parse) ─▶ daw-app ─▶ daw_ui::midi::MidiRouter ── route(table) ──┐
+                                                         │                                    │
+                     keys, wheels, pedals, pressure ◀────┘ (engine's live queue)      window ◀┘
+                     → the instrument in focus                                 (learning, knobs and
+                                                                               buttons with a job,
+                                                                               transport buttons)
+```
+
+- **Where a message goes** is decided on the MIDI thread by
+  `daw_ui::midi::route`, from a table the window rewrites each frame
+  (`RouteTable`: what it waits for, and the controls with a job). Keys,
+  pads, the wheels, pressure and the pedals go straight into the engine's
+  live queue (`MidiSender::note_on`, `sustain`, `control`); transport
+  messages (MIDI Machine Control, Start, Continue, Stop) and the controls
+  with a job go to the window; bank select and channel mode messages go
+  nowhere.
+- **Instruments take controllers** through `Instrument::control`
+  (`daw_dsp::Control`: the pitch wheel from -1 to 1, a numbered controller
+  or pressure from 0 to 1). Each included instrument keeps a `Performance`
+  (bend, modulation, pressure, expression) and answers what it can: the
+  synth bends two semitones and deepens its LFO's vibrato, SoundFonts pass
+  the wheel, modulation and expression to rustysynth, the SFZ sampler bends
+  each voice by its region's `bend_up`/`bend_down` and scales its output by
+  expression; custom kits do not answer. Plugins get everything: CLAP as
+  MIDI on their MIDI note port, VST3 as the parameters their
+  `IMidiMapping` names (asked once, at load).
+- **On the audio thread** a live key comes up on the slot it went down on
+  (`live_keys`), the pedal comes up wherever it held notes, and when the
+  focus moves the slot left behind gets `Control::REST`.
+- **Curves in patterns** (`Pattern::controls`, `daw_model::controls`): one
+  `ControlLane` per controller, points in pattern ticks, a straight line
+  between. `Pattern::controls_played_in` says what a clip plays (repeated,
+  swung, pinned at the clip's edges), for the engine and the MIDI
+  exporter. The engine compiles them per track (`CompiledControl`) and
+  looks at them every 64 frames of a block, sending moves as block events
+  at their frames; outside a clip, and when playback stops or moves, the
+  wheel, modulation, pressure and expression go back to rest.
+- **Recording** sends the hand's moves of the recording slot as
+  `EngineEvent::RecordedControl` (one per controller per block), starting
+  with the controllers where they stood; the pattern's old curve for a
+  controller the hand moved is not played meanwhile. The session thins each
+  pass (`controls::thin`) and writes it into the take's undo step.
+- **Knobs given settings** are `Project::midi_links` (`MidiLink`: a
+  `MidiControl` and a `LinkTarget`, a track's or the master's setting as
+  automation names it); a move is `Project::set_linked`, merged into one
+  undo step per burst. **Buttons given commands** live in the settings
+  (`midi_buttons`, by command), beside the keyboard shortcuts.
+- **Learning** a control waits in the session (a setting: `learn_midi`) or
+  the workspace (a command: the shortcuts window's Learn); the first
+  matching control gets the job.
 
 ## Automation *(phase 3)*
 

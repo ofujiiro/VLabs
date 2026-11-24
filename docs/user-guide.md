@@ -339,11 +339,66 @@ Automation).
 **Notes**: press <kbd>Ctrl+R</kbd> (or the red button) with a piano or synth
 track in focus. A bar of clicks counts you in; play on the computer keyboard
 or a MIDI keyboard; press <kbd>Space</kbd> to stop. One undo removes the
-whole take.
+whole take. With a MIDI controller, what its wheels and pedals did is
+recorded too (see **MIDI controllers** below).
 
 **Sound**: add an audio track (**+ Audio**), then record the same way from
 the computer's microphone or an audio interface. Use headphones: VLabs does
 not play the microphone back to you, and speakers would be recorded too.
+
+## MIDI controllers
+
+Plug in a MIDI keyboard or controller, before or while VLabs runs: it is
+found on its own (the status line says so) and plays the track in focus.
+
+- **Keys and pads** play the instrument in focus; pads on a drum track play
+  its drums (they sit on the General MIDI drum keys: kick on C2, snare on
+  D2…). The **sustain pedal** holds notes.
+- **The pitch wheel** bends the notes: two semitones each way on the
+  piano, SoundFonts and the synth, as far as an SFZ instrument says on
+  those. Drums are not bent.
+- **The modulation wheel** (and **pressure**, on keyboards with
+  aftertouch) adds vibrato on the synth; on the piano and SoundFonts the
+  wheel adds the SoundFont's own vibrato. **An expression pedal** shapes
+  the loudness.
+- **Plugins** receive everything the controller sends, so a plugin's own
+  *MIDI learn* (Surge XT, Dexed, Vital…) can give its knobs to yours.
+- **Transport buttons** that send MIDI Machine Control, or Start and
+  Stop, play, stop, record and go back to the start. Many controllers send
+  these from their transport buttons; check its manual if they do nothing.
+- When the focus moves to another track, the track left behind goes back
+  to rest (wheel centred, no vibrato).
+
+**What you played is kept.** While you record notes, the wheels, pressure
+and pedals are recorded with them, in the same undo step. Under the piano
+roll's notes, the lane shows **Bend** and **Mod** (the modulation wheel)
+beside **Velocity** and **Tempo**, and any other controller the pattern
+holds (right-click the last one for the others). Click to add a point,
+drag it (it lands on the grid unless you hold <kbd>Alt</kbd>, and on the
+middle when near it), right-click to remove it; between points the curve is
+a straight line. You can draw bends this way without a controller too. A
+curve plays inside the pattern's clips; after a clip that bent the notes,
+and when playback stops, the wheel goes back to rest.
+
+**Giving a knob, fader or button a job.**
+
+- **A knob or fader**: right-click a slider (a mixer fader or pan, the
+  master's volume, a setting in an effect's window or the synth's window)
+  and choose **Assign a MIDI control…**, then move the knob. The slider now
+  follows it; each turn of the knob is one undo step. The same menu says
+  which control moves it, and **Forget the MIDI control** lets it go. These
+  assignments are kept with the song. Set endless knobs to "absolute" on
+  the controller.
+- **A button or pad**: menu › **Keyboard shortcuts**, click **Learn** on a
+  command's row (Play or stop, Record, Loop, Undo…), then press the button
+  or pad. These are kept for every song. A pad with a command no longer
+  plays a note.
+- <kbd>Escape</kbd> stops waiting for a control.
+
+Menu › **MIDI controllers…** lists the controllers connected, each with a
+switch (switched off, VLabs leaves it alone for other programs), the
+song's knobs and faders and what they move, and the buttons and their
+commands.
 
 ## Audio clips
 
@@ -473,7 +528,9 @@ including a recording that was in progress.
 
 - **Import…** (<kbd>Ctrl+I</kbd>) adds sound files (WAV, AIFF, FLAC, MP3,
   Ogg) and MIDI files to the song at the play position (a MIDI file's
-  tracks become tracks of notes). Dropping files on the window does the
+  tracks become tracks of notes, with their pitch bends and controllers as
+  curves, and notes held by the file's sustain pedal held as heard).
+  Dropping files on the window does the
   same; dropping a song file opens it, a SoundFont or an SFZ instrument
   becomes an instrument track, plugins go to the Plugins window and
   folders to the library.
@@ -486,7 +543,8 @@ including a recording that was in progress.
   - **a project for another music program**: a DAWproject file, which
     Bitwig Studio, Studio One, Cubase and others open with the tracks,
     notes, sound, mixer, plugins and automation;
-  - **the notes as a MIDI file**, for any music program.
+  - **the notes as a MIDI file**, for any music program (with the curves
+    of the wheels and controllers).
 
 ![The Export dialog](guide-images/export.png)
 
@@ -517,6 +575,8 @@ none of them ever clashes with the keys that play notes.
   when no sound device was found.
 - **A MIDI keyboard does nothing.** Plug it in (VLabs notices it while
   running and says so) and put a piano, synth or plugin track in focus.
+  Menu › **MIDI controllers…** shows whether it is found and switched on.
+  A knob or pad given a job in VLabs no longer plays the instrument.
 - **A plugin is missing.** Install it in one of the usual folders, then
   click **Look again** in the instrument chooser. A song whose plugin is not
   installed still opens; the missing plugin is named.

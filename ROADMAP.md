@@ -30,9 +30,14 @@ for audio clips; merged into `main` and released as **VLabs 1.1**
 (November 22, 2026); the owner tried it: everything works. Their next
 requests: selecting and moving several tracks or clips at once, and an
 export that plays the song once and ends with its sound (decision 0032),
-merged into `main` and released as **VLabs 1.2** (November 23, 2026). Next: 7c,
-UST and USTX projects in and out, unless the owner's check of 7b asks for
-more tuning first.
+merged into `main` and released as **VLabs 1.2** (November 23, 2026).
+Then the owner asked for **MIDI controller compatibility** (decision 0033):
+the wheels, pressure and pedals play the instrument in focus, takes keep
+what they did as curves the piano roll draws and edits, transport buttons
+work, and knobs, faders and buttons can be given settings and commands;
+built on its branch as version 1.3.0, not yet merged or released. Next:
+7c, UST and USTX projects in and out, unless the owner's check of 7b asks
+for more tuning first.
 The repository has been public since November 2026 (the owner's
 decision).
 
@@ -100,7 +105,7 @@ decision).
   between two copies of it (the system clipboard is used on Linux only;
   decision 0005).
 - The pitch wheel and other controllers of a MIDI keyboard are not used
-  yet (the sustain pedal is).
+  yet (the sustain pedal is). (Since 1.3 they are: decision 0033.)
 - The sound was on the quiet side (fixed in phase 2: the piano is 6 dB
   louder and every new song has a limiter on the master).
 - Open and save dialogs are not attached to the window, so on some desktops
@@ -494,7 +499,8 @@ microphone back to you, and speakers would be recorded too.
 - The synth has two oscillators and one LFO; no unison, no effects of its
   own (use the track's effect chain).
 - MIDI export leaves out audio tracks and plugin settings (MIDI files hold
-  notes); MIDI import ignores controllers and pitch bends.
+  notes); MIDI import ignores controllers and pitch bends. (Since 1.3,
+  controllers and pitch bends go both ways as curves: decision 0033.)
 - DAWproject cannot carry the song's key or an audio clip's own volume;
   reading another program's file leaves out group tracks and sends,
   time-stretching and the noise gate (the status line names what).
@@ -1034,6 +1040,95 @@ beat on the timeline."
 - Ctrl and Shift clicks could not be sent to the program on the virtual
   screen (synthetic key presses do not reach it there); they are checked
   by the interface tests.
+
+## After 1.2 — MIDI controllers (the owner's request, November 2026)
+
+Decision 0033. "Add MIDI controller compatibility."
+
+- [x] The pitch wheel bends the instrument in focus (two semitones each way;
+      an SFZ instrument its own range; drums stay put); the modulation
+      wheel and pressure add vibrato on the synth (and the SoundFont's own
+      vibrato on the piano and SoundFonts); an expression pedal shapes the
+      loudness; plugins receive everything (CLAP as MIDI, VST3 through the
+      plugin's own MIDI mapping), so their own MIDI learn works
+- [x] A key held while the focus moves ends on the instrument it started on
+      (it could sound for ever); the pedal comes up wherever it held notes;
+      the track left behind goes back to rest
+- [x] Transport buttons: MIDI Machine Control and Start, Continue, Stop play,
+      stop, record and go back to the start
+- [x] Takes keep what the wheels, pressure and pedals did, as curves in the
+      pattern, thinned, in the take's undo step; the piano roll's lane shows
+      **Bend** and **Mod** (and the pattern's other curves) beside Velocity
+      and Tempo, to draw and edit with the mouse; curves play inside their
+      clips and rest after them and on stop
+- [x] Knobs and faders given settings: right-click a mixer fader or pan, the
+      master's volume, an effect's or the synth's setting, **Assign a MIDI
+      control…**, move a knob; kept with the song; each turn one undo step
+- [x] Buttons and pads given commands in **Keyboard shortcuts** (Learn,
+      Clear), kept for every song
+- [x] **MIDI controllers…** window: controllers found, each with a switch;
+      the song's knobs and the buttons, each to forget
+- [x] MIDI files carry the curves both ways; a file's sustain pedal holds its
+      notes on import, as a live take does
+- [x] File format version 12, with its sample file
+- [x] Checked: the instruments measured (bends to the cent, vibrato depth,
+      the expression curve, nothing allocated on the audio thread); live
+      bends, focus moves and the stuck key in the engine; Surge XT and Dexed
+      bent as CLAP and VST3; offline renders following a drawn bend; a take
+      recording the wheel; MIDI round trips; interface tests for the lane,
+      the slider menus, the shortcuts window and the MIDI window; the real
+      program on the virtual screen (screenshots of each new part)
+- [x] Version 1.3.0, notes in `docs/releases/v1.3.0.md`
+- [ ] Merged into `main` and released
+- [ ] The owner's hands-on check with a real controller
+
+### MIDI controllers: things to try
+
+You need a MIDI keyboard or controller (any USB one).
+
+1. Plug it in while VLabs runs: the status line says it is connected. Open
+   the piano's pattern and play: you hear the piano.
+2. Push the **pitch wheel** while holding a chord: it bends two semitones
+   up and down. Try the **modulation wheel** on the synth (**+ Instrument…**,
+   **Synth**): vibrato. A plugin such as Surge XT bends and takes the wheel
+   too.
+3. Hold a key and click another track: the key still stops when you let it
+   go, and the first track's bend is gone.
+4. Record (**Ctrl+R**) a phrase with bends. Under the notes, click **Bend**:
+   your bends are drawn. Drag a point, add one with a click, remove one with
+   a right-click; play it back.
+5. Press **F9** for the mixer, right-click the piano's fader, choose
+   **Assign a MIDI control…** and move a fader on your controller: the
+   on-screen fader follows. **Ctrl+Z** undoes a whole move. Try a synth or
+   effect knob the same way (right-click the slider in its window).
+6. Menu › **Keyboard shortcuts**: click **Learn** on **Play or stop** and
+   press a pad or button: it now plays and stops. If your controller has
+   transport buttons, try them without setting anything up first.
+7. Menu › **MIDI controllers…**: your controller is listed; switch it off
+   and back on; the fader and the button you set are listed with Forget.
+8. Export the song as a MIDI file and open it again: the bends come back.
+
+### MIDI controllers: known gaps
+
+- **Not tried with a real controller**: the development container has no
+  MIDI system, so everything was tested from the message onwards
+  (automated tests, and the real program's screens); please check your
+  controller's keys, wheels, pads, knobs and buttons.
+- Endless (relative) knobs must be set to absolute on the controller;
+  Mackie Control and HUI surfaces, controller profiles and lights or motor
+  faders answering back are not supported; several controllers play the
+  same track (the one in focus).
+- A knob's moves of a VLabs setting are not recorded as automation (they
+  change the setting itself); plugin parameters are given knobs through the
+  plugin's own MIDI learn, not VLabs'.
+- Mute and solo cannot be given a button yet.
+- SFZ instruments do not take the modulation wheel or pressure (they play
+  without LFOs, decision 0024); the piano and SoundFonts do not take
+  pressure.
+- Copying notes does not copy the curves under them; DAWproject does not
+  carry curves.
+- Songs with curves or assignments are format 12: older copies of VLabs
+  refuse them.
 
 ## Later (not in v1, not designed out)
 
