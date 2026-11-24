@@ -376,7 +376,8 @@ impl SongView {
 
     /// Sound files dropped on the view: on the audio track under the
     /// pointer at its beat, or on new tracks (at the play position if the
-    /// pointer is not over the tracks).
+    /// pointer is not over the tracks). A MIDI file dropped on a track of
+    /// notes goes into that track (decision 0034).
     fn take_dropped_files(&mut self, ui: &Ui, session: &mut Session, layout: &Layout) {
         let mut files: Vec<PathBuf> = ui.input(|i| {
             i.raw
@@ -404,7 +405,7 @@ impl SongView {
             Some(pos) => {
                 let track = layout
                     .row_at(pos.y)
-                    .filter(|r| r.kind == RowKind::Track && session.is_audio_track(r.track))
+                    .filter(|r| r.kind == RowKind::Track)
                     .map(|r| r.track);
                 (
                     track,

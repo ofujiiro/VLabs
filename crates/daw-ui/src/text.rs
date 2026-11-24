@@ -1736,6 +1736,11 @@ pub fn could_not_import(name: &str, error: &str) -> String {
 }
 
 /// Said after a MIDI file's tracks were added to the song.
+/// Says a MIDI file's notes went into a track the song has (decision 0034).
+pub fn imported_midi_into(name: &str, track: &str) -> String {
+    format!("Imported {name} into {track}")
+}
+
 pub fn imported_midi(name: &str, tracks: usize) -> String {
     match tracks {
         1 => format!("Imported {name}: one track of notes"),

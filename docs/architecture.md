@@ -192,7 +192,9 @@ The window is `daw-ui::synth_ui`.
   encoded frame by frame as the song renders).
 - **Opening and importing** (`session/files.rs`): Open takes any song
   file (another program's opens as a new unsaved song); Import and drops
-  take sound and MIDI files.
+  take sound and MIDI files. A MIDI file dropped on a track of notes, or
+  on its open pattern, goes into that track as one pattern
+  (`ImportedSong::add_into`, decision 0034); elsewhere it makes tracks.
 
 ## Plugins *(phase 3)*
 

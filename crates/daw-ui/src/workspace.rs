@@ -783,6 +783,24 @@ impl Workspace {
             if !sounds.is_empty() {
                 self.session.add_kit_sounds(kit, sounds);
             }
+            // A MIDI file dropped on an open pattern goes into its track,
+            // which opens the new pattern (decision 0034).
+            let (midi_files, others): (Vec<PathBuf>, Vec<PathBuf>) =
+                others.into_iter().partition(|f| {
+                    crate::session::SongFile::of(f) == Some(crate::session::SongFile::Midi)
+                });
+            let track = self.session.focused_track();
+            let at = self.session.song_position();
+            let mut opened = None;
+            for file in &midi_files {
+                if let Some(pattern) = self.session.import_midi_into(file, track, at) {
+                    opened = Some(pattern);
+                }
+            }
+            if let Some(pattern) = opened {
+                self.session.open_pattern(track, pattern);
+                self.roll.refit();
+            }
             if !others.is_empty() {
                 self.import(others);
             }

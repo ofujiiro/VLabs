@@ -541,3 +541,117 @@ fn a_files_sustain_pedal_holds_its_notes() {
         "the pedal is not a curve"
     );
 }
+
+/// A file of a melody (channel 1) and a kick drum (channel 10), a quarter
+/// note each, at 480 ticks per quarter.
+fn melody_and_drums() -> Vec<u8> {
+    let event = |tick: u64, kind: EventKind| midi::Event { tick, kind };
+    let file = midi::MidiFile {
+        format: 0,
+        timing: Timing::PerQuarter(480),
+        tracks: vec![midi::Track::new(vec![
+            event(
+                0,
+                EventKind::NoteOn {
+                    channel: 0,
+                    key: 64,
+                    velocity: 100,
+                },
+            ),
+            event(
+                0,
+                EventKind::NoteOn {
+                    channel: 9,
+                    key: 36,
+                    velocity: 100,
+                },
+            ),
+            event(
+                480,
+                EventKind::NoteOff {
+                    channel: 0,
+                    key: 64,
+                },
+            ),
+            event(
+                480,
+                EventKind::NoteOff {
+                    channel: 9,
+                    key: 36,
+                },
+            ),
+            event(
+                480,
+                EventKind::NoteOn {
+                    channel: 0,
+                    key: 67,
+                    velocity: 100,
+                },
+            ),
+            event(
+                960,
+                EventKind::NoteOff {
+                    channel: 0,
+                    key: 67,
+                },
+            ),
+        ])],
+    };
+    midi::write(&file)
+}
+
+#[test]
+fn a_file_put_into_a_track_plays_there_and_makes_no_new_track() {
+    let song = midi::import(&melody_and_drums()).unwrap();
+    let mut project = Project::starter("P", "Piano");
+    let synth = project.add_track("Lead", Instrument::Synth(SynthPreset::Lead.settings()));
+    // The synth already plays something in bar 2: the file makes room.
+    let old = project.add_pattern_for(synth, "Old", Ticks::WHOLE);
+    project.add_clip(synth, Ticks::WHOLE, Ticks::WHOLE * 2, old);
+    let tracks = project.tracks.len();
+
+    let pattern = song
+        .add_into(&mut project, synth, Ticks::WHOLE, "Tune")
+        .unwrap();
+    assert_eq!(project.tracks.len(), tracks, "no new track");
+    let keys: Vec<u8> = project
+        .pattern(pattern)
+        .unwrap()
+        .notes
+        .iter()
+        .map(|n| n.key)
+        .collect();
+    assert_eq!(keys, [64, 67], "the synth takes the melody, not the drums");
+    let clips = &project.track(synth).unwrap().clips;
+    assert_eq!(clips[0].start, Ticks::WHOLE);
+    assert_eq!(clips[0].pattern(), Some(pattern));
+    assert!(
+        clips
+            .iter()
+            .all(|c| c.pattern() != Some(old) || c.start >= Ticks::WHOLE * 2),
+        "what the synth had there made room"
+    );
+
+    // A drum track takes the file's drums.
+    let (drums, _) = project.add_drums_with_pattern("Drums", "Beat", ACOUSTIC_KIT, 1, 1);
+    let beat = song
+        .add_into(&mut project, drums, Ticks::ZERO, "Beat 2")
+        .unwrap();
+    let keys: Vec<u8> = project
+        .pattern(beat)
+        .unwrap()
+        .notes
+        .iter()
+        .map(|n| n.key)
+        .collect();
+    assert_eq!(keys, [36]);
+
+    // A file without notes adds nothing.
+    let empty = midi::import(&midi::write(&midi::song_to_midi(&Project::empty()))).unwrap();
+    let before = project.clone();
+    assert_eq!(
+        empty.add_into(&mut project, synth, Ticks::ZERO, "Empty"),
+        None
+    );
+    assert_eq!(project, before);
+}

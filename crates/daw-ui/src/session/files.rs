@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use daw_formats::dawproject::{self, ImportNames};
 use daw_formats::midi::{self, ImportedTrack};
-use daw_model::{Instrument, Ticks};
+use daw_model::{Instrument, PatternId, Ticks};
 
 use super::Session;
 use crate::text;
@@ -118,7 +118,8 @@ impl Session {
 
     /// Imports files into the song: sound files as audio clips, MIDI files
     /// as new tracks of notes, each at `at` (sound on `track` if it is an
-    /// audio track). Song files are not imported (they open).
+    /// audio track; a MIDI file's notes into `track` if it plays notes,
+    /// decision 0034). Song files are not imported (they open).
     pub fn import_files(
         &mut self,
         files: Vec<PathBuf>,
@@ -147,8 +148,18 @@ impl Session {
                 )
             })
             .partition(|f| SongFile::of(f) == Some(SongFile::Midi));
+        let notes_track = track.filter(|&t| {
+            self.project()
+                .track(t)
+                .is_some_and(|t| !t.instrument.is_audio())
+        });
         for file in midi_files {
-            self.import_midi(&file, at);
+            match notes_track {
+                Some(into) => {
+                    self.import_midi_into(&file, into, at);
+                }
+                None => self.import_midi(&file, at),
+            }
         }
         if !others.is_empty() {
             self.import_audio(others, track, at);
@@ -180,6 +191,45 @@ impl Session {
             self.focus_track(first);
         }
         self.set_status(text::imported_midi(&shown(path), added.len()));
+    }
+
+    /// Puts a MIDI file's notes into a track the song has (decision 0034:
+    /// a file dropped on the synth plays on the synth, no new piano track),
+    /// as a new pattern placed at `at`'s bar (one undo step). Returns it.
+    pub fn import_midi_into(
+        &mut self,
+        path: &Path,
+        track: daw_model::TrackId,
+        at: Ticks,
+    ) -> Option<PatternId> {
+        let song = match std::fs::read(path)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| midi::import(&bytes).map_err(|e| e.to_string()))
+        {
+            Ok(song) => song,
+            Err(error) => {
+                self.set_status(text::could_not_import(&shown(path), &error));
+                return None;
+            }
+        };
+        let name = path.file_stem().map_or_else(
+            || text::pattern_name(1),
+            |s| s.to_string_lossy().into_owned(),
+        );
+        let added = self.doc.edit(text::EDIT_IMPORT_MIDI, |p| {
+            song.add_into(p, track, at, &name)
+        });
+        let Some(pattern) = added else {
+            self.set_status(text::no_notes_in(&shown(path)));
+            return None;
+        };
+        let track_name = self
+            .project()
+            .track(track)
+            .map_or_else(String::new, |t| t.name.clone());
+        self.focus_track(track);
+        self.set_status(text::imported_midi_into(&shown(path), &track_name));
+        Some(pattern)
     }
 
     /// Writes the song as a DAWproject file (its sound and plugin

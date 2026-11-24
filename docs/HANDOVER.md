@@ -402,6 +402,16 @@ controller compatibility"), decision 0033, version 1.3.0 with its notes.
   and cut: with the cut each chord is silent 50 ms after its end (-150
   dB), naturally it rings at -9 to -16 dB; no click at the cuts. That
   recording is what found the SoundFont reverb ringing on after a cut.
+- **A MIDI file into a track** (the owner's next request, in French: "put
+  a MIDI file into the synth, it automatically creates a piano"), decision
+  0034, part of 1.3: `ImportedSong::add_into` (one pattern, drums or the
+  rest, curves for instruments that take them, `clear_span` before the
+  clip) and the shared `place`; `Session::import_midi_into`;
+  `import_files` sends MIDI files to a dropped-on track of notes; the song
+  view takes any track row as the drop's track; the pattern view sends
+  MIDI files dropped on it to its track and opens the new pattern.
+  Checked: format and session tests, and on the virtual screen a file
+  dragged from the library onto the piano's row became a pattern there.
 
 ## Next session: start here
 
@@ -410,6 +420,8 @@ controller compatibility"), decision 0033, version 1.3.0 with its notes.
    their controller (ROADMAP.md: "MIDI controllers: things to try"): keys,
    pads, both wheels, pedals, knobs given settings, buttons given
    commands, transport buttons. Nothing was tried with a real device.
+   Also ask them to drop a MIDI file on the synth's row (ROADMAP.md: "A
+   MIDI file into a track: things to try").
 1. Ask the owner how 1.2 goes (ROADMAP.md: "Moving several at once:
    things to try"): selecting and moving several tracks and clips, and an
    export with a loop set.

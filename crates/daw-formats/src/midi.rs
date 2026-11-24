@@ -1309,69 +1309,142 @@ impl ImportedSong {
         name: impl Fn(&ImportedTrack) -> String,
         pattern: &str,
     ) -> Vec<TrackId> {
-        let at = at.max(Ticks::ZERO);
         let mut added = Vec::new();
         for imported in &self.tracks {
             let track = project.add_track(&name(imported), imported.instrument.clone());
-            let end = imported
-                .notes
-                .iter()
-                .map(Note::end)
-                .max()
-                .unwrap_or(Ticks::ZERO);
-            // Whole bars, from the bar where the notes land.
-            let bars_from = project.meter.position(at).bar;
-            let start = project.meter.bar_start(bars_from);
-            let shift = at - start;
-            let mut bars = 1;
-            while project.meter.bar_start(bars_from + bars) - start < end + shift && bars < 100_000
-            {
-                bars += 1;
-            }
-            let length = project.meter.bar_start(bars_from + bars) - start;
-            let id = project.add_pattern_for(track, pattern, length);
-            let (notes, lyrics): (Vec<Note>, Vec<Option<String>>) = imported
+            let notes: Vec<(Note, Option<String>)> = imported
                 .notes
                 .iter()
                 .zip(imported.lyrics.iter().chain(std::iter::repeat(&None)))
-                .map(|(n, lyric)| {
-                    (
-                        Note {
-                            start: n.start + shift,
-                            ..*n
-                        },
-                        lyric.clone(),
-                    )
-                })
-                .filter(|(n, _)| n.start < length)
-                .unzip();
-            let ids = project.add_notes(id, &notes);
-            let lyrics: Vec<(NoteId, String)> = ids
-                .into_iter()
-                .zip(lyrics)
-                .filter_map(|(id, lyric)| Some((id, lyric?)))
+                .map(|(n, lyric)| (*n, lyric.clone()))
                 .collect();
-            project.set_lyrics(id, &lyrics);
-            // The file's curves, moved with the notes, inside the pattern.
-            if let Some(pattern) = project.pattern_mut(id) {
-                for lane in &imported.controls {
-                    let points: Vec<ControlPoint> = lane
-                        .points
-                        .iter()
-                        .map(|p| ControlPoint {
-                            at: p.at + shift,
-                            value: p.value,
-                        })
-                        .filter(|p| p.at < length)
-                        .collect();
-                    pattern.set_control(lane.control, points);
-                }
-            }
-            project.add_clip(track, start, length, id);
+            place(project, track, &notes, &imported.controls, at, pattern);
             added.push(track);
         }
         added
     }
+
+    /// Puts the file's notes into a track the song already has (decision
+    /// 0034: a file dropped on the synth plays on the synth), as one new
+    /// pattern of whole bars from `at`, placed where it lands (what the
+    /// track had there makes room, as for a take). A drum track takes the
+    /// file's drums, another track the rest (or everything, if the file
+    /// has only the one kind). Returns the new pattern, or `None` if the
+    /// track is not there or plays no notes.
+    pub fn add_into(
+        &self,
+        project: &mut Project,
+        track: TrackId,
+        at: Ticks,
+        pattern: &str,
+    ) -> Option<daw_model::PatternId> {
+        let instrument = project.track(track)?.instrument.clone();
+        if instrument.is_audio() {
+            return None;
+        }
+        let drums = instrument.is_drums();
+        let matching: Vec<&ImportedTrack> = self
+            .tracks
+            .iter()
+            .filter(|t| t.instrument.is_drums() == drums)
+            .collect();
+        let chosen: Vec<&ImportedTrack> = if matching.is_empty() {
+            self.tracks.iter().collect()
+        } else {
+            matching
+        };
+        let mut notes: Vec<(Note, Option<String>)> = chosen
+            .iter()
+            .flat_map(|t| {
+                t.notes
+                    .iter()
+                    .zip(t.lyrics.iter().chain(std::iter::repeat(&None)))
+                    .map(|(n, lyric)| (*n, lyric.clone()))
+            })
+            .collect();
+        if notes.is_empty() {
+            return None;
+        }
+        notes.sort_by_key(|(n, _)| (n.start, n.key));
+        // One curve per controller: the first track's that has it.
+        let mut controls: Vec<ControlLane> = Vec::new();
+        if instrument.takes_controls() {
+            for lane in chosen.iter().flat_map(|t| t.controls.iter()) {
+                if !controls.iter().any(|l| l.control == lane.control) {
+                    controls.push(lane.clone());
+                }
+            }
+        }
+        Some(place(project, track, &notes, &controls, at, pattern))
+    }
+}
+
+/// Places notes (with their lyrics) and curves, from the start of a file,
+/// on a track at `at`: one pattern of whole bars from the bar where they
+/// land, and a clip playing it (what the track had there makes room).
+/// Returns the pattern.
+fn place(
+    project: &mut Project,
+    track: TrackId,
+    notes: &[(Note, Option<String>)],
+    controls: &[ControlLane],
+    at: Ticks,
+    pattern: &str,
+) -> daw_model::PatternId {
+    let at = at.max(Ticks::ZERO);
+    let end = notes
+        .iter()
+        .map(|(n, _)| n.end())
+        .max()
+        .unwrap_or(Ticks::ZERO);
+    // Whole bars, from the bar where the notes land.
+    let bars_from = project.meter.position(at).bar;
+    let start = project.meter.bar_start(bars_from);
+    let shift = at - start;
+    let mut bars = 1;
+    while project.meter.bar_start(bars_from + bars) - start < end + shift && bars < 100_000 {
+        bars += 1;
+    }
+    let length = project.meter.bar_start(bars_from + bars) - start;
+    let id = project.add_pattern_for(track, pattern, length);
+    let (notes, lyrics): (Vec<Note>, Vec<Option<String>>) = notes
+        .iter()
+        .map(|(n, lyric)| {
+            (
+                Note {
+                    start: n.start + shift,
+                    ..*n
+                },
+                lyric.clone(),
+            )
+        })
+        .filter(|(n, _)| n.start < length)
+        .unzip();
+    let ids = project.add_notes(id, &notes);
+    let lyrics: Vec<(NoteId, String)> = ids
+        .into_iter()
+        .zip(lyrics)
+        .filter_map(|(id, lyric)| Some((id, lyric?)))
+        .collect();
+    project.set_lyrics(id, &lyrics);
+    // The file's curves, moved with the notes, inside the pattern.
+    if let Some(pattern) = project.pattern_mut(id) {
+        for lane in controls {
+            let points: Vec<ControlPoint> = lane
+                .points
+                .iter()
+                .map(|p| ControlPoint {
+                    at: p.at + shift,
+                    value: p.value,
+                })
+                .filter(|p| p.at < length)
+                .collect();
+            pattern.set_control(lane.control, points);
+        }
+    }
+    project.clear_span(track, start, start + length, None);
+    project.add_clip(track, start, length, id);
+    id
 }
 
 #[cfg(test)]

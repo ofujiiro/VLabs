@@ -501,7 +501,8 @@ or moved.
 - **Click a sound to hear it**; click it again to stop.
 - **Drag** a sound onto the song to put it there, on the beat where you let
   go; **double-click** puts it at the play position. MIDI files become
-  tracks of notes, SoundFonts and SFZ instruments become instrument tracks.
+  tracks of notes (or, let go on a track's row, go into that track: see
+  below), SoundFonts and SFZ instruments become instrument tracks.
 - The **Search** field looks through every folder at once, for every word
   you type ("kick hard").
 - Right-click a folder on the left to look through it again (after adding
@@ -534,6 +535,15 @@ including a recording that was in progress.
   same; dropping a song file opens it, a SoundFont or an SFZ instrument
   becomes an instrument track, plugins go to the Plugins window and
   folders to the library.
+- **A MIDI file into an instrument you already have:** drop it (from your
+  desktop or the library) on that track's row in the song, the synth's
+  say: its notes become a new pattern there, named after the file, from
+  the bar where you let go, and no new track appears. A drum track takes
+  the file's drums, other tracks its other parts. Dropping a MIDI file on
+  a pattern open in the piano roll or the step grid does the same for
+  that pattern's track, at the play position, and opens the new pattern.
+  The new pattern replaces what the track played in those bars;
+  <kbd>Ctrl+Z</kbd> gives it back.
 - **Export…** (<kbd>Ctrl+E</kbd>) makes, from the song:
   - **a sound file**: WAV or FLAC (FLAC is about half the size, with nothing
     lost), in studio quality (24-bit, 48 kHz) or CD quality (16-bit,

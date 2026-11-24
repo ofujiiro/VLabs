@@ -1130,6 +1130,50 @@ You need a MIDI keyboard or controller (any USB one).
 - Songs with curves or assignments are format 12: older copies of VLabs
   refuse them.
 
+## A MIDI file into a track (the owner's request, November 2026)
+
+Decision 0034. "Be able to put a MIDI file into the synth (it
+automatically creates a piano)." Part of 1.3.
+
+- [x] A MIDI file let go on a track of notes (the synth, a plugin, the
+      piano, drums), on its row in the song, from the desktop or the
+      library, goes into that track as one new pattern named after the
+      file, from the bar where it lands; no new track
+- [x] Dropped from the desktop on an open pattern, it goes into that
+      pattern's track at the play position and the new pattern opens
+- [x] A drum track takes the file's drums, other tracks its other parts
+      (or everything if the file has only one kind); instruments that take
+      curves get its bends and controllers
+- [x] The new pattern replaces what the track played in those bars; one
+      undo step
+- [x] Checked: a format test (notes, drums, curves, the span replaced, no
+      new track), a session test (drop on the piano's row, undo, a drop
+      below the tracks still making a track), and the real program on the
+      virtual screen (a file dragged from the library onto the piano's row
+      became a pattern there)
+
+### A MIDI file into a track: things to try
+
+1. Add the synth (**+ Instrument…**, **Synth**). Drag a MIDI file from
+   your desktop, or from the library (**F6**), onto the synth's row: a
+   pattern named after the file appears there, and no piano track.
+2. Play it: the synth plays the melody. **Ctrl+Z** takes it away.
+3. Drop a MIDI file with drums on the **Drums** row: the drum part lands
+   there.
+4. Double-click a pattern to open it, then drop a MIDI file from your
+   desktop on the piano roll: the file's notes become a new pattern of that
+   track, opened.
+5. Drop the same file below the tracks: it still makes new tracks, as
+   before.
+
+### A MIDI file into a track: known gaps
+
+- A file of several instruments dropped on one track plays them all on
+  that instrument (drop it below the tracks to keep them apart).
+- Library drags onto the open pattern are not taken yet; drag onto the
+  track's row in the song instead. Import… (Ctrl+I) still makes new
+  tracks.
+
 ## Later (not in v1, not designed out)
 
 VST2 (clean-room headers and a licensing check first), a 32-bit plugin

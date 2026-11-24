@@ -524,3 +524,50 @@ fn a_take_on_drums_keeps_no_curves() {
     assert_eq!(keys(&s), [36], "the hit is recorded");
     assert!(s.pattern().controls.is_empty(), "drums are not bent");
 }
+
+#[test]
+fn a_midi_file_dropped_on_a_track_goes_into_it() {
+    let (mut s, _processor) = new_song();
+    let piano = piano_track(&s);
+    let path = temp_path("tune").with_extension("mid");
+    let mut project = daw_model::Project::starter("Tune", "Piano");
+    let (_, pattern) = project.first_pattern().unwrap();
+    project.add_note(
+        pattern,
+        daw_model::Note {
+            id: daw_model::NoteId(0),
+            start: Ticks::ZERO,
+            length: Ticks::QUARTER,
+            key: 72,
+            velocity: 0.8,
+            pitch_offset: 0.0,
+        },
+    );
+    let bytes = daw_formats::midi::write(&daw_formats::midi::song_to_midi(&project));
+    std::fs::write(&path, bytes).unwrap();
+    let tracks = s.project().tracks.len();
+
+    s.import_files(vec![path.clone()], Some(piano), Ticks::ZERO);
+    assert_eq!(s.project().tracks.len(), tracks, "no new piano track");
+    let into: Vec<u8> = s
+        .project()
+        .track_patterns(piano)
+        .flat_map(|p| p.notes.iter().map(|n| n.key))
+        .collect();
+    assert!(
+        into.contains(&72),
+        "the notes are on the piano track: {into:?}"
+    );
+    s.undo();
+    assert!(
+        !s.project()
+            .track_patterns(piano)
+            .any(|p| p.notes.iter().any(|n| n.key == 72)),
+        "one undo takes it back"
+    );
+
+    // Dropped away from the tracks, it still makes tracks of its own.
+    s.import_files(vec![path.clone()], None, Ticks::ZERO);
+    assert_eq!(s.project().tracks.len(), tracks + 1);
+    std::fs::remove_file(path).ok();
+}
