@@ -12,6 +12,7 @@ mod arrange;
 mod audio;
 mod audio_store;
 mod conductor;
+mod controls;
 mod files;
 mod kits;
 mod library;
@@ -317,6 +318,9 @@ pub struct Session {
     preview: library::Preview,
     /// The status line says which instruments are being read.
     reading_notice: bool,
+    /// What the controllers did during the take being recorded (decision
+    /// 0033), written into the pattern when it ends.
+    recorded_moves: Vec<controls::RecordedMove>,
 }
 
 /// Writes a recovery copy of the song at once and waits until it is on
@@ -403,6 +407,7 @@ impl Session {
             safety: None,
             preview: library::Preview::default(),
             reading_notice: false,
+            recorded_moves: Vec::new(),
         };
         session.selection_revision = session.doc.revision();
         session.load_song_audio();
@@ -547,6 +552,7 @@ impl Session {
                 swing: daw_model::Swing::default(),
                 lyrics: std::collections::BTreeMap::new(),
                 expression: std::collections::BTreeMap::new(),
+                controls: Vec::new(),
             })
         })
     }
@@ -747,6 +753,12 @@ impl Session {
                     count: 0,
                 });
                 self.recording_held.clear();
+                self.recorded_moves.clear();
+            }
+            EngineEvent::RecordedControl { control, value, at } => {
+                if self.take.is_some() {
+                    self.add_recorded_move(control, value, at);
+                }
             }
             EngineEvent::RecordingNoteStarted {
                 key,
@@ -774,7 +786,19 @@ impl Session {
             }
             EngineEvent::RecordingStopped => {
                 if let Some(take) = self.take.take() {
-                    self.set_status(text::recorded(take.count));
+                    // The take's undo step keeps the notes' name when it
+                    // has notes.
+                    let label = if take.count > 0 {
+                        text::edit_record(take.count)
+                    } else {
+                        text::EDIT_RECORD_CONTROLS.to_owned()
+                    };
+                    let curves = self.write_recorded_moves(take.merge_key, &label);
+                    self.set_status(if take.count == 0 && curves {
+                        text::RECORDED_CONTROLS.to_owned()
+                    } else {
+                        text::recorded(take.count)
+                    });
                     self.take_finished = true;
                 }
                 self.recording_held.clear();

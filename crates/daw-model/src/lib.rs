@@ -3,6 +3,7 @@
 #![doc = include_str!("../README.md")]
 
 mod automation;
+pub mod controls;
 mod document;
 pub mod expression;
 pub mod lyrics;
@@ -19,6 +20,7 @@ pub use automation::{
     AutomationLane, AutomationPoint, AutomationTarget, gain_volume, pan_value, value_pan,
     volume_gain,
 };
+pub use controls::{ControlKind, ControlLane, ControlPoint};
 pub use document::{Document, HISTORY_LIMIT};
 pub use mixer::{
     ChainPlace, CompressorSettings, DelaySettings, DelayTime, Effect, EffectKind, EffectParam,
@@ -31,7 +33,8 @@ pub use song::{
     ACOUSTIC_KIT, AudioFile, AudioId, BUILTIN_PIANO, CLIP_PITCH_RANGE, ChannelStrip, Clip,
     ClipContent, ClipId, DEFAULT_VELOCITY, ELECTRONIC_KIT, EffectId, Instrument, KIT_FIRST_KEY,
     KIT_MAX_PADS, KitPad, MAX_KEY, Note, NoteId, NoteShape, PadSetting, Pattern, PatternId,
-    PlayedNote, SoundSource, Swing, Track, TrackId, default_step, free_kit_key, pitch_speed,
+    PlayedControl, PlayedNote, SoundSource, Swing, Track, TrackId, default_step, free_kit_key,
+    pitch_speed,
 };
 pub use synth::{
     LfoShape, SynthEnvelope, SynthFilter, SynthOscillator, SynthPreset, SynthSettings, SynthWave,

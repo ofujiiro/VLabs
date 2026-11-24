@@ -202,6 +202,8 @@ pub const EDIT_TEMPO: &str = "change tempo";
 pub const EDIT_TIME_SIGNATURE: &str = "change time signature";
 pub const EDIT_LOOP: &str = "change loop";
 pub const EDIT_PATTERN_LENGTH: &str = "change pattern length";
+pub const EDIT_CONTROL_CURVE: &str = "change a controller's curve";
+pub const EDIT_RECORD_CONTROLS: &str = "record the controllers";
 
 pub fn edit_record(count: usize) -> String {
     if count == 1 {
@@ -361,6 +363,8 @@ pub fn undone(label: &str) -> String {
 pub fn redone(label: &str) -> String {
     format!("Redone: {label}")
 }
+
+pub const RECORDED_CONTROLS: &str = "Recorded what the controller's wheels and pedals did";
 
 pub fn recorded(count: usize) -> String {
     match count {
@@ -2351,3 +2355,73 @@ pub const EDIT_REMOVE_CLIPS: &str = "remove clips";
 pub const EDIT_DUPLICATE_CLIPS: &str = "duplicate clips";
 pub const TRACK_HEADER_HINT: &str = "Click to select · Ctrl+click to add or remove · Shift+click for a range · drag up or down to move · double-click to rename";
 pub const SELECTION_BOX: &str = "Selection box";
+
+// ----- MIDI controllers (decision 0033)
+
+/// A controller's name, as the piano roll's lane and the MIDI window say it.
+pub fn control_name(control: daw_model::ControlKind) -> String {
+    use daw_model::ControlKind;
+    match control {
+        ControlKind::PitchBend => "Bend".to_owned(),
+        ControlKind::Pressure => "Pressure".to_owned(),
+        ControlKind::Controller(1) => "Modulation".to_owned(),
+        ControlKind::Controller(2) => "Breath".to_owned(),
+        ControlKind::Controller(7) => "Volume".to_owned(),
+        ControlKind::Controller(10) => "Pan".to_owned(),
+        ControlKind::Controller(11) => "Expression".to_owned(),
+        ControlKind::Controller(number) => format!("Controller {number}"),
+    }
+}
+
+/// What a curve in the piano roll's lane is, for its tooltip.
+pub fn control_hint(control: daw_model::ControlKind) -> String {
+    use daw_model::ControlKind;
+    let what = match control {
+        ControlKind::PitchBend => "The pitch wheel: how far notes are bent, up or down.".to_owned(),
+        ControlKind::Pressure => {
+            "How hard the keys were pressed once down (aftertouch).".to_owned()
+        }
+        ControlKind::Controller(1) => "The modulation wheel: how much vibrato.".to_owned(),
+        ControlKind::Controller(11) => "The expression pedal: how loud.".to_owned(),
+        ControlKind::Controller(number) => {
+            format!("MIDI controller {number}, as the instrument uses it.")
+        }
+    };
+    format!(
+        "{what} Recorded from a MIDI controller, or drawn: click to add a point, drag it, right-click to remove it."
+    )
+}
+
+/// The accessible name of a point of a curve in the piano roll's lane.
+pub fn control_point(control: daw_model::ControlKind, index: usize) -> String {
+    format!("{} point {}", control_name(control), index + 1)
+}
+
+/// The accessible name of the curve area in the piano roll's lane.
+pub fn control_curve(control: daw_model::ControlKind) -> String {
+    format!("{} curve", control_name(control))
+}
+
+/// The accessible name of a curve's button in the piano roll's lane switch.
+pub fn curve_lane(control: daw_model::ControlKind) -> String {
+    format!("{} lane", control_name(control))
+}
+
+/// The tooltip of a curve's button in the piano roll's lane switch.
+pub fn show_curve(control: daw_model::ControlKind) -> String {
+    use daw_model::ControlKind;
+    match control {
+        ControlKind::PitchBend => {
+            "Show how the pitch wheel bends the notes (recorded from a MIDI controller, or drawn)"
+                .to_owned()
+        }
+        ControlKind::Controller(1) => {
+            "Show how much vibrato the modulation wheel adds (recorded from a MIDI controller, or drawn)"
+                .to_owned()
+        }
+        other => format!(
+            "Show what the {} does here (right-click for the pattern's other controllers)",
+            control_name(other).to_lowercase()
+        ),
+    }
+}

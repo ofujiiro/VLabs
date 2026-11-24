@@ -2,6 +2,7 @@
 
 #![doc = include_str!("../README.md")]
 
+pub mod control_lane;
 pub mod effect_ui;
 pub mod export;
 pub mod icons;

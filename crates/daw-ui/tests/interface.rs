@@ -3886,3 +3886,68 @@ fn a_controllers_keys_light_up_and_its_transport_buttons_play_stop_and_record() 
         "back to the start"
     );
 }
+
+#[test]
+fn the_lane_draws_and_edits_the_pitch_wheels_curve() {
+    use daw_model::ControlKind;
+    let bend = ControlKind::PitchBend;
+    let mut f = fixture();
+    // An instrument that takes curves offers them beside velocity.
+    f.harness.get_by_label(&text::curve_lane(bend)).click();
+    f.harness.run_steps(3);
+    let curve = f.harness.get_by_label(&text::control_curve(bend)).rect();
+
+    // A click high in the lane, a little way in: the wheel up there.
+    let spot = egui::pos2(curve.left() + 120.0, curve.top() + 8.0);
+    f.click(spot, Modifiers::NONE);
+    let points = f.session().control_points(bend);
+    assert_eq!(points.len(), 1, "{points:?}");
+    assert!(points[0].value > 0.8, "near the top: {points:?}");
+    assert!(points[0].at > Ticks::ZERO);
+
+    // Dragged down near the middle, the point lands exactly at rest.
+    let point = f
+        .harness
+        .get_by_label(&text::control_point(bend, 0))
+        .rect()
+        .center();
+    let middle = egui::pos2(point.x, curve.center().y + 2.0);
+    f.drag(point, middle, Modifiers::NONE);
+    let points = f.session().control_points(bend);
+    assert_eq!(points.len(), 1);
+    assert_eq!(points[0].value, 0.0, "unbent: {points:?}");
+
+    // A second point lower down, to the right: a bend down.
+    let low = egui::pos2(curve.left() + 240.0, curve.bottom() - 6.0);
+    f.click(low, Modifiers::NONE);
+    let points = f.session().control_points(bend);
+    assert_eq!(points.len(), 2);
+    assert!(points[1].value < -0.8, "{points:?}");
+
+    // Right-click removes a point; undo brings it back.
+    let first = f
+        .harness
+        .get_by_label(&text::control_point(bend, 0))
+        .rect()
+        .center();
+    f.right_click(first);
+    assert_eq!(f.session().control_points(bend).len(), 1);
+    f.workspace_mut().session_mut().undo();
+    f.harness.run_steps(2);
+    assert_eq!(f.session().control_points(bend).len(), 2);
+
+    // The drawn curve is heard: the engine's program bends.
+    assert!(f.session().pattern().control(bend).is_some());
+}
+
+#[test]
+fn drum_tracks_offer_no_curves() {
+    let f = beat();
+    assert!(!f.session().takes_controls(), "drums are not bent");
+    assert!(
+        f.harness
+            .query_by_label(&text::curve_lane(daw_model::ControlKind::PitchBend))
+            .is_none(),
+        "drums are not bent"
+    );
+}

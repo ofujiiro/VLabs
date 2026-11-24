@@ -202,6 +202,7 @@ impl Project {
             swing: Swing::default(),
             lyrics: std::collections::BTreeMap::new(),
             expression: std::collections::BTreeMap::new(),
+            controls: Vec::new(),
         }));
         id
     }

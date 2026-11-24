@@ -8,8 +8,9 @@ use daw_dsp::effects::{
     CompressorParams, DelayParams, EffectParams, EqParams, LimiterParams, ReverbParams,
 };
 use daw_model::{
-    AutomationTarget, Clip, ClipContent, ClipId, DelayTime, Effect, EffectId, EffectKind, MeterMap,
-    PatternId, Project, Region, TempoMap, TempoPiece, Ticks, TrackId, seconds_per_tick,
+    AutomationTarget, Clip, ClipContent, ClipId, ControlKind, DelayTime, Effect, EffectId,
+    EffectKind, MeterMap, PatternId, Project, Region, TempoMap, TempoPiece, Ticks, TrackId,
+    seconds_per_tick,
 };
 use std::sync::Arc;
 
@@ -161,6 +162,90 @@ impl AudioSpan {
     }
 }
 
+/// A stretch of a controller's curve, as one clip plays it (decision
+/// 0033): from its start to its end in song ticks, (tick, value) points in
+/// time order, the first at the start and the last at the end.
+#[derive(Clone, Debug)]
+pub(crate) struct ControlSpan {
+    pub start: f64,
+    pub end: f64,
+    pub points: Vec<(f64, f32)>,
+}
+
+/// A controller's curves over the song, as the audio thread plays them.
+#[derive(Clone, Debug)]
+pub(crate) struct CompiledControl {
+    pub control: ControlKind,
+    /// Sorted by start; clips on a track do not overlap (where they do, the
+    /// one starting last plays).
+    pub spans: Vec<ControlSpan>,
+    /// The value last sent to the instrument (NaN before any).
+    pub last: f32,
+}
+
+impl CompiledControl {
+    /// The curve's value at a tick, inside a clip that has it; `None`
+    /// outside.
+    pub fn value_at(&self, at: f64) -> Option<f32> {
+        let next = self.spans.partition_point(|s| s.start <= at);
+        let span = self.spans[..next].last().filter(|s| at < s.end)?;
+        let points = &span.points;
+        // Of two points at the same tick (where the pattern starts again),
+        // the second holds from there.
+        let after = points.partition_point(|p| p.0 <= at);
+        let (t0, v0) = points[after.checked_sub(1)?];
+        let Some(&(t1, v1)) = points.get(after) else {
+            return Some(v0);
+        };
+        if t1 <= t0 {
+            return Some(v1);
+        }
+        #[allow(clippy::cast_possible_truncation, reason = "a fraction from 0 to 1")]
+        let t = ((at - t0) / (t1 - t0)) as f32;
+        Some(v0 + (v1 - v0) * t)
+    }
+}
+
+/// The curves of a track's clips, by controller (decision 0033).
+fn controls(project: &Project, track: &daw_model::Track) -> Vec<CompiledControl> {
+    let mut by_control: std::collections::BTreeMap<ControlKind, Vec<ControlSpan>> =
+        std::collections::BTreeMap::new();
+    for (clip, pattern) in track
+        .clips
+        .iter()
+        .filter_map(|clip| Some((clip, project.pattern(clip.pattern()?)?)))
+    {
+        for played in pattern.controls_played_in(clip) {
+            #[allow(clippy::cast_precision_loss, reason = "tick positions fit easily")]
+            let points: Vec<(f64, f32)> = played
+                .points
+                .iter()
+                .map(|&(at, value)| (at.0 as f64, played.control.clamp(value)))
+                .collect();
+            let (Some(first), Some(last)) = (points.first(), points.last()) else {
+                continue;
+            };
+            let span = ControlSpan {
+                start: first.0,
+                end: last.0,
+                points,
+            };
+            by_control.entry(played.control).or_default().push(span);
+        }
+    }
+    by_control
+        .into_iter()
+        .map(|(control, mut spans)| {
+            spans.sort_by(|a, b| a.start.total_cmp(&b.start));
+            CompiledControl {
+                control,
+                spans,
+                last: f32::NAN,
+            }
+        })
+        .collect()
+}
+
 /// One track's part of the program.
 #[derive(Clone, Debug)]
 pub(crate) struct TrackProgram {
@@ -194,6 +279,8 @@ pub(crate) struct TrackProgram {
     /// For each audio clip, the furthest end of it and those before it (to
     /// find the clips a block reaches quickly).
     pub audio_reach: Vec<i64>,
+    /// What the track's patterns have the controllers do (decision 0033).
+    pub controls: Vec<CompiledControl>,
 }
 
 impl TrackProgram {
@@ -695,6 +782,12 @@ pub(crate) fn compile(
                 Some(spans) => (spans.clone(), reach_of(spans)),
                 None => audio_spans(project, track, sample_rate, &sound_of),
             };
+            // A voice sings its own pitch line: no controllers.
+            let controls = if voice.is_some() {
+                Vec::new()
+            } else {
+                controls(project, track)
+            };
             Some(TrackProgram {
                 slot,
                 notes,
@@ -711,6 +804,7 @@ pub(crate) fn compile(
                 synth_base,
                 audio,
                 audio_reach,
+                controls,
             })
         })
         .collect();

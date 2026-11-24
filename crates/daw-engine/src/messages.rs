@@ -94,6 +94,16 @@ pub enum EngineEvent {
         /// Where it ended.
         end: Ticks,
     },
+    /// A controller moved while recording notes (decision 0033): one point
+    /// of its curve.
+    RecordedControl {
+        /// Which controller.
+        control: daw_model::ControlKind,
+        /// Where it was moved to.
+        value: f32,
+        /// When, in the song.
+        at: Ticks,
+    },
     /// Recording ended (the transport stopped).
     RecordingStopped,
     /// The count-in is over: recording sound has started. The take's sound

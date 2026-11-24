@@ -121,6 +121,10 @@ pub struct Pattern {
     /// sung some other way than the plain one, by note.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub expression: BTreeMap<NoteId, NoteExpression>,
+    /// What a MIDI controller's wheels, pedals and knobs do as it plays
+    /// (decision 0033): one curve per controller, by controller.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub controls: Vec<crate::ControlLane>,
 }
 
 /// The step length of a new pattern: a sixteenth note.
@@ -262,6 +266,89 @@ impl Pattern {
         }
         notes.sort_by_key(|n| (n.start, n.key));
         notes
+    }
+
+    /// The curves a clip of this pattern plays (decision 0033), each as
+    /// points in song ticks: the pattern repeated from the clip's offset for
+    /// the clip's length, swung as its notes are, with a point at the clip's
+    /// start and end so the curve is exact inside the clip. Like
+    /// [`Self::played_in`], the one place that says it, for the engine and
+    /// the exporters.
+    pub fn controls_played_in(&self, clip: &Clip) -> Vec<PlayedControl> {
+        let ClipContent::Pattern { offset, .. } = clip.content else {
+            return Vec::new();
+        };
+        if self.length <= Ticks::ZERO {
+            return Vec::new();
+        }
+        let mut played = Vec::new();
+        for lane in self.controls.iter().filter(|l| !l.points.is_empty()) {
+            // The curve over one turn of the pattern, from its start to its
+            // end, with the turn's ends pinned.
+            #[allow(clippy::cast_precision_loss, reason = "tick positions fit easily")]
+            let at = |t: Ticks| lane.value_at(t.0 as f64).unwrap_or(0.0);
+            let mut turn: Vec<(Ticks, f32)> = vec![(Ticks::ZERO, at(Ticks::ZERO))];
+            turn.extend(
+                lane.points
+                    .iter()
+                    .filter(|p| p.at > Ticks::ZERO && p.at < self.length)
+                    .map(|p| (p.at, p.value)),
+            );
+            turn.push((self.length, at(self.length)));
+            let mut points: Vec<(Ticks, f32)> = Vec::new();
+            let mut cycle_start = clip.start - offset;
+            while cycle_start < clip.end() {
+                for &(tick, value) in &turn {
+                    let song = cycle_start + self.swing.apply(tick);
+                    points.push((song, value));
+                }
+                cycle_start += self.length;
+            }
+            // Only what lies in the clip, with its edges pinned.
+            let value_at = |t: Ticks| -> f32 {
+                let next = points.partition_point(|p| p.0 <= t);
+                match (next.checked_sub(1).map(|i| points[i]), points.get(next)) {
+                    (Some(a), Some(b)) if b.0 > a.0 => {
+                        #[allow(clippy::cast_precision_loss, reason = "tick spans fit easily")]
+                        let f = (t.0 - a.0.0) as f32 / (b.0.0 - a.0.0) as f32;
+                        a.1 + (b.1 - a.1) * f
+                    }
+                    (Some(a), _) => a.1,
+                    (None, Some(b)) => b.1,
+                    (None, None) => 0.0,
+                }
+            };
+            let mut inside = vec![(clip.start, value_at(clip.start))];
+            inside.extend(
+                points
+                    .iter()
+                    .filter(|p| p.0 > clip.start && p.0 < clip.end())
+                    .copied(),
+            );
+            inside.push((clip.end(), value_at(clip.end())));
+            inside.dedup_by(|b, a| a.0 == b.0 && a.1.to_bits() == b.1.to_bits());
+            played.push(PlayedControl {
+                control: lane.control,
+                points: inside,
+            });
+        }
+        played
+    }
+
+    /// The curve of a controller, if the pattern has one (decision 0033).
+    pub fn control(&self, control: crate::ControlKind) -> Option<&crate::ControlLane> {
+        self.controls.iter().find(|l| l.control == control)
+    }
+
+    /// Sets a controller's curve (no points removes it), keeping the
+    /// curves in the controllers' order.
+    pub fn set_control(&mut self, control: crate::ControlKind, points: Vec<crate::ControlPoint>) {
+        self.controls.retain(|l| l.control != control);
+        let lane = crate::ControlLane::new(control, points);
+        if !lane.points.is_empty() {
+            self.controls.push(lane);
+            self.controls.sort_by_key(|l| l.control);
+        }
     }
 
     /// Sorts the notes into the canonical order (by start, then key).
@@ -454,6 +541,16 @@ impl Instrument {
         matches!(
             self,
             Self::SoundFont { .. } | Self::Drums { .. } | Self::Sfz { .. } | Self::Kit { .. }
+        )
+    }
+
+    /// Whether a MIDI controller's wheels and pedals change how this
+    /// instrument plays (decision 0033): everything but drum kits, voices
+    /// (which sing their own pitch line) and audio tracks.
+    pub fn takes_controls(&self) -> bool {
+        matches!(
+            self,
+            Self::SoundFont { .. } | Self::Synth(_) | Self::Sfz { .. } | Self::Plugin(_)
         )
     }
 
@@ -672,6 +769,17 @@ impl Default for ChannelStrip {
             solo: false,
         }
     }
+}
+
+/// A controller's curve as a clip plays it (decision 0033): points in
+/// song ticks, from the clip's start to its end, a straight line between.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlayedControl {
+    /// What it moves.
+    pub control: crate::ControlKind,
+    /// (song tick, value), in time order, the first at the clip's start and
+    /// the last at its end.
+    pub points: Vec<(Ticks, f32)>,
 }
 
 /// What a clip plays.
@@ -909,6 +1017,91 @@ mod tests {
         assert!(
             (off - ideal).0.abs() < Ticks::note_value(1, 8).0 / 200,
             "67 % is within half a percent of the triplet feel"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss, reason = "test arithmetic")]
+    fn a_clip_plays_a_curve_repeated_from_its_offset_and_pinned_at_its_edges() {
+        use crate::{ControlKind, ControlPoint};
+        let bar = Ticks::WHOLE;
+        let mut pattern = Pattern {
+            id: PatternId(1),
+            name: String::new(),
+            length: bar,
+            notes: Vec::new(),
+            track: None,
+            step: default_step(),
+            swing: Swing::default(),
+            lyrics: BTreeMap::new(),
+            expression: BTreeMap::new(),
+            controls: Vec::new(),
+        };
+        // The wheel rises over the first half of the bar, then holds.
+        pattern.set_control(
+            ControlKind::PitchBend,
+            vec![
+                ControlPoint {
+                    at: Ticks::ZERO,
+                    value: 0.0,
+                },
+                ControlPoint {
+                    at: bar / 2,
+                    value: 1.0,
+                },
+            ],
+        );
+        // A clip from bar 4 for a bar and a half, starting a quarter of the
+        // way into the pattern.
+        let clip = Clip {
+            id: ClipId(9),
+            start: bar * 4,
+            length: bar + bar / 2,
+            content: ClipContent::Pattern {
+                pattern: PatternId(1),
+                offset: bar / 4,
+            },
+        };
+        let played = pattern.controls_played_in(&clip);
+        assert_eq!(played.len(), 1);
+        let curve = &played[0];
+        assert_eq!(curve.control, ControlKind::PitchBend);
+        let at = |t: Ticks| -> f32 {
+            let next = curve.points.partition_point(|p| p.0 <= t);
+            let (a, b) = (curve.points[next - 1], curve.points.get(next).copied());
+            match b {
+                Some(b) if b.0 > a.0 => {
+                    a.1 + (b.1 - a.1) * (t.0 - a.0.0) as f32 / (b.0.0 - a.0.0) as f32
+                }
+                _ => a.1,
+            }
+        };
+        assert_eq!(curve.points.first().map(|p| p.0), Some(clip.start));
+        assert_eq!(curve.points.last().map(|p| p.0), Some(clip.end()));
+        assert!((at(clip.start) - 0.5).abs() < 1e-6, "starts a quarter in");
+        assert!(
+            (at(bar * 4 + bar / 4) - 1.0).abs() < 1e-6,
+            "the top at half a bar"
+        );
+        assert!((at(bar * 4 + bar / 2) - 1.0).abs() < 1e-6, "held");
+        // The pattern's turn ends and begins again at the rest, three
+        // quarters into the clip.
+        let turn = bar * 4 + bar * 3 / 4;
+        assert!(
+            (at(turn) - 0.0).abs() < 1e-6,
+            "the next turn starts at rest"
+        );
+        assert!((at(turn + bar / 4) - 0.5).abs() < 1e-6, "and rises again");
+        assert!(
+            (at(clip.end()) - 1.0).abs() < 1e-6,
+            "pinned at the clip's end"
+        );
+        assert!(
+            curve
+                .points
+                .iter()
+                .all(|p| p.0 >= clip.start && p.0 <= clip.end()),
+            "nothing outside the clip"
         );
     }
 

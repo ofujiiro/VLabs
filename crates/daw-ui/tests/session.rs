@@ -442,3 +442,64 @@ fn an_sfz_track_says_it_is_being_read_then_plays() {
     s.key_up(Key::Q);
     let _ = std::fs::remove_dir_all(folder);
 }
+
+#[test]
+fn recording_the_pitch_wheel_keeps_its_curve_with_the_take() {
+    let (mut s, mut processor) = session();
+    s.set_count_in_bars(0);
+    s.toggle_record();
+    run(&mut s, &mut processor, 0.1);
+    assert!(s.is_recording());
+    let midi = s.engine().midi_sender();
+
+    // A note, with the wheel pushed up in a straight line, held, then let
+    // back down: dozens of moves.
+    midi.note_on(60, 0.8);
+    run(&mut s, &mut processor, 0.05);
+    for step in 0..=20 {
+        midi.control(daw_engine::Control::PitchBend(step as f32 / 20.0));
+        run(&mut s, &mut processor, 0.01);
+    }
+    run(&mut s, &mut processor, 0.2);
+    for step in (0..=20).rev() {
+        midi.control(daw_engine::Control::PitchBend(step as f32 / 20.0));
+        run(&mut s, &mut processor, 0.01);
+    }
+    midi.note_off(60);
+    run(&mut s, &mut processor, 0.05);
+    s.toggle_record();
+    run(&mut s, &mut processor, 0.05);
+
+    assert_eq!(keys(&s), [60]);
+    let curve = s.control_points(daw_model::ControlKind::PitchBend);
+    assert!(
+        (3..=8).contains(&curve.len()),
+        "the gesture is kept as a handful of points: {curve:?}"
+    );
+    let top = curve.iter().map(|p| p.value).fold(f32::MIN, f32::max);
+    assert!((top - 1.0).abs() < 1e-6, "it reaches the top: {curve:?}");
+    assert!(
+        curve.first().is_some_and(|p| p.value.abs() < 0.06)
+            && curve.last().is_some_and(|p| p.value.abs() < 1e-6),
+        "it starts near rest and ends at rest: {curve:?}"
+    );
+    assert!(
+        curve.windows(2).all(|w| w[0].at < w[1].at),
+        "in time order: {curve:?}"
+    );
+    let note = s.pattern().notes[0];
+    assert!(
+        curve.first().is_some_and(|p| p.at >= note.start)
+            && curve
+                .last()
+                .is_some_and(|p| p.at <= note.end() + Ticks::note_value(1, 16)),
+        "the bend lies over the note it bent"
+    );
+    s.undo();
+    assert!(keys(&s).is_empty(), "one undo removes the take's notes");
+    assert!(
+        s.control_points(daw_model::ControlKind::PitchBend)
+            .is_empty(),
+        "and its curve"
+    );
+}
