@@ -2513,3 +2513,17 @@ pub fn forget_knob(setting: &str) -> String {
 pub fn button_learned(control: daw_model::MidiControl, command: &str) -> String {
     format!("{} now runs {command}", midi_control_title(control))
 }
+
+/// A controller's name on the piano roll lane's narrow buttons (the full
+/// name is in their tooltips and accessible names).
+pub fn control_button(control: daw_model::ControlKind) -> String {
+    use daw_model::ControlKind;
+    match control {
+        ControlKind::Controller(1) => "Mod".to_owned(),
+        ControlKind::Controller(11) => "Expr.".to_owned(),
+        ControlKind::Controller(number) if !matches!(number, 2 | 7 | 10) => {
+            format!("CC {number}")
+        }
+        other => control_name(other),
+    }
+}

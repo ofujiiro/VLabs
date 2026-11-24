@@ -488,6 +488,7 @@ fn playing(ui: &mut Ui, gesture: &mut Gesture, s: &mut SynthSettings, track: Tra
     grid(ui, ("synth-playing", track.0), |ui| {
         // Glide only works with one note at a time.
         let label = ui.label(text::SYNTH_GLIDE);
+        let before = s.glide_seconds;
         let response = ui
             .add_enabled(
                 s.mono,
@@ -503,6 +504,9 @@ fn playing(ui: &mut Ui, gesture: &mut Gesture, s: &mut SynthSettings, track: Tra
             .on_hover_text(text::SYNTH_GLIDE_HINT);
         gesture.add(&response);
         gesture.link(&response, 22);
+        if crate::widgets::right_pressed(ui, &response) {
+            s.glide_seconds = before;
+        }
         ui.end_row();
         slider_row(
             ui,

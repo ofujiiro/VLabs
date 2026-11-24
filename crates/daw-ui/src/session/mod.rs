@@ -1601,6 +1601,10 @@ impl Session {
         self.paste_at = None;
         self.take = None;
         self.recording_held.clear();
+        self.recorded_moves.clear();
+        // A setting of the old song no longer waits for a knob.
+        self.midi_learning = None;
+        self.midi_turn = None;
         self.audio_focus = None;
         self.audio_take = None;
         self.finishing.clear();

@@ -6,7 +6,7 @@
 
 use std::ops::RangeInclusive;
 
-use egui::{Response, Ui};
+use egui::{PointerButton, Response, Ui};
 
 /// Whether a slider drag started or ended this frame. The caller begins a
 /// gesture before applying the change and ends it after, so a whole drag
@@ -34,6 +34,18 @@ impl Gesture {
     pub fn link(&mut self, response: &Response, param: u32) {
         self.sliders.push((response.clone(), param));
     }
+}
+
+/// Whether the right button is what presses on a slider this frame: a
+/// right-click opens the slider's menu (decision 0033) and must not move it,
+/// though egui's sliders follow any button.
+pub fn right_pressed(ui: &Ui, response: &Response) -> bool {
+    response.interact_pointer_pos().is_some()
+        && ui.input(|i| {
+            !i.pointer.primary_down()
+                && (i.pointer.button_down(PointerButton::Secondary)
+                    || i.pointer.button_released(PointerButton::Secondary))
+        })
 }
 
 /// How a slider's value is shown and scaled.
@@ -82,6 +94,7 @@ pub fn slider_row(
 ) -> Response {
     let name = ui.label(label);
     let format = scale.format;
+    let before = *value;
     let mut response = ui
         .add(
             egui::Slider::new(value, range)
@@ -94,6 +107,9 @@ pub fn slider_row(
                 .clamping(egui::SliderClamping::Always),
         )
         .labelled_by(name.id);
+    if right_pressed(ui, &response) {
+        *value = before;
+    }
     if !hint.is_empty() {
         response = response.on_hover_text(hint);
     }

@@ -301,7 +301,7 @@ impl App {
         if let Some(midi) = &self.midi {
             // Controllers switched off in the MIDI window are let go.
             midi.set_off(&self.workspace.settings().midi_off);
-            self.workspace.set_midi_devices(midi.seen());
+            self.workspace.set_midi_devices(midi.seen(), midi.problem());
             let connected = midi.connected();
             for name in connected.iter().filter(|n| !self.known_midi.contains(n)) {
                 self.workspace

@@ -619,7 +619,7 @@ impl PianoRoll {
     fn curve_choice(control: ControlKind) -> (LaneKind, String, String, String) {
         (
             LaneKind::Control(control),
-            text::control_name(control),
+            text::control_button(control),
             text::show_curve(control),
             text::curve_lane(control),
         )

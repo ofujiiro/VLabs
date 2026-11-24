@@ -3981,7 +3981,13 @@ fn a_knob_given_the_synths_cutoff_from_its_slider_moves_it() {
         .harness
         .get_by_role_and_label(egui::accesskit::Role::Slider, text::CUTOFF)
         .rect();
+    let untouched = f.session().synth_settings(synth).unwrap();
     f.right_click(slider.center());
+    assert_eq!(
+        f.session().synth_settings(synth),
+        Some(untouched),
+        "the right-click opens the menu without moving the slider"
+    );
     f.harness.get_by_label(text::ASSIGN_MIDI_CONTROL).click();
     f.harness.run_steps(3);
     assert_eq!(f.session().status(), Some(text::WAITING_FOR_KNOB));

@@ -23,6 +23,8 @@ const SHOWN_KEYS: u8 = 37;
 pub const KEYS_HEIGHT: f32 = 96.0;
 
 /// The header line: status on the left, keyboard settings on the right.
+/// While the program waits for a MIDI control (decision 0033), that comes
+/// first, whatever else there is to say.
 pub fn header(
     ui: &mut Ui,
     session: &mut Session,
@@ -32,7 +34,13 @@ pub fn header(
 ) {
     let p = Palette::of(ui.ctx());
     ui.horizontal_centered(|ui| {
-        if let Some(notice) = notice {
+        if session.learning_midi().is_some() {
+            ui.label(
+                RichText::new(text::WAITING_FOR_KNOB)
+                    .color(p.accent)
+                    .strong(),
+            );
+        } else if let Some(notice) = notice {
             ui.label(RichText::new(notice).color(p.record));
         } else if let Some(status) = session.status() {
             ui.label(RichText::new(status).color(p.text_weak));

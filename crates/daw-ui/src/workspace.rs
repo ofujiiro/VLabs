@@ -230,8 +230,10 @@ pub struct Workspace {
     button_learning: Option<Command>,
     /// The buttons held down (a command runs once per press).
     buttons_down: std::collections::HashSet<daw_model::MidiControl>,
-    /// Every MIDI controller found, as the program says.
+    /// Every MIDI controller found, as the program says, and why MIDI is
+    /// unavailable, if it is.
     midi_devices: Vec<String>,
+    midi_problem: Option<String>,
 }
 
 impl Workspace {
@@ -286,13 +288,15 @@ impl Workspace {
             button_learning: None,
             buttons_down: std::collections::HashSet::new(),
             midi_devices: Vec::new(),
+            midi_problem: None,
         }
     }
 
-    /// The MIDI controllers found (connected or switched off), for the
-    /// MIDI window.
-    pub fn set_midi_devices(&mut self, devices: Vec<String>) {
+    /// The MIDI controllers found (connected or switched off), and why
+    /// MIDI is unavailable if it is, for the MIDI window.
+    pub fn set_midi_devices(&mut self, devices: Vec<String>, problem: Option<String>) {
         self.midi_devices = devices;
+        self.midi_problem = problem;
     }
 
     /// Opens the MIDI controllers window (decision 0033).
@@ -1949,7 +1953,9 @@ impl Workspace {
             ui.label(RichText::new(text::MIDI_WINDOW_INTRO).color(p.text_weak));
             ui.add_space(10.0);
             ui.label(RichText::new(text::MIDI_DEVICES).strong());
-            if self.midi_devices.is_empty() {
+            if let Some(problem) = &self.midi_problem {
+                ui.label(RichText::new(problem).small().color(p.record));
+            } else if self.midi_devices.is_empty() {
                 ui.label(RichText::new(text::NO_MIDI_DEVICES).small().weak());
             }
             for device in self.midi_devices.clone() {
@@ -2068,7 +2074,7 @@ impl Workspace {
     ) -> (Option<Command>, Option<String>, bool) {
         let mut close = false;
         let response = modal("shortcuts", ctx).show(ctx, |ui| {
-            ui.set_width(900.0);
+            ui.set_width(960.0);
             ui.heading(text::SHORTCUTS);
             ui.label(RichText::new(text::SHORTCUTS_HINT).small().weak());
             ui.label(RichText::new(text::MIDI_BUTTONS_HINT).small().weak());
