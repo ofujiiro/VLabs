@@ -1079,7 +1079,8 @@ Decision 0033. "Add MIDI controller compatibility."
       the slider menus, the shortcuts window and the MIDI window; the real
       program on the virtual screen (screenshots of each new part)
 - [x] Version 1.3.0, notes in `docs/releases/v1.3.0.md`
-- [ ] Merged into `main` and released
+- [x] Merged into `main` (pull request 10) and released as 1.3.0 on
+      November 24, 2026
 - [ ] The owner's hands-on check with a real controller
 
 ### MIDI controllers: things to try

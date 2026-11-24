@@ -270,7 +270,7 @@ commit too.
   installer and zip were built and packed on Windows by the workflow but
   not run (no Windows here).
 
-## Built on November 24, 2026 as 1.3.0, not yet merged or tried by the owner
+## Released on November 24, 2026 as 1.3.0 (pull request 10), not yet tried by the owner
 
 On the branch `claude/zen-noether-qvaw3z` (the owner's request: "add MIDI
 controller compatibility"), decision 0033, version 1.3.0 with its notes.
@@ -415,9 +415,9 @@ controller compatibility"), decision 0033, version 1.3.0 with its notes.
 
 ## Next session: start here
 
-0. MIDI controllers (1.3.0, on `claude/zen-noether-qvaw3z`): ask the owner
-   whether to merge it into `main` and release it, and to try it with
-   their controller (ROADMAP.md: "MIDI controllers: things to try"): keys,
+0. MIDI controllers (1.3.0, released: the release's files were downloaded,
+   their checksums matched and the AppImage started on the virtual
+   screen): ask the owner to try it with their controller (ROADMAP.md: "MIDI controllers: things to try"): keys,
    pads, both wheels, pedals, knobs given settings, buttons given
    commands, transport buttons. Nothing was tried with a real device.
    Also ask them to drop a MIDI file on the synth's row (ROADMAP.md: "A
