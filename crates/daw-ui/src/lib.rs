@@ -2,12 +2,15 @@
 
 #![doc = include_str!("../README.md")]
 
+pub mod control_lane;
 pub mod effect_ui;
 pub mod export;
 pub mod icons;
 pub mod keyboard_panel;
 pub mod keys;
 pub mod library_panel;
+pub mod midi;
+pub mod midi_ui;
 pub mod mixer;
 pub mod piano_roll;
 pub mod pitch_line;

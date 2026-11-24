@@ -12,8 +12,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use daw_dsp::{Click, Instrument, NoteEvent, SongPosition};
-use daw_model::{Region, TICKS_PER_QUARTER, Ticks};
+use daw_dsp::{BlockEvent, BlockEventKind, Click, Control, Instrument, SongPosition};
+use daw_model::{ControlKind, Region, TICKS_PER_QUARTER, Ticks};
 
 use crate::messages::{
     Command, EngineEvent, Garbage, LiveNote, NO_TARGET, Outgoing, RECORD_ACTIVE, RECORD_COUNT_IN,
@@ -36,20 +36,92 @@ const MAX_EVENTS: usize = 512;
 /// make one block late.
 const MAX_COMMANDS_PER_BLOCK: usize = 256;
 
+/// Something an instrument is to do at a frame of the stretch being
+/// rendered.
 #[derive(Clone, Copy)]
 struct Scheduled {
     offset: usize,
-    key: u8,
-    velocity: f32,
-    on: bool,
+    kind: BlockEventKind,
 }
 
-const NO_EVENT: Scheduled = Scheduled {
-    offset: 0,
-    key: 0,
-    velocity: 0.0,
-    on: false,
-};
+impl Scheduled {
+    const fn on(offset: usize, key: u8, velocity: f32) -> Self {
+        Self {
+            offset,
+            kind: BlockEventKind::NoteOn { key, velocity },
+        }
+    }
+
+    const fn off(offset: usize, key: u8) -> Self {
+        Self {
+            offset,
+            kind: BlockEventKind::NoteOff { key },
+        }
+    }
+
+    /// The order of events at the same frame: ends first, then controllers
+    /// (so a note starting with a bend starts bent), then starts.
+    fn order(&self) -> (usize, u8) {
+        let rank = match self.kind {
+            BlockEventKind::NoteOff { .. } => 0,
+            BlockEventKind::Control(_) => 1,
+            BlockEventKind::NoteOn { .. } => 2,
+        };
+        (self.offset, rank)
+    }
+}
+
+const NO_EVENT: Scheduled = Scheduled::off(0, 0);
+
+/// No key held from a MIDI keyboard (see `EngineProcessor::live_keys`).
+const NO_SLOT: u16 = u16::MAX;
+
+/// How often a pattern's curves are looked at within a block, in frames
+/// (decision 0033): a bend moves in steps of 1.3 ms at 48 kHz.
+const CONTROL_STEP: usize = 64;
+
+/// The controllers, numbered: 0 to 127 the numbered controllers, then
+/// pressure, then the pitch wheel.
+const CONTROLS: usize = 130;
+const PRESSURE: usize = 128;
+const PITCH_BEND: usize = 129;
+
+/// A controller's number in the processor's tables.
+fn control_index(control: ControlKind) -> usize {
+    match control {
+        ControlKind::Controller(number) => usize::from(number & 0x7F),
+        ControlKind::Pressure => PRESSURE,
+        ControlKind::PitchBend => PITCH_BEND,
+    }
+}
+
+/// The controller with a number of the processor's tables.
+fn control_kind(index: usize) -> ControlKind {
+    match index {
+        PITCH_BEND => ControlKind::PitchBend,
+        PRESSURE => ControlKind::Pressure,
+        #[allow(clippy::cast_possible_truncation, reason = "below 128")]
+        number => ControlKind::Controller((number & 0x7F) as u8),
+    }
+}
+
+/// A curve's value as an instrument takes it.
+fn dsp_control(control: ControlKind, value: f32) -> Control {
+    match control {
+        ControlKind::PitchBend => Control::PitchBend(value),
+        ControlKind::Controller(number) => Control::Controller { number, value },
+        ControlKind::Pressure => Control::Pressure(value),
+    }
+}
+
+/// An instrument's controller as a curve's.
+fn model_control(control: Control) -> (ControlKind, f32) {
+    match control {
+        Control::PitchBend(value) => (ControlKind::PitchBend, value),
+        Control::Controller { number, value } => (ControlKind::Controller(number), value),
+        Control::Pressure(value) => (ControlKind::Pressure, value),
+    }
+}
 
 /// Per-slot playback state.
 struct SlotState {
@@ -60,6 +132,9 @@ struct SlotState {
     /// Keys played live and released while the pedal was down: they keep
     /// sounding (and recording) until the pedal comes up.
     sustained: [bool; 128],
+    /// Whether a MIDI keyboard's wheels or pedals moved this instrument
+    /// since it was last put back to rest (decision 0033).
+    live_moved: bool,
 }
 
 impl SlotState {
@@ -68,6 +143,7 @@ impl SlotState {
             held: [None; 128],
             sustain: false,
             sustained: [false; 128],
+            live_moved: false,
         }
     }
 }
@@ -104,6 +180,22 @@ pub struct EngineProcessor {
     max_block: usize,
     commands: rtrb::Consumer<Command>,
     live: rtrb::Consumer<LiveNote>,
+    /// The slot MIDI keyboards played at the last block ([`NO_TARGET`] for
+    /// none): when the focus moves, the slot left behind goes back to rest.
+    live_slot: usize,
+    /// For each key held down on a MIDI keyboard, the slot it went down on
+    /// ([`NO_SLOT`] for none): it comes up there, wherever the focus is by
+    /// then.
+    live_keys: [u16; 128],
+    /// Where each controller of the MIDI keyboards was last moved to (NaN
+    /// if never), so a take starts with them where they are.
+    live_values: [f32; CONTROLS],
+    /// The controllers the hand has moved during the take being recorded:
+    /// the pattern's old curves for them are not played meanwhile.
+    live_override: [bool; CONTROLS],
+    /// The controllers' moves to record at the end of this block's input
+    /// (NaN for none): one point per controller per block at most.
+    recorded_controls: [f32; CONTROLS],
     outgoing: rtrb::Producer<Outgoing>,
     shared: Arc<Shared>,
     program: Option<Box<Program>>,
@@ -130,8 +222,9 @@ pub struct EngineProcessor {
     click_left: Vec<f32>,
     click_right: Vec<f32>,
     events: Vec<Scheduled>,
-    /// The song's notes of one stretch, as instruments take them.
-    notes: Vec<NoteEvent>,
+    /// The song's notes and controllers of one stretch, as instruments
+    /// take them.
+    notes: Vec<BlockEvent>,
     /// Every effect, by its table entry (chains refer to entries).
     effects: Vec<Option<EffectSlot>>,
     /// The loudest output of each slot's track in this block.
@@ -223,6 +316,11 @@ impl EngineProcessor {
             max_block,
             commands,
             live,
+            live_slot: NO_TARGET,
+            live_keys: [NO_SLOT; 128],
+            live_values: [f32::NAN; CONTROLS],
+            live_override: [false; CONTROLS],
+            recorded_controls: [f32::NAN; CONTROLS],
             outgoing,
             shared,
             program: None,
@@ -418,17 +516,144 @@ impl EngineProcessor {
         }
         // Notes from MIDI keyboards go to the track that receives live input.
         let target = self.shared.live_target.load(Ordering::Relaxed);
+        let target = if target < MAX_SLOTS {
+            target
+        } else {
+            NO_TARGET
+        };
+        if target != self.live_slot {
+            // The focus moved: the instrument left behind goes back to rest
+            // (decision 0033).
+            if self.live_slot != NO_TARGET {
+                self.rest_live(self.live_slot);
+            }
+            self.live_slot = target;
+        }
         for _ in 0..MAX_COMMANDS_PER_BLOCK {
             let Ok(note) = self.live.pop() else { break };
-            if target == NO_TARGET {
-                continue;
-            }
             match note {
                 LiveNote::Note { key, velocity } if velocity > 0.0 => {
+                    if target == NO_TARGET {
+                        continue;
+                    }
+                    #[allow(clippy::cast_possible_truncation, reason = "slots < MAX_SLOTS")]
+                    {
+                        self.live_keys[usize::from(key & 0x7F)] = target as u16;
+                    }
                     self.note_on(target, key, velocity);
                 }
-                LiveNote::Note { key, .. } => self.note_off(target, key),
-                LiveNote::Sustain(down) => self.sustain(target, down),
+                LiveNote::Note { key, .. } => {
+                    // A key comes up on the instrument it went down on.
+                    let held =
+                        std::mem::replace(&mut self.live_keys[usize::from(key & 0x7F)], NO_SLOT);
+                    let slot = if held == NO_SLOT {
+                        target
+                    } else {
+                        usize::from(held)
+                    };
+                    if slot != NO_TARGET {
+                        self.note_off(slot, key);
+                    }
+                }
+                LiveNote::Sustain(true) => {
+                    if target != NO_TARGET {
+                        self.sustain(target, true);
+                    }
+                }
+                // The pedal comes up wherever it was holding notes.
+                LiveNote::Sustain(false) => {
+                    for slot in 0..MAX_SLOTS {
+                        if self.slots[slot].sustain {
+                            self.sustain(slot, false);
+                        }
+                    }
+                }
+                LiveNote::Control(control) => {
+                    let (kind, value) = model_control(control);
+                    self.live_values[control_index(kind)] = value;
+                    if target != NO_TARGET {
+                        self.live_control(target, control);
+                    }
+                }
+            }
+        }
+        self.flush_recorded_controls();
+    }
+
+    /// A wheel, pedal or knob of a MIDI keyboard moved (decision 0033).
+    /// While notes are recorded into that slot, the move is recorded too.
+    fn live_control(&mut self, slot: usize, control: Control) {
+        let Some(Some(instrument)) = self.instruments.get_mut(slot) else {
+            return;
+        };
+        instrument.control(control);
+        let plugin = instrument.plugin_instance().is_some();
+        self.slots[slot].live_moved = true;
+        if let Recording::Active { slot: recording } = self.recording
+            && recording == slot
+        {
+            let (kind, value) = model_control(control);
+            if records(kind, plugin) {
+                let index = control_index(kind);
+                self.live_override[index] = true;
+                self.recorded_controls[index] = value;
+            }
+        }
+    }
+
+    /// Sends the controllers' moves of this block to be recorded.
+    fn flush_recorded_controls(&mut self) {
+        if !matches!(self.recording, Recording::Active { .. }) {
+            return;
+        }
+        let at = self.position_ticks();
+        for index in 0..CONTROLS {
+            let value = std::mem::replace(&mut self.recorded_controls[index], f32::NAN);
+            if value.is_finite() {
+                self.send(Outgoing::Event(EngineEvent::RecordedControl {
+                    control: control_kind(index),
+                    value,
+                    at,
+                }));
+            }
+        }
+    }
+
+    /// Puts the controllers the song's curves moved back to rest (where they
+    /// have a resting place), when playback stops or moves: a bend in a
+    /// pattern does not stay bent.
+    fn rest_song_controls(&mut self) {
+        let Some(program) = self.program.as_deref_mut() else {
+            return;
+        };
+        for track in &mut program.tracks {
+            for control in &mut track.controls {
+                if !control.last.is_finite() {
+                    continue;
+                }
+                if let Some(rest) = control.control.rest()
+                    && (control.last - rest).abs() > 1e-6
+                    && let Some(Some(instrument)) = self.instruments.get_mut(track.slot)
+                {
+                    instrument.control(dsp_control(control.control, rest));
+                }
+                control.last = f32::NAN;
+            }
+        }
+    }
+
+    /// Puts what a MIDI keyboard moved on a slot back to rest: the wheel
+    /// centred, no modulation or pressure, full expression.
+    fn rest_live(&mut self, slot: usize) {
+        let Some(state) = self.slots.get_mut(slot) else {
+            return;
+        };
+        if !std::mem::take(&mut state.live_moved) {
+            return;
+        }
+        if let Some(Some(instrument)) = self.instruments.get_mut(slot) {
+            for control in Control::REST {
+                instrument.control(control);
             }
         }
     }
@@ -531,6 +756,7 @@ impl EngineProcessor {
                 #[allow(clippy::cast_precision_loss, reason = "tick positions fit easily")]
                 let at = at.0.max(0) as f64;
                 self.release_song_notes();
+                self.rest_song_controls();
                 self.position = at;
                 self.play_started_at = at;
                 self.settle_gains = true;
@@ -556,17 +782,7 @@ impl EngineProcessor {
                 velocity,
             } => self.note_on(slot, key, velocity),
             Command::NoteOff { slot, key } => self.note_off(slot, key),
-            Command::Panic => {
-                for instrument in self.instruments.iter_mut().flatten() {
-                    instrument.all_notes_off(true);
-                }
-                for slot in &mut self.slots {
-                    *slot = SlotState::new();
-                }
-                if let Some(old) = self.preview.take() {
-                    self.discard(Garbage::Sound(old.sound));
-                }
-            }
+            Command::Panic => self.panic(),
             Command::Preview(sound) => {
                 if let Some(old) = self.preview.take() {
                     self.discard(Garbage::Sound(old.sound));
@@ -577,6 +793,33 @@ impl EngineProcessor {
                     self.preview = Some(Preview { sound, at: 0 });
                 }
             }
+        }
+    }
+
+    /// Silences everything at once: every note, every controller back to
+    /// rest, the preview.
+    fn panic(&mut self) {
+        for instrument in self.instruments.iter_mut().flatten() {
+            instrument.all_notes_off(true);
+            for control in Control::REST {
+                instrument.control(control);
+            }
+        }
+        self.live_keys = [NO_SLOT; 128];
+        if let Some(program) = self.program.as_deref_mut() {
+            for control in program
+                .tracks
+                .iter_mut()
+                .flat_map(|t| t.controls.iter_mut())
+            {
+                control.last = f32::NAN;
+            }
+        }
+        for slot in &mut self.slots {
+            *slot = SlotState::new();
+        }
+        if let Some(old) = self.preview.take() {
+            self.discard(Garbage::Sound(old.sound));
         }
     }
 
@@ -659,8 +902,27 @@ impl EngineProcessor {
             self.reset_cursors();
         }
         let at = self.position_ticks();
-        if slot.is_some() {
+        if let Some(slot) = slot {
             self.send(Outgoing::Event(EngineEvent::RecordingStarted { at }));
+            // The take starts with the controllers where they are.
+            self.live_override = [false; CONTROLS];
+            self.recorded_controls = [f32::NAN; CONTROLS];
+            let plugin = self
+                .instruments
+                .get(slot)
+                .and_then(Option::as_ref)
+                .is_some_and(|i| i.plugin_instance().is_some());
+            for index in 0..CONTROLS {
+                let value = self.live_values[index];
+                let kind = control_kind(index);
+                if value.is_finite() && kind.rest() != Some(value) && records(kind, plugin) {
+                    self.send(Outgoing::Event(EngineEvent::RecordedControl {
+                        control: kind,
+                        value,
+                        at,
+                    }));
+                }
+            }
         } else {
             self.take.begin();
             self.send(Outgoing::Event(EngineEvent::AudioRecordingStarted {
@@ -687,9 +949,11 @@ impl EngineProcessor {
             }));
         }
         self.recording = Recording::Idle;
+        self.live_override = [false; CONTROLS];
         self.shared.recording.store(RECORD_IDLE, Ordering::Relaxed);
         self.shared.count_in_left.store(0, Ordering::Relaxed);
         self.release_song_notes();
+        self.rest_song_controls();
         if self.playing {
             self.playing = false;
             // Back to where playback started; a second stop goes to the start.
@@ -770,13 +1034,38 @@ impl EngineProcessor {
                 instance.set_params(params);
             }
         }
-        // Gains glide on from where the old program left them.
+        // Gains glide on from where the old program left them, and curves
+        // go on from what they last sent; a curve gone from a track puts its
+        // controller back to rest.
         let mut program = program;
         if let Some(old) = &self.program {
             for track in &mut program.tracks {
                 if let Some(previous) = old.tracks.iter().find(|t| t.slot == track.slot) {
                     track.current_left = previous.current_left;
                     track.current_right = previous.current_right;
+                    for control in &mut track.controls {
+                        if let Some(before) = previous
+                            .controls
+                            .iter()
+                            .find(|c| c.control == control.control)
+                        {
+                            control.last = before.last;
+                        }
+                    }
+                }
+            }
+            for previous in &old.tracks {
+                let kept = program.tracks.iter().find(|t| t.slot == previous.slot);
+                for control in &previous.controls {
+                    let still = kept
+                        .is_some_and(|t| t.controls.iter().any(|c| c.control == control.control));
+                    if let (false, true, Some(rest)) =
+                        (still, control.last.is_finite(), control.control.rest())
+                        && (control.last - rest).abs() > 1e-6
+                        && let Some(Some(instrument)) = self.instruments.get_mut(previous.slot)
+                    {
+                        instrument.control(dsp_control(control.control, rest));
+                    }
                 }
             }
         }
@@ -1102,7 +1391,10 @@ impl EngineProcessor {
                 .as_ref()
                 .and_then(|p| p.tracks.iter().position(|t| t.slot == slot));
             let count = match (song, track_index) {
-                (Some((from, to)), Some(index)) => self.schedule(index, from, to, len),
+                (Some((from, to)), Some(index)) => {
+                    let notes = self.schedule(index, from, to, len);
+                    self.schedule_controls(index, (from, to), len, notes)
+                }
                 _ => 0,
             };
             let automated = match (song, track_index) {
@@ -1148,15 +1440,13 @@ impl EngineProcessor {
                 continue;
             }
             let events = &mut self.events[..count];
-            events.sort_unstable_by_key(|e| (e.offset, e.on));
+            events.sort_unstable_by_key(Scheduled::order);
             self.notes.clear();
             for event in events.iter() {
                 if self.notes.len() < self.notes.capacity() {
-                    self.notes.push(NoteEvent {
+                    self.notes.push(BlockEvent {
                         offset: event.offset.min(len),
-                        key: event.key,
-                        velocity: event.velocity,
-                        on: event.on,
+                        kind: event.kind,
                     });
                 }
             }
@@ -1259,12 +1549,7 @@ impl EngineProcessor {
                 && end < to_tick
             {
                 if count < MAX_EVENTS {
-                    self.events[count] = Scheduled {
-                        offset: offset_of(end),
-                        key,
-                        velocity: 0.0,
-                        on: false,
-                    };
+                    self.events[count] = Scheduled::off(offset_of(end), key);
                     count += 1;
                 }
                 state.held[usize::from(key)] = None;
@@ -1283,30 +1568,18 @@ impl EngineProcessor {
             let slot = &mut state.held[usize::from(note.key & 0x7F)];
             if slot.is_some() {
                 // The key is already sounding: end it first.
-                self.events[count] = Scheduled {
-                    offset: at,
-                    key: note.key,
-                    velocity: 0.0,
-                    on: false,
-                };
+                self.events[count] = Scheduled::off(at, note.key);
                 count += 1;
             }
-            self.events[count] = Scheduled {
-                offset: at,
-                key: note.key,
-                velocity: note.velocity,
-                on: true,
-            };
+            self.events[count] = Scheduled::on(at, note.key, note.velocity);
             count += 1;
             if note.end < to_tick {
                 // Starts and ends inside this stretch.
                 if count < MAX_EVENTS {
-                    self.events[count] = Scheduled {
-                        offset: offset_of(note.end).max(at + 1).min(len.saturating_sub(1)),
-                        key: note.key,
-                        velocity: 0.0,
-                        on: false,
-                    };
+                    self.events[count] = Scheduled::off(
+                        offset_of(note.end).max(at + 1).min(len.saturating_sub(1)),
+                        note.key,
+                    );
                     count += 1;
                 }
                 *slot = None;
@@ -1316,6 +1589,56 @@ impl EngineProcessor {
         }
         if let Some(cursor) = self.cursors.get_mut(index) {
             *cursor = next;
+        }
+        count
+    }
+
+    /// Adds the moves of one program track's curves between two tick
+    /// positions to `self.events` after the first `count`, a look every
+    /// [`CONTROL_STEP`] frames; returns how many events there are now.
+    /// Outside the clips that have a curve, a controller with a resting
+    /// place goes back to it once.
+    fn schedule_controls(
+        &mut self,
+        index: usize,
+        (from, to): (f64, f64),
+        len: usize,
+        mut count: usize,
+    ) -> usize {
+        let recording = match self.recording {
+            Recording::Active { slot } => Some(slot),
+            _ => None,
+        };
+        let Some(program) = self.program.as_deref_mut() else {
+            return count;
+        };
+        let track = &mut program.tracks[index];
+        let taken_over = recording == Some(track.slot);
+        for control in &mut track.controls {
+            if taken_over && self.live_override[control_index(control.control)] {
+                continue;
+            }
+            let mut offset = 0;
+            while offset < len && count < MAX_EVENTS {
+                #[allow(clippy::cast_precision_loss, reason = "block sizes are small")]
+                let tick = from + (to - from) * (offset as f64 / len as f64);
+                let value = match control.value_at(tick) {
+                    Some(value) => Some(value),
+                    None if control.last.is_finite() => control.control.rest(),
+                    None => None,
+                };
+                if let Some(value) = value
+                    && (!control.last.is_finite() || (value - control.last).abs() > 1e-4)
+                {
+                    self.events[count] = Scheduled {
+                        offset,
+                        kind: BlockEventKind::Control(dsp_control(control.control, value)),
+                    };
+                    count += 1;
+                    control.last = value;
+                }
+                offset += CONTROL_STEP;
+            }
         }
         count
     }
@@ -1365,4 +1688,20 @@ impl EngineProcessor {
             &mut self.click_right[offset + cursor..offset + len],
         );
     }
+}
+
+/// Whether a take records a controller: the wheels, pressure and the
+/// expression pedal for every instrument, any other controller for a plugin
+/// (which may use it for anything); never the sustain pedal (which
+/// lengthens the notes instead), bank select or the channel mode messages.
+fn records(control: ControlKind, plugin: bool) -> bool {
+    control.is_recordable()
+        && (plugin
+            || matches!(
+                control,
+                ControlKind::PitchBend
+                    | ControlKind::Pressure
+                    | daw_model::controls::MODULATION
+                    | daw_model::controls::EXPRESSION
+            ))
 }

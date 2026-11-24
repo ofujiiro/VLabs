@@ -8,4 +8,4 @@ mod midi;
 
 pub use audio::{AudioCallback, AudioOutput, OutputMode, OutputStatus};
 pub use input::{AudioInput, InputCallback, InputStatus};
-pub use midi::{MidiInputs, MidiMessage, parse as parse_midi};
+pub use midi::{MidiInputs, MidiMessage, TransportMessage, parse as parse_midi};

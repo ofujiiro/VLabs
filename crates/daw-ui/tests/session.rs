@@ -442,3 +442,132 @@ fn an_sfz_track_says_it_is_being_read_then_plays() {
     s.key_up(Key::Q);
     let _ = std::fs::remove_dir_all(folder);
 }
+
+#[test]
+fn recording_the_pitch_wheel_keeps_its_curve_with_the_take() {
+    let (mut s, mut processor) = session();
+    s.set_count_in_bars(0);
+    s.toggle_record();
+    run(&mut s, &mut processor, 0.1);
+    assert!(s.is_recording());
+    let midi = s.engine().midi_sender();
+
+    // A note, with the wheel pushed up in a straight line, held, then let
+    // back down: dozens of moves.
+    midi.note_on(60, 0.8);
+    run(&mut s, &mut processor, 0.05);
+    for step in 0..=20 {
+        midi.control(daw_engine::Control::PitchBend(step as f32 / 20.0));
+        run(&mut s, &mut processor, 0.01);
+    }
+    run(&mut s, &mut processor, 0.2);
+    for step in (0..=20).rev() {
+        midi.control(daw_engine::Control::PitchBend(step as f32 / 20.0));
+        run(&mut s, &mut processor, 0.01);
+    }
+    midi.note_off(60);
+    run(&mut s, &mut processor, 0.05);
+    s.toggle_record();
+    run(&mut s, &mut processor, 0.05);
+
+    assert_eq!(keys(&s), [60]);
+    let curve = s.control_points(daw_model::ControlKind::PitchBend);
+    assert!(
+        (3..=8).contains(&curve.len()),
+        "the gesture is kept as a handful of points: {curve:?}"
+    );
+    let top = curve.iter().map(|p| p.value).fold(f32::MIN, f32::max);
+    assert!((top - 1.0).abs() < 1e-6, "it reaches the top: {curve:?}");
+    assert!(
+        curve.first().is_some_and(|p| p.value.abs() < 0.06)
+            && curve.last().is_some_and(|p| p.value.abs() < 1e-6),
+        "it starts near rest and ends at rest: {curve:?}"
+    );
+    assert!(
+        curve.windows(2).all(|w| w[0].at < w[1].at),
+        "in time order: {curve:?}"
+    );
+    let note = s.pattern().notes[0];
+    assert!(
+        curve.first().is_some_and(|p| p.at >= note.start)
+            && curve
+                .last()
+                .is_some_and(|p| p.at <= note.end() + Ticks::note_value(1, 16)),
+        "the bend lies over the note it bent"
+    );
+    s.undo();
+    assert!(keys(&s).is_empty(), "one undo removes the take's notes");
+    assert!(
+        s.control_points(daw_model::ControlKind::PitchBend)
+            .is_empty(),
+        "and its curve"
+    );
+}
+
+#[test]
+fn a_take_on_drums_keeps_no_curves() {
+    let (mut s, mut processor) = new_song();
+    let drums = s.project().tracks[0].id;
+    s.open_track(drums);
+    s.update();
+    s.set_count_in_bars(0);
+    s.toggle_record();
+    run(&mut s, &mut processor, 0.1);
+    let midi = s.engine().midi_sender();
+    midi.note_on(36, 0.8);
+    midi.control(daw_engine::Control::PitchBend(1.0));
+    run(&mut s, &mut processor, 0.2);
+    midi.note_off(36);
+    run(&mut s, &mut processor, 0.05);
+    s.toggle_record();
+    run(&mut s, &mut processor, 0.05);
+    assert_eq!(keys(&s), [36], "the hit is recorded");
+    assert!(s.pattern().controls.is_empty(), "drums are not bent");
+}
+
+#[test]
+fn a_midi_file_dropped_on_a_track_goes_into_it() {
+    let (mut s, _processor) = new_song();
+    let piano = piano_track(&s);
+    let path = temp_path("tune").with_extension("mid");
+    let mut project = daw_model::Project::starter("Tune", "Piano");
+    let (_, pattern) = project.first_pattern().unwrap();
+    project.add_note(
+        pattern,
+        daw_model::Note {
+            id: daw_model::NoteId(0),
+            start: Ticks::ZERO,
+            length: Ticks::QUARTER,
+            key: 72,
+            velocity: 0.8,
+            pitch_offset: 0.0,
+        },
+    );
+    let bytes = daw_formats::midi::write(&daw_formats::midi::song_to_midi(&project));
+    std::fs::write(&path, bytes).unwrap();
+    let tracks = s.project().tracks.len();
+
+    s.import_files(vec![path.clone()], Some(piano), Ticks::ZERO);
+    assert_eq!(s.project().tracks.len(), tracks, "no new piano track");
+    let into: Vec<u8> = s
+        .project()
+        .track_patterns(piano)
+        .flat_map(|p| p.notes.iter().map(|n| n.key))
+        .collect();
+    assert!(
+        into.contains(&72),
+        "the notes are on the piano track: {into:?}"
+    );
+    s.undo();
+    assert!(
+        !s.project()
+            .track_patterns(piano)
+            .any(|p| p.notes.iter().any(|n| n.key == 72)),
+        "one undo takes it back"
+    );
+
+    // Dropped away from the tracks, it still makes tracks of its own.
+    s.import_files(vec![path.clone()], None, Ticks::ZERO);
+    assert_eq!(s.project().tracks.len(), tracks + 1);
+    std::fs::remove_file(path).ok();
+}

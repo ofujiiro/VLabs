@@ -16,7 +16,10 @@ pub mod synth;
 pub mod voice;
 
 pub use click::Click;
-pub use instrument::{Instrument, InstrumentSettings, NoteEvent, NoteShape, SongPosition};
+pub use instrument::{
+    BlockEvent, BlockEventKind, Control, EXPRESSION, Instrument, InstrumentSettings, MODULATION,
+    NoteShape, Performance, SUSTAIN, SongPosition,
+};
 pub use sine::SineSynth;
 pub use soundfont::{PresetInfo, SOUNDFONT_BLOCK, SoundFontBank, SoundFontError, SoundFontPlayer};
 pub use synth::{Synth, SynthParams};

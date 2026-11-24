@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use rustysynth::{SoundFont, Synthesizer, SynthesizerSettings};
 
-use crate::Instrument;
+use crate::{Control, EXPRESSION, Instrument, MODULATION};
 
 /// A SoundFont loaded into memory, shared by every instrument that plays it.
 #[derive(Clone)]
@@ -207,5 +207,31 @@ impl Instrument for SoundFontPlayer {
 
     fn is_sounding(&self) -> bool {
         self.held_count > 0 || self.tail_frames > 0
+    }
+
+    /// The pitch wheel (two semitones each way, the synthesizer's default
+    /// range), the modulation wheel (the SoundFont's own vibrato) and the
+    /// expression pedal (decision 0033).
+    fn control(&mut self, control: Control) {
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "rounded and clamped to MIDI's ranges"
+        )]
+        match control.sane() {
+            Control::PitchBend(bend) => {
+                let value = (((bend + 1.0) * 8192.0).round() as i32).clamp(0, 16_383);
+                self.synth
+                    .process_midi_message(0, 0xE0, value & 0x7F, value >> 7);
+            }
+            Control::Controller {
+                number: number @ (MODULATION | EXPRESSION),
+                value,
+            } => {
+                let value = (value * 127.0).round() as i32;
+                self.synth
+                    .process_midi_message(0, 0xB0, i32::from(number), value);
+            }
+            Control::Controller { .. } | Control::Pressure(_) => {}
+        }
     }
 }

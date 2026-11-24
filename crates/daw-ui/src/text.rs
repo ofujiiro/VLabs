@@ -202,6 +202,8 @@ pub const EDIT_TEMPO: &str = "change tempo";
 pub const EDIT_TIME_SIGNATURE: &str = "change time signature";
 pub const EDIT_LOOP: &str = "change loop";
 pub const EDIT_PATTERN_LENGTH: &str = "change pattern length";
+pub const EDIT_CONTROL_CURVE: &str = "change a controller's curve";
+pub const EDIT_RECORD_CONTROLS: &str = "record the controllers";
 
 pub fn edit_record(count: usize) -> String {
     if count == 1 {
@@ -361,6 +363,8 @@ pub fn undone(label: &str) -> String {
 pub fn redone(label: &str) -> String {
     format!("Redone: {label}")
 }
+
+pub const RECORDED_CONTROLS: &str = "Recorded what the controller's wheels and pedals did";
 
 pub fn recorded(count: usize) -> String {
     match count {
@@ -1732,6 +1736,11 @@ pub fn could_not_import(name: &str, error: &str) -> String {
 }
 
 /// Said after a MIDI file's tracks were added to the song.
+/// Says a MIDI file's notes went into a track the song has (decision 0034).
+pub fn imported_midi_into(name: &str, track: &str) -> String {
+    format!("Imported {name} into {track}")
+}
+
 pub fn imported_midi(name: &str, tracks: usize) -> String {
     match tracks {
         1 => format!("Imported {name}: one track of notes"),
@@ -2351,3 +2360,175 @@ pub const EDIT_REMOVE_CLIPS: &str = "remove clips";
 pub const EDIT_DUPLICATE_CLIPS: &str = "duplicate clips";
 pub const TRACK_HEADER_HINT: &str = "Click to select · Ctrl+click to add or remove · Shift+click for a range · drag up or down to move · double-click to rename";
 pub const SELECTION_BOX: &str = "Selection box";
+
+// ----- MIDI controllers (decision 0033)
+
+/// A controller's name, as the piano roll's lane and the MIDI window say it.
+pub fn control_name(control: daw_model::ControlKind) -> String {
+    use daw_model::ControlKind;
+    match control {
+        ControlKind::PitchBend => "Bend".to_owned(),
+        ControlKind::Pressure => "Pressure".to_owned(),
+        ControlKind::Controller(1) => "Modulation".to_owned(),
+        ControlKind::Controller(2) => "Breath".to_owned(),
+        ControlKind::Controller(7) => "Volume".to_owned(),
+        ControlKind::Controller(10) => "Pan".to_owned(),
+        ControlKind::Controller(11) => "Expression".to_owned(),
+        ControlKind::Controller(number) => format!("Controller {number}"),
+    }
+}
+
+/// What a curve in the piano roll's lane is, for its tooltip.
+pub fn control_hint(control: daw_model::ControlKind) -> String {
+    use daw_model::ControlKind;
+    let what = match control {
+        ControlKind::PitchBend => "The pitch wheel: how far notes are bent, up or down.".to_owned(),
+        ControlKind::Pressure => {
+            "How hard the keys were pressed once down (aftertouch).".to_owned()
+        }
+        ControlKind::Controller(1) => "The modulation wheel: how much vibrato.".to_owned(),
+        ControlKind::Controller(11) => "The expression pedal: how loud.".to_owned(),
+        ControlKind::Controller(number) => {
+            format!("MIDI controller {number}, as the instrument uses it.")
+        }
+    };
+    format!(
+        "{what} Recorded from a MIDI controller, or drawn: click to add a point, drag it, right-click to remove it."
+    )
+}
+
+/// The accessible name of a point of a curve in the piano roll's lane.
+pub fn control_point(control: daw_model::ControlKind, index: usize) -> String {
+    format!("{} point {}", control_name(control), index + 1)
+}
+
+/// The accessible name of the curve area in the piano roll's lane.
+pub fn control_curve(control: daw_model::ControlKind) -> String {
+    format!("{} curve", control_name(control))
+}
+
+/// The accessible name of a curve's button in the piano roll's lane switch.
+pub fn curve_lane(control: daw_model::ControlKind) -> String {
+    format!("{} lane", control_name(control))
+}
+
+/// The tooltip of a curve's button in the piano roll's lane switch.
+pub fn show_curve(control: daw_model::ControlKind) -> String {
+    use daw_model::ControlKind;
+    match control {
+        ControlKind::PitchBend => {
+            "Show how the pitch wheel bends the notes (recorded from a MIDI controller, or drawn)"
+                .to_owned()
+        }
+        ControlKind::Controller(1) => {
+            "Show how much vibrato the modulation wheel adds (recorded from a MIDI controller, or drawn)"
+                .to_owned()
+        }
+        other => format!(
+            "Show what the {} does here (right-click for the pattern's other controllers)",
+            control_name(other).to_lowercase()
+        ),
+    }
+}
+
+/// A control of a MIDI controller, as the window names it: "controller 74,
+/// channel 1", "key C1, channel 10".
+pub fn midi_control(control: daw_model::MidiControl) -> String {
+    let channel = control.channel + 1;
+    match control.source {
+        daw_model::MidiSource::Controller(number) => {
+            format!("controller {number}, channel {channel}")
+        }
+        daw_model::MidiSource::Note(key) => format!("key {}, channel {channel}", note_name(key)),
+    }
+}
+
+/// A control of a MIDI controller, at the start of a line.
+pub fn midi_control_title(control: daw_model::MidiControl) -> String {
+    let name = midi_control(control);
+    let mut chars = name.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
+pub const ASSIGN_MIDI_CONTROL: &str = "Assign a MIDI control…";
+pub const ASSIGN_MIDI_CONTROL_HINT: &str =
+    "Then move a knob or fader on your MIDI controller: it will move this setting";
+pub const ASSIGN_OTHER_MIDI_CONTROL: &str = "Assign another MIDI control…";
+pub const FORGET_MIDI_CONTROL: &str = "Forget the MIDI control";
+pub const WAITING_FOR_KNOB: &str =
+    "Move a knob or fader on your MIDI controller to give it this setting (Escape stops waiting)";
+pub const STOPPED_WAITING_FOR_KNOB: &str = "No longer waiting for a MIDI control";
+pub const EDIT_ASSIGN_MIDI: &str = "assign a MIDI control";
+pub const EDIT_FORGET_MIDI: &str = "forget a MIDI control";
+pub const EDIT_MIDI_VOLUME: &str = "change volume from the MIDI controller";
+pub const EDIT_MIDI_SETTING: &str = "change a setting from the MIDI controller";
+
+/// Says which control now moves a setting.
+pub fn midi_learned(control: daw_model::MidiControl, setting: &str) -> String {
+    format!("{} now moves {setting}", midi_control_title(control))
+}
+
+/// A slider's menu line saying which control moves it.
+pub fn moved_by(control: daw_model::MidiControl) -> String {
+    format!("Moved by {}", midi_control(control))
+}
+
+pub const MIDI_CONTROLLERS_MENU: &str = "MIDI controllers…";
+pub const MIDI_CONTROLLERS_HINT: &str =
+    "The MIDI controllers connected, and what their knobs, faders and buttons do";
+pub const MIDI_CONTROLLERS: &str = "MIDI controllers";
+pub const MIDI_WINDOW_INTRO: &str = "Keys, pads, the pitch and modulation wheels, pressure and \
+pedals play the instrument in focus, and recording keeps what they did. Transport buttons play, \
+stop and record. To give a knob or fader a job, right-click a fader, a pan, or an effect's or the \
+synth's setting and choose Assign a MIDI control. Plugins take the other knobs: use their own \
+MIDI learn.";
+pub const MIDI_DEVICES: &str = "Connected";
+pub const NO_MIDI_DEVICES: &str =
+    "No MIDI controller is connected. Plug one in: it is found on its own, even now.";
+pub const MIDI_DEVICE_HINT: &str =
+    "Switched off, the controller is left alone (another program can use it)";
+pub const MIDI_KNOBS: &str = "Knobs and faders in this song";
+pub const NO_MIDI_KNOBS: &str = "None yet: right-click a slider and choose Assign a MIDI control.";
+pub const MIDI_BUTTONS: &str = "Buttons and pads";
+pub const NO_MIDI_BUTTONS: &str = "None yet: give them commands in Keyboard shortcuts.";
+pub const GIVE_BUTTONS_COMMANDS: &str = "Give buttons commands…";
+pub const FORGET: &str = "Forget";
+pub const MIDI_BUTTONS_HINT: &str =
+    "A MIDI controller's buttons and pads can run commands too: click Learn, then press one.";
+pub const PRESS_A_BUTTON: &str = "Press a button or pad…";
+pub const NO_MIDI_BUTTON: &str = "No MIDI button";
+pub const LEARN_BUTTON: &str = "Learn";
+pub const LEARN_BUTTON_HINT: &str =
+    "Then press a button or pad on your MIDI controller: it will run this command";
+pub const CLEAR_BUTTON: &str = "Clear";
+
+/// The accessible name of a command's Learn button.
+pub fn learn_button_for(command: &str) -> String {
+    format!("Learn a MIDI button for {command}")
+}
+
+/// The accessible name of a knob's Forget button in the MIDI window.
+pub fn forget_knob(setting: &str) -> String {
+    format!("Forget the MIDI control of {setting}")
+}
+
+/// Says which button now runs a command.
+pub fn button_learned(control: daw_model::MidiControl, command: &str) -> String {
+    format!("{} now runs {command}", midi_control_title(control))
+}
+
+/// A controller's name on the piano roll lane's narrow buttons (the full
+/// name is in their tooltips and accessible names).
+pub fn control_button(control: daw_model::ControlKind) -> String {
+    use daw_model::ControlKind;
+    match control {
+        ControlKind::Controller(1) => "Mod".to_owned(),
+        ControlKind::Controller(11) => "Expr.".to_owned(),
+        ControlKind::Controller(number) if !matches!(number, 2 | 7 | 10) => {
+            format!("CC {number}")
+        }
+        other => control_name(other),
+    }
+}

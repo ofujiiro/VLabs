@@ -35,22 +35,29 @@ pub trait Instrument: Send {
         let _ = settings;
     }
 
-    /// Renders a block in which notes start and end at the given frames
-    /// (sorted). The usual way splits the block at each note; plugins take
-    /// the whole block with its notes in one go.
-    fn render_block(&mut self, notes: &[NoteEvent], left: &mut [f32], right: &mut [f32]) {
+    /// A controller of a MIDI keyboard moved (decision 0033): the pitch
+    /// wheel, a numbered controller, pressure. Instruments ignore what they
+    /// have no use for.
+    fn control(&mut self, control: Control) {
+        let _ = control;
+    }
+
+    /// Renders a block in which notes start and end, and controllers move,
+    /// at the given frames (sorted). The usual way splits the block at each
+    /// event; plugins take the whole block with its events in one go.
+    fn render_block(&mut self, events: &[BlockEvent], left: &mut [f32], right: &mut [f32]) {
         let len = left.len().min(right.len());
         let mut cursor = 0;
-        for note in notes {
-            let at = note.offset.min(len);
+        for event in events {
+            let at = event.offset.min(len);
             if at > cursor {
                 self.render(&mut left[cursor..at], &mut right[cursor..at]);
                 cursor = at;
             }
-            if note.on {
-                self.note_on(note.key, note.velocity);
-            } else {
-                self.note_off(note.key);
+            match event.kind {
+                BlockEventKind::NoteOn { key, velocity } => self.note_on(key, velocity),
+                BlockEventKind::NoteOff { key } => self.note_off(key),
+                BlockEventKind::Control(control) => self.control(control),
             }
         }
         if cursor < len {
@@ -81,17 +88,171 @@ pub trait Instrument: Send {
     }
 }
 
-/// A note starting or ending at a frame within a block.
+/// Something that happens at a frame within a block.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct NoteEvent {
+pub struct BlockEvent {
     /// The frame within the block.
     pub offset: usize,
-    /// The MIDI key.
-    pub key: u8,
-    /// How hard (for a start), from 0 to 1.
-    pub velocity: f32,
-    /// A start (`true`) or an end.
-    pub on: bool,
+    /// What happens.
+    pub kind: BlockEventKind,
+}
+
+/// What happens at a frame within a block.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BlockEventKind {
+    /// A note starts.
+    NoteOn {
+        /// The MIDI key.
+        key: u8,
+        /// How hard, from 0 to 1.
+        velocity: f32,
+    },
+    /// A note ends.
+    NoteOff {
+        /// The MIDI key.
+        key: u8,
+    },
+    /// A controller moves (decision 0033).
+    Control(Control),
+}
+
+/// The controller number of the modulation wheel.
+pub const MODULATION: u8 = 1;
+/// The controller number of the expression pedal.
+pub const EXPRESSION: u8 = 11;
+/// The controller number of the sustain pedal (the engine holds notes for
+/// it; instruments never see it).
+pub const SUSTAIN: u8 = 64;
+
+/// A controller of a MIDI keyboard, as instruments take it (decision 0033).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Control {
+    /// The pitch wheel, from -1 (all the way down) through 0 (at rest) to 1
+    /// (all the way up). How far that bends is the instrument's bend range.
+    PitchBend(f32),
+    /// A numbered controller (1 is the modulation wheel, 11 the expression
+    /// pedal), from 0 to 1.
+    Controller {
+        /// The controller's number, 0 to 127.
+        number: u8,
+        /// Its value, from 0 to 1.
+        value: f32,
+    },
+    /// How hard the keys are pressed once down (channel aftertouch), from 0
+    /// to 1.
+    Pressure(f32),
+}
+
+impl Control {
+    /// The controllers that have a resting place, at rest: the wheel
+    /// centred, no modulation, no pressure, full expression.
+    pub const REST: [Self; 4] = [
+        Self::PitchBend(0.0),
+        Self::Controller {
+            number: MODULATION,
+            value: 0.0,
+        },
+        Self::Pressure(0.0),
+        Self::Controller {
+            number: EXPRESSION,
+            value: 1.0,
+        },
+    ];
+
+    /// The same control with its value in range (a damaged file or a
+    /// misbehaving device may send anything).
+    #[must_use]
+    pub fn sane(self) -> Self {
+        let unit = |v: f32| {
+            if v.is_finite() {
+                v.clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        };
+        match self {
+            Self::PitchBend(v) => Self::PitchBend(if v.is_finite() {
+                v.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            }),
+            Self::Controller { number, value } => Self::Controller {
+                number: number & 0x7F,
+                value: unit(value),
+            },
+            Self::Pressure(v) => Self::Pressure(unit(v)),
+        }
+    }
+}
+
+/// Where the controllers that the included instruments answer stand
+/// (decision 0033): kept by each instrument, updated by
+/// [`Instrument::control`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Performance {
+    /// The pitch wheel, -1 to 1.
+    pub bend: f32,
+    /// The modulation wheel, 0 to 1.
+    pub modulation: f32,
+    /// Pressure (aftertouch), 0 to 1.
+    pub pressure: f32,
+    /// The expression pedal, 0 to 1 (1 is full loudness).
+    pub expression: f32,
+}
+
+impl Default for Performance {
+    fn default() -> Self {
+        Self::REST
+    }
+}
+
+impl Performance {
+    /// Everything at rest.
+    pub const REST: Self = Self {
+        bend: 0.0,
+        modulation: 0.0,
+        pressure: 0.0,
+        expression: 1.0,
+    };
+
+    /// Takes a controller's move; says whether it was one of these.
+    pub fn take(&mut self, control: Control) -> bool {
+        match control.sane() {
+            Control::PitchBend(v) => self.bend = v,
+            Control::Pressure(v) => self.pressure = v,
+            Control::Controller {
+                number: MODULATION,
+                value,
+            } => self.modulation = value,
+            Control::Controller {
+                number: EXPRESSION,
+                value,
+            } => self.expression = value,
+            Control::Controller { .. } => return false,
+        }
+        true
+    }
+
+    /// The bend in semitones, for an instrument that bends `down` semitones
+    /// with the wheel all the way down and `up` all the way up.
+    pub fn bend_semitones(&self, down: f32, up: f32) -> f32 {
+        if self.bend >= 0.0 {
+            self.bend * up
+        } else {
+            self.bend * down
+        }
+    }
+
+    /// How much vibrato the wheel and pressure ask for together, 0 to 1.
+    pub fn vibrato(&self) -> f32 {
+        self.modulation.max(self.pressure)
+    }
+
+    /// The expression pedal as a gain: a curve that sounds even (the pedal
+    /// half way is about -12 dB, as General MIDI's expression is).
+    pub fn expression_gain(&self) -> f32 {
+        self.expression * self.expression
+    }
 }
 
 /// Where the song is, for instruments and effects that follow it.

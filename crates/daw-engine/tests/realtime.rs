@@ -14,7 +14,9 @@
 
 use daw_dsp::sf2_writer::sine_test_font;
 use daw_engine::{Engine, EngineConfig, EngineEvent, PlaybackScope, RecordState, SoundLibrary};
-use daw_model::{BUILTIN_PIANO, DEFAULT_VELOCITY, Document, Note, NoteId, Project, Region, Ticks};
+use daw_model::{
+    BUILTIN_PIANO, DEFAULT_VELOCITY, Document, Note, NoteId, Project, Region, Ticks, TrackId,
+};
 
 #[global_allocator]
 static ALLOCATOR: daw_rt::RtCheckedAllocator = daw_rt::RtCheckedAllocator;
@@ -361,5 +363,123 @@ fn the_sustain_pedal_holds_notes_and_lengthens_recorded_ones() {
         daw_rt::violation_count(),
         0,
         "allocated on the audio thread"
+    );
+}
+
+/// The frequency of a clean tone, from its rising zero crossings.
+fn frequency(samples: &[f32]) -> f32 {
+    let mut crossings = Vec::new();
+    for i in 1..samples.len() {
+        let (a, b) = (samples[i - 1], samples[i]);
+        if a < 0.0 && b >= 0.0 {
+            crossings.push(i as f32 - 1.0 + a / (a - b));
+        }
+    }
+    assert!(crossings.len() > 2, "no tone to measure");
+    let span = crossings.last().unwrap() - crossings.first().unwrap();
+    (crossings.len() - 1) as f32 * RATE as f32 / span
+}
+
+fn peak(samples: &[f32]) -> f32 {
+    samples.iter().fold(0.0_f32, |m, s| m.max(s.abs()))
+}
+
+/// Two piano tracks (the test font's sine), the first chosen for live input.
+fn two_tracks() -> (Engine, daw_engine::EngineProcessor, TrackId, TrackId) {
+    let (mut engine, processor) = engine();
+    let mut project = Project::starter("P", "T");
+    let first = project.first_pattern().unwrap().0;
+    let second = project.add_track("Second", daw_model::Instrument::builtin_piano());
+    engine.sync(&project, 1, PlaybackScope::Song);
+    engine.set_metronome(false, false, 0.0);
+    engine.set_live_target(Some(first));
+    (engine, processor, first, second)
+}
+
+#[test]
+fn the_pitch_wheel_bends_the_track_in_focus_which_rests_when_the_focus_moves() {
+    daw_rt::set_on_violation(daw_rt::OnViolation::Count);
+    let before = daw_rt::violation_count();
+    let (mut engine, mut processor, _first, second) = two_tracks();
+    let midi = engine.midi_sender();
+    let mut events = Vec::new();
+    run(&mut processor, &mut engine, 2, &mut events);
+
+    midi.note_on(69, 0.8);
+    midi.control(daw_engine::Control::PitchBend(1.0));
+    run(&mut processor, &mut engine, 8, &mut events);
+    let bent = frequency(&run(&mut processor, &mut engine, 40, &mut events));
+    let semitones = 12.0 * (bent / 440.0).log2();
+    assert!(
+        (semitones - 2.0).abs() < 0.03,
+        "the wheel bends the track in focus two semitones: {bent} Hz"
+    );
+
+    // The focus moves while the key is held: the first track goes back to
+    // rest, and the second is not bent either.
+    engine.set_live_target(Some(second));
+    run(&mut processor, &mut engine, 8, &mut events);
+    let rested = frequency(&run(&mut processor, &mut engine, 40, &mut events));
+    assert!(
+        (rested - 440.0).abs() < 2.0,
+        "the track left behind is back at rest: {rested} Hz"
+    );
+    assert_eq!(
+        daw_rt::violation_count(),
+        before,
+        "the audio thread allocated"
+    );
+}
+
+#[test]
+fn a_key_comes_up_on_the_instrument_it_went_down_on() {
+    let (mut engine, mut processor, _first, second) = two_tracks();
+    let midi = engine.midi_sender();
+    let mut events = Vec::new();
+    run(&mut processor, &mut engine, 2, &mut events);
+
+    midi.note_on(69, 0.8);
+    run(&mut processor, &mut engine, 8, &mut events);
+    // The focus moves to the other track while the key is down, then the
+    // key comes up: the note ends (before, it sounded for ever).
+    engine.set_live_target(Some(second));
+    run(&mut processor, &mut engine, 4, &mut events);
+    midi.note_off(69);
+    let after = run(&mut processor, &mut engine, 60, &mut events);
+    let tail = &after[after.len() - BLOCK * 8..];
+    assert!(
+        peak(tail) < 0.001,
+        "the key came up where it went down (peak {})",
+        peak(tail)
+    );
+}
+
+#[test]
+fn the_pedal_comes_up_wherever_it_held_notes() {
+    let (mut engine, mut processor, _first, second) = two_tracks();
+    let midi = engine.midi_sender();
+    let mut events = Vec::new();
+    run(&mut processor, &mut engine, 2, &mut events);
+
+    midi.sustain(true);
+    midi.note_on(69, 0.8);
+    run(&mut processor, &mut engine, 4, &mut events);
+    midi.note_off(69);
+    let held = run(&mut processor, &mut engine, 20, &mut events);
+    assert!(
+        peak(&held[held.len() - BLOCK..]) > 0.05,
+        "the pedal holds it"
+    );
+
+    // The focus moves, then the pedal comes up: the held note ends.
+    engine.set_live_target(Some(second));
+    run(&mut processor, &mut engine, 4, &mut events);
+    midi.sustain(false);
+    let after = run(&mut processor, &mut engine, 60, &mut events);
+    let tail = &after[after.len() - BLOCK * 8..];
+    assert!(
+        peak(tail) < 0.001,
+        "released when the pedal came up (peak {})",
+        peak(tail)
     );
 }

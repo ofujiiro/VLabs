@@ -10,10 +10,11 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use daw_model::controls::{thin, thinning_tolerance};
 use daw_model::{
-    ACOUSTIC_KIT, ChainPlace, EffectKind, Instrument, KeyMap, LimiterSettings, MeterMap, Note,
-    NoteId, Project, Scale, ScaleKind, SynthPreset, TICKS_PER_QUARTER, TempoChange, TempoMap,
-    Ticks, TimeSignature, TrackId,
+    ACOUSTIC_KIT, ChainPlace, ControlKind, ControlLane, ControlPoint, EffectKind, Instrument,
+    KeyMap, LimiterSettings, MeterMap, Note, NoteId, Project, Scale, ScaleKind, SynthPreset,
+    TICKS_PER_QUARTER, TempoChange, TempoMap, Ticks, TimeSignature, TrackId,
 };
 
 /// The resolution exported files use: 960 ticks per quarter note, the most
@@ -124,6 +125,29 @@ pub enum EventKind {
     /// The lyric of the note that starts at the same moment (decision
     /// 0027: what a voice sings).
     Lyric(String),
+    /// A controller moves (decision 0033; the sustain pedal is 64).
+    Controller {
+        /// The channel, from 0.
+        channel: u8,
+        /// The controller's number.
+        number: u8,
+        /// Its value, 0 to 127.
+        value: u8,
+    },
+    /// The pitch wheel moves: -8192 to 8191, 0 at rest.
+    PitchBend {
+        /// The channel, from 0.
+        channel: u8,
+        /// The bend.
+        value: i16,
+    },
+    /// Channel pressure (aftertouch).
+    Pressure {
+        /// The channel, from 0.
+        channel: u8,
+        /// The pressure, 0 to 127.
+        value: u8,
+    },
 }
 
 /// One track of a MIDI file.
@@ -342,6 +366,19 @@ fn read_track(body: &[u8], events: &mut usize) -> Result<Track, MidiError> {
                         channel,
                         program: data1,
                     }),
+                    0xB0 => Some(EventKind::Controller {
+                        channel,
+                        number: data1,
+                        value: data2,
+                    }),
+                    0xE0 => Some(EventKind::PitchBend {
+                        channel,
+                        value: (i16::from(data2) << 7 | i16::from(data1)) - 8192,
+                    }),
+                    0xD0 => Some(EventKind::Pressure {
+                        channel,
+                        value: data1,
+                    }),
                     _ => None,
                 };
                 if let Some(kind) = event {
@@ -425,16 +462,20 @@ fn push_vlq(out: &mut Vec<u8>, value: u32) {
 }
 
 /// The order of events at the same tick: names and the conductor's
-/// changes first, then note ends, then program changes, then lyrics just
-/// before the notes they belong to, then note starts.
+/// changes first, then note ends, then program changes, then controllers
+/// (so a note starting with a bend starts bent), then lyrics just before
+/// the notes they belong to, then note starts.
 fn event_order(kind: &EventKind) -> u8 {
     match kind {
         EventKind::TrackName(_) => 0,
         EventKind::Tempo(_) | EventKind::TimeSignature { .. } | EventKind::KeySignature { .. } => 1,
         EventKind::NoteOff { .. } => 2,
         EventKind::Program { .. } => 3,
-        EventKind::Lyric(_) => 4,
-        EventKind::NoteOn { .. } => 5,
+        EventKind::Controller { .. } | EventKind::PitchBend { .. } | EventKind::Pressure { .. } => {
+            4
+        }
+        EventKind::Lyric(_) => 5,
+        EventKind::NoteOn { .. } => 6,
     }
 }
 
@@ -516,7 +557,112 @@ fn write_event(body: &mut Vec<u8>, kind: &EventKind) {
         }
         EventKind::TrackName(name) => write_text(body, 0x03, name),
         EventKind::Lyric(lyric) => write_text(body, 0x05, lyric),
+        EventKind::Controller {
+            channel,
+            number,
+            value,
+        } => body.extend_from_slice(&[0xB0 | (channel & 0x0F), number & 0x7F, value & 0x7F]),
+        EventKind::PitchBend { channel, value } => {
+            let bend = (i32::from(*value) + 8192).clamp(0, 16_383);
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "two 7-bit halves of a 14-bit value"
+            )]
+            body.extend_from_slice(&[
+                0xE0 | (channel & 0x0F),
+                (bend & 0x7F) as u8,
+                (bend >> 7) as u8,
+            ]);
+        }
+        EventKind::Pressure { channel, value } => {
+            body.extend_from_slice(&[0xD0 | (channel & 0x0F), value & 0x7F]);
+        }
     }
+}
+
+/// A curve's value as a MIDI message on `channel` (decision 0033).
+fn control_event(channel: u8, control: ControlKind, value: f32) -> EventKind {
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "rounded and clamped to MIDI's ranges"
+    )]
+    let seven = |v: f32| (v.clamp(0.0, 1.0) * 127.0).round() as u8;
+    match control {
+        ControlKind::PitchBend => {
+            #[allow(clippy::cast_possible_truncation, reason = "rounded and clamped")]
+            let bend = (value.clamp(-1.0, 1.0) * 8192.0)
+                .round()
+                .clamp(-8192.0, 8191.0) as i16;
+            EventKind::PitchBend {
+                channel,
+                value: bend,
+            }
+        }
+        ControlKind::Controller(number) => EventKind::Controller {
+            channel,
+            number,
+            value: seven(value),
+        },
+        ControlKind::Pressure => EventKind::Pressure {
+            channel,
+            value: seven(value),
+        },
+    }
+}
+
+/// The events of a track's curves (decision 0033): for each clip, the
+/// curve as the clip plays it, a message at each point and at every
+/// sixty-fourth note between points where the value changes; after a clip
+/// that moved the wheel, modulation, pressure or expression, those go back
+/// to rest, as playback does.
+fn control_events(project: &Project, track: &daw_model::Track, channel: u8) -> Vec<Event> {
+    let mut spans: Vec<daw_model::PlayedControl> = track
+        .clips
+        .iter()
+        .filter_map(|clip| Some((clip, project.pattern(clip.pattern()?)?)))
+        .flat_map(|(clip, pattern)| pattern.controls_played_in(clip))
+        .collect();
+    spans.sort_by_key(|s| (s.control, s.points.first().map(|p| p.0)));
+    let step = Ticks::note_value(1, 64);
+    let mut events = Vec::new();
+    for (index, span) in spans.iter().enumerate() {
+        let mut last: Option<EventKind> = None;
+        let mut push = |at: Ticks, value: f32, events: &mut Vec<Event>| {
+            let kind = control_event(channel, span.control, value);
+            if last.as_ref() != Some(&kind) {
+                events.push(Event {
+                    tick: to_file_ticks(at),
+                    kind: kind.clone(),
+                });
+                last = Some(kind);
+            }
+        };
+        for pair in span.points.windows(2) {
+            let ((t0, v0), (t1, v1)) = (pair[0], pair[1]);
+            push(t0, v0, &mut events);
+            if v1.to_bits() != v0.to_bits() && t1 > t0 {
+                let mut at = t0 + step;
+                while at < t1 {
+                    #[allow(clippy::cast_precision_loss, reason = "tick spans fit easily")]
+                    let f = (at - t0).0 as f32 / (t1 - t0).0 as f32;
+                    push(at, v0 + (v1 - v0) * f, &mut events);
+                    at += step;
+                }
+            }
+        }
+        if let Some(&(end, value)) = span.points.last() {
+            let next_starts_here = spans.get(index + 1).is_some_and(|n| {
+                n.control == span.control && n.points.first().map(|p| p.0) == Some(end)
+            });
+            match span.control.rest() {
+                Some(rest) if !next_starts_here => push(end, rest, &mut events),
+                _ => push(end, value, &mut events),
+            }
+        }
+    }
+    events
 }
 
 /// A meta event of text (UTF-8, as most programs now write it).
@@ -725,6 +871,9 @@ pub fn song_to_midi(project: &Project) -> MidiFile {
             }
             ends.insert(key, index);
         }
+        if track.instrument.takes_controls() {
+            events.extend(control_events(project, track, channel));
+        }
         for (start, end, key, velocity, lyric) in notes {
             if let Some(lyric) = lyric {
                 events.push(Event {
@@ -773,6 +922,9 @@ pub struct ImportedTrack {
     /// The lyric of each note (by its place in `notes`), when the file
     /// gives one: a lyric event at the moment the note starts.
     pub lyrics: Vec<Option<String>>,
+    /// What its controllers do (decision 0033): pitch bends, controllers
+    /// and pressure, as curves from the start of the file.
+    pub controls: Vec<ControlLane>,
 }
 
 /// A note started and not ended yet, as a file is read: when it started,
@@ -822,6 +974,50 @@ fn scale_for(sharps: i8, minor: bool) -> Scale {
     } else {
         Scale::new(tonic, ScaleKind::Major)
     }
+}
+
+/// The sustain pedal's controller number.
+const SUSTAIN: u8 = 64;
+
+/// Whether a file's controller becomes a curve: not the sustain pedal
+/// (which lengthens notes), bank select, data entry and parameter numbers,
+/// or the channel mode messages.
+fn imports_controller(number: u8) -> bool {
+    ControlKind::Controller(number).is_recordable() && !matches!(number, 6 | 38 | 96..=101)
+}
+
+/// A channel's controller moves as curves: a MIDI controller holds its
+/// value until the next message, so a change after a pause is kept as a
+/// step (a point just before it holds the value before), while messages
+/// closer together than a thirty-second note are a sweep, joined by lines;
+/// then the curve is thinned.
+fn curves(moves: &[(u64, ControlKind, f32)], to_ticks: &impl Fn(u64) -> Ticks) -> Vec<ControlLane> {
+    let sweep = Ticks::note_value(1, 32);
+    let mut controls: Vec<ControlKind> = moves.iter().map(|m| m.1).collect();
+    controls.sort();
+    controls.dedup();
+    controls
+        .into_iter()
+        .filter_map(|control| {
+            let mut points: Vec<ControlPoint> = Vec::new();
+            for &(tick, _, value) in moves.iter().filter(|m| m.1 == control) {
+                let at = to_ticks(tick);
+                if let Some(&before) = points.last()
+                    && at - before.at > sweep
+                    && before.value.to_bits() != value.to_bits()
+                {
+                    points.push(ControlPoint {
+                        at: at - Ticks(1),
+                        value: before.value,
+                    });
+                }
+                points.push(ControlPoint { at, value });
+            }
+            let lane = ControlLane::new(control, points);
+            let points = thin(&lane.points, thinning_tolerance(control) / 2.0);
+            (!points.is_empty()).then(|| ControlLane::new(control, points))
+        })
+        .collect()
 }
 
 /// Reads a MIDI file into tracks of notes, with its tempo, time and key
@@ -936,6 +1132,12 @@ pub fn import(bytes: &[u8]) -> Result<ImportedSong, MidiError> {
         let mut programs: [Option<u8>; 16] = [None; 16];
         let mut held: HashMap<(u8, u8), Vec<Held>> = HashMap::new();
         let mut by_channel: Vec<Vec<(Note, Option<String>)>> = vec![Vec::new(); 16];
+        // The sustain pedal (decision 0033): a note let go while it is down
+        // sounds on until it comes up, as a live take is written.
+        let mut pedal = [false; 16];
+        let mut sustained: HashMap<(u8, u8), Vec<Held>> = HashMap::new();
+        // Each channel's controllers, as (tick, controller, value) moves.
+        let mut moves: Vec<Vec<(u64, ControlKind, f32)>> = vec![Vec::new(); 16];
         // A lyric waits for the note starting at its moment.
         let mut lyric: Option<(u64, String)> = None;
         let note = |start: u64, finish: u64, key: u8, velocity: u8| Note {
@@ -960,6 +1162,13 @@ pub fn import(bytes: &[u8]) -> Result<ImportedSong, MidiError> {
                     key,
                     velocity,
                 } => {
+                    // A key struck again ends its note held by the pedal.
+                    if let Some(notes) = sustained.remove(&(channel, key)) {
+                        for (start, velocity, sung) in notes {
+                            by_channel[usize::from(channel)]
+                                .push((note(start, tick.max(start + 1), key, velocity), sung));
+                        }
+                    }
                     let sung = lyric.take_if(|(at, _)| *at == tick).map(|(_, lyric)| lyric);
                     held.entry((channel, key))
                         .or_default()
@@ -969,17 +1178,68 @@ pub fn import(bytes: &[u8]) -> Result<ImportedSong, MidiError> {
                     if let Some(starts) = held.get_mut(&(channel, key))
                         && !starts.is_empty()
                     {
-                        let (start, velocity, sung) = starts.remove(0);
-                        by_channel[usize::from(channel)]
-                            .push((note(start, tick, key, velocity), sung));
+                        let started = starts.remove(0);
+                        if pedal[usize::from(channel)] {
+                            sustained.entry((channel, key)).or_default().push(started);
+                        } else {
+                            let (start, velocity, sung) = started;
+                            by_channel[usize::from(channel)]
+                                .push((note(start, tick, key, velocity), sung));
+                        }
                     }
                 }
+                EventKind::Controller {
+                    channel,
+                    number: SUSTAIN,
+                    value,
+                } => {
+                    let down = value >= 64;
+                    pedal[usize::from(channel)] = down;
+                    if !down {
+                        let ended: Vec<(u8, u8)> = sustained
+                            .keys()
+                            .filter(|(c, _)| *c == channel)
+                            .copied()
+                            .collect();
+                        for (channel, key) in ended {
+                            for (start, velocity, sung) in
+                                sustained.remove(&(channel, key)).unwrap_or_default()
+                            {
+                                by_channel[usize::from(channel)]
+                                    .push((note(start, tick.max(start + 1), key, velocity), sung));
+                            }
+                        }
+                    }
+                }
+                EventKind::Controller {
+                    channel,
+                    number,
+                    value,
+                } if imports_controller(number) => moves[usize::from(channel)].push((
+                    tick,
+                    ControlKind::Controller(number),
+                    f32::from(value) / 127.0,
+                )),
+                EventKind::PitchBend { channel, value } => {
+                    let bend = if value >= 0 {
+                        f32::from(value) / 8191.0
+                    } else {
+                        f32::from(value) / 8192.0
+                    };
+                    moves[usize::from(channel)].push((tick, ControlKind::PitchBend, bend));
+                }
+                EventKind::Pressure { channel, value } => moves[usize::from(channel)].push((
+                    tick,
+                    ControlKind::Pressure,
+                    f32::from(value) / 127.0,
+                )),
                 EventKind::Lyric(ref text) => lyric = Some((tick, text.clone())),
                 _ => {}
             }
         }
-        // Notes still held when the track ends end there.
-        for ((channel, key), starts) in held {
+        // Notes still held when the track ends (by a key or the pedal) end
+        // there.
+        for ((channel, key), starts) in held.into_iter().chain(sustained) {
             for (start, velocity, sung) in starts {
                 by_channel[usize::from(channel)]
                     .push((note(start, end.max(start + 1), key, velocity), sung));
@@ -990,12 +1250,19 @@ pub fn import(bytes: &[u8]) -> Result<ImportedSong, MidiError> {
                 continue;
             }
             notes.sort_by_key(|(n, _)| (n.start, n.key));
+            let controls = curves(&std::mem::take(&mut moves[channel]), &to_ticks);
             let channel = u8::try_from(channel).unwrap_or(0);
             let (notes, lyrics) = notes.into_iter().unzip();
+            let instrument = instrument_for(channel, programs[usize::from(channel)]);
             tracks.push(ImportedTrack {
                 name: name.clone(),
                 channel,
-                instrument: instrument_for(channel, programs[usize::from(channel)]),
+                controls: if instrument.takes_controls() {
+                    controls
+                } else {
+                    Vec::new()
+                },
+                instrument,
                 notes,
                 lyrics,
             });
@@ -1042,54 +1309,142 @@ impl ImportedSong {
         name: impl Fn(&ImportedTrack) -> String,
         pattern: &str,
     ) -> Vec<TrackId> {
-        let at = at.max(Ticks::ZERO);
         let mut added = Vec::new();
         for imported in &self.tracks {
             let track = project.add_track(&name(imported), imported.instrument.clone());
-            let end = imported
-                .notes
-                .iter()
-                .map(Note::end)
-                .max()
-                .unwrap_or(Ticks::ZERO);
-            // Whole bars, from the bar where the notes land.
-            let bars_from = project.meter.position(at).bar;
-            let start = project.meter.bar_start(bars_from);
-            let shift = at - start;
-            let mut bars = 1;
-            while project.meter.bar_start(bars_from + bars) - start < end + shift && bars < 100_000
-            {
-                bars += 1;
-            }
-            let length = project.meter.bar_start(bars_from + bars) - start;
-            let id = project.add_pattern_for(track, pattern, length);
-            let (notes, lyrics): (Vec<Note>, Vec<Option<String>>) = imported
+            let notes: Vec<(Note, Option<String>)> = imported
                 .notes
                 .iter()
                 .zip(imported.lyrics.iter().chain(std::iter::repeat(&None)))
-                .map(|(n, lyric)| {
-                    (
-                        Note {
-                            start: n.start + shift,
-                            ..*n
-                        },
-                        lyric.clone(),
-                    )
-                })
-                .filter(|(n, _)| n.start < length)
-                .unzip();
-            let ids = project.add_notes(id, &notes);
-            let lyrics: Vec<(NoteId, String)> = ids
-                .into_iter()
-                .zip(lyrics)
-                .filter_map(|(id, lyric)| Some((id, lyric?)))
+                .map(|(n, lyric)| (*n, lyric.clone()))
                 .collect();
-            project.set_lyrics(id, &lyrics);
-            project.add_clip(track, start, length, id);
+            place(project, track, &notes, &imported.controls, at, pattern);
             added.push(track);
         }
         added
     }
+
+    /// Puts the file's notes into a track the song already has (decision
+    /// 0034: a file dropped on the synth plays on the synth), as one new
+    /// pattern of whole bars from `at`, placed where it lands (what the
+    /// track had there makes room, as for a take). A drum track takes the
+    /// file's drums, another track the rest (or everything, if the file
+    /// has only the one kind). Returns the new pattern, or `None` if the
+    /// track is not there or plays no notes.
+    pub fn add_into(
+        &self,
+        project: &mut Project,
+        track: TrackId,
+        at: Ticks,
+        pattern: &str,
+    ) -> Option<daw_model::PatternId> {
+        let instrument = project.track(track)?.instrument.clone();
+        if instrument.is_audio() {
+            return None;
+        }
+        let drums = instrument.is_drums();
+        let matching: Vec<&ImportedTrack> = self
+            .tracks
+            .iter()
+            .filter(|t| t.instrument.is_drums() == drums)
+            .collect();
+        let chosen: Vec<&ImportedTrack> = if matching.is_empty() {
+            self.tracks.iter().collect()
+        } else {
+            matching
+        };
+        let mut notes: Vec<(Note, Option<String>)> = chosen
+            .iter()
+            .flat_map(|t| {
+                t.notes
+                    .iter()
+                    .zip(t.lyrics.iter().chain(std::iter::repeat(&None)))
+                    .map(|(n, lyric)| (*n, lyric.clone()))
+            })
+            .collect();
+        if notes.is_empty() {
+            return None;
+        }
+        notes.sort_by_key(|(n, _)| (n.start, n.key));
+        // One curve per controller: the first track's that has it.
+        let mut controls: Vec<ControlLane> = Vec::new();
+        if instrument.takes_controls() {
+            for lane in chosen.iter().flat_map(|t| t.controls.iter()) {
+                if !controls.iter().any(|l| l.control == lane.control) {
+                    controls.push(lane.clone());
+                }
+            }
+        }
+        Some(place(project, track, &notes, &controls, at, pattern))
+    }
+}
+
+/// Places notes (with their lyrics) and curves, from the start of a file,
+/// on a track at `at`: one pattern of whole bars from the bar where they
+/// land, and a clip playing it (what the track had there makes room).
+/// Returns the pattern.
+fn place(
+    project: &mut Project,
+    track: TrackId,
+    notes: &[(Note, Option<String>)],
+    controls: &[ControlLane],
+    at: Ticks,
+    pattern: &str,
+) -> daw_model::PatternId {
+    let at = at.max(Ticks::ZERO);
+    let end = notes
+        .iter()
+        .map(|(n, _)| n.end())
+        .max()
+        .unwrap_or(Ticks::ZERO);
+    // Whole bars, from the bar where the notes land.
+    let bars_from = project.meter.position(at).bar;
+    let start = project.meter.bar_start(bars_from);
+    let shift = at - start;
+    let mut bars = 1;
+    while project.meter.bar_start(bars_from + bars) - start < end + shift && bars < 100_000 {
+        bars += 1;
+    }
+    let length = project.meter.bar_start(bars_from + bars) - start;
+    let id = project.add_pattern_for(track, pattern, length);
+    let (notes, lyrics): (Vec<Note>, Vec<Option<String>>) = notes
+        .iter()
+        .map(|(n, lyric)| {
+            (
+                Note {
+                    start: n.start + shift,
+                    ..*n
+                },
+                lyric.clone(),
+            )
+        })
+        .filter(|(n, _)| n.start < length)
+        .unzip();
+    let ids = project.add_notes(id, &notes);
+    let lyrics: Vec<(NoteId, String)> = ids
+        .into_iter()
+        .zip(lyrics)
+        .filter_map(|(id, lyric)| Some((id, lyric?)))
+        .collect();
+    project.set_lyrics(id, &lyrics);
+    // The file's curves, moved with the notes, inside the pattern.
+    if let Some(pattern) = project.pattern_mut(id) {
+        for lane in controls {
+            let points: Vec<ControlPoint> = lane
+                .points
+                .iter()
+                .map(|p| ControlPoint {
+                    at: p.at + shift,
+                    value: p.value,
+                })
+                .filter(|p| p.at < length)
+                .collect();
+            pattern.set_control(lane.control, points);
+        }
+    }
+    project.clear_span(track, start, start + length, None);
+    project.add_clip(track, start, length, id);
+    id
 }
 
 #[cfg(test)]

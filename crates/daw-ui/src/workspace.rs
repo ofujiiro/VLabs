@@ -185,6 +185,9 @@ enum Dialog {
         /// Opened from the instrument chooser, which comes back after.
         from_chooser: bool,
     },
+    /// The MIDI controllers: which are connected, what their controls do
+    /// (decision 0033).
+    Midi,
 }
 
 /// The whole window.
@@ -215,6 +218,22 @@ pub struct Workspace {
     /// 0027).
     voicebanks_root: Option<PathBuf>,
     voicebank_list: Vec<daw_formats::utau::VoicebankInfo>,
+    /// Where messages from MIDI controllers go, as the MIDI thread asks it
+    /// (decision 0033).
+    midi_table: std::sync::Arc<std::sync::Mutex<crate::midi::RouteTable>>,
+    /// What MIDI controllers sent the window.
+    midi_inputs: Option<std::sync::mpsc::Receiver<crate::midi::ControllerInput>>,
+    /// The MIDI controllers' buttons and pads that run commands (kept in
+    /// the settings).
+    midi_buttons: std::collections::BTreeMap<Command, daw_model::MidiControl>,
+    /// The command waiting for a button or pad, if one is.
+    button_learning: Option<Command>,
+    /// The buttons held down (a command runs once per press).
+    buttons_down: std::collections::HashSet<daw_model::MidiControl>,
+    /// Every MIDI controller found, as the program says, and why MIDI is
+    /// unavailable, if it is.
+    midi_devices: Vec<String>,
+    midi_problem: Option<String>,
 }
 
 impl Workspace {
@@ -231,6 +250,11 @@ impl Workspace {
         theme::install(ctx);
         session.apply_settings(&settings);
         let keymap = Keymap::from_settings(&settings.shortcuts);
+        let midi_buttons = settings
+            .midi_buttons
+            .iter()
+            .filter_map(|(id, control)| Some((Command::from_id(id)?, *control)))
+            .collect();
         let labels = match settings.key_labels {
             LabelChoice::Automatic => labels,
             LabelChoice::Fixed(family) => KeyLabels::new(family),
@@ -258,6 +282,153 @@ impl Workspace {
             plugin_messages: Vec::new(),
             voicebanks_root: None,
             voicebank_list: Vec::new(),
+            midi_table: std::sync::Arc::default(),
+            midi_inputs: None,
+            midi_buttons,
+            button_learning: None,
+            buttons_down: std::collections::HashSet::new(),
+            midi_devices: Vec::new(),
+            midi_problem: None,
+        }
+    }
+
+    /// The MIDI controllers found (connected or switched off), and why
+    /// MIDI is unavailable if it is, for the MIDI window.
+    pub fn set_midi_devices(&mut self, devices: Vec<String>, problem: Option<String>) {
+        self.midi_devices = devices;
+        self.midi_problem = problem;
+    }
+
+    /// Opens the MIDI controllers window (decision 0033).
+    pub fn open_midi_window(&mut self) {
+        self.dialog = Some(Dialog::Midi);
+    }
+
+    /// The command a MIDI button or pad runs, if it runs one.
+    fn button_command(&self, control: daw_model::MidiControl) -> Option<Command> {
+        self.midi_buttons
+            .iter()
+            .find(|(_, c)| **c == control)
+            .map(|(command, _)| *command)
+    }
+
+    /// Gives a MIDI button or pad a command (one command per button: a
+    /// command it ran before is let go).
+    fn assign_button(&mut self, command: Command, control: daw_model::MidiControl) {
+        self.midi_buttons.retain(|_, c| *c != control);
+        self.midi_buttons.insert(command, control);
+        self.button_learning = None;
+        self.session
+            .set_status(text::button_learned(control, text::command_name(command)));
+    }
+
+    /// Tells the MIDI thread where messages go now (decision 0033): what
+    /// the window waits for, and the controls with a job.
+    fn update_midi_table(&self) {
+        use crate::midi::{Learning, RouteTable};
+        let learning = if self.button_learning.is_some() {
+            Some(Learning::Button)
+        } else if self.session.learning_midi().is_some() {
+            Some(Learning::Knob)
+        } else {
+            None
+        };
+        let taken = self
+            .session
+            .midi_links()
+            .iter()
+            .map(|l| l.control)
+            .chain(self.midi_buttons.values().copied())
+            .collect();
+        let table = RouteTable { learning, taken };
+        let mut shared = self
+            .midi_table
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *shared != table {
+            *shared = table;
+        }
+    }
+
+    /// The MIDI thread's end (decision 0033): messages from controllers go
+    /// through it to the instrument in focus or to this window. Call once;
+    /// a second call replaces the first router's way to the window.
+    pub fn midi_router(&mut self) -> crate::midi::MidiRouter {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.midi_inputs = Some(receiver);
+        crate::midi::MidiRouter::new(
+            std::sync::Arc::clone(&self.midi_table),
+            sender,
+            self.session.engine().midi_sender(),
+        )
+    }
+
+    /// Takes what MIDI controllers sent the window since the last frame.
+    fn follow_midi(&mut self, ctx: &egui::Context) {
+        let Some(inputs) = &self.midi_inputs else {
+            return;
+        };
+        let inputs: Vec<crate::midi::ControllerInput> = inputs.try_iter().collect();
+        for input in inputs {
+            self.midi_input(ctx, input);
+        }
+    }
+
+    /// One message from a MIDI controller, for the window: a control being
+    /// waited for gets its job, a button runs its command, a knob moves its
+    /// setting, a key lights up, a transport button plays or stops.
+    fn midi_input(&mut self, ctx: &egui::Context, input: crate::midi::ControllerInput) {
+        use crate::midi::{ControllerInput, Learning, TransportButton, can_learn};
+        let control = input.control();
+        if let (Some(command), Some(control)) = (self.button_learning, control)
+            && input.is_press()
+        {
+            self.assign_button(command, control);
+            return;
+        }
+        if let (ControllerInput::Controller { number, .. }, Some(control)) = (input, control)
+            && self.session.learning_midi().is_some()
+            && can_learn(number, Learning::Knob)
+        {
+            self.session.midi_learned(control);
+            return;
+        }
+        if let Some(control) = control
+            && let Some(command) = self.button_command(control)
+        {
+            if input.is_press() {
+                if self.buttons_down.insert(control) {
+                    self.run(ctx, command);
+                }
+            } else {
+                self.buttons_down.remove(&control);
+            }
+            return;
+        }
+        if let (ControllerInput::Controller { value, .. }, Some(control)) = (input, control)
+            && self.session.midi_moved(control, value)
+        {
+            return;
+        }
+        let s = &mut self.session;
+        match input {
+            ControllerInput::NoteOn { key, velocity, .. } => {
+                s.show_outside_note(key, velocity > 0);
+            }
+            ControllerInput::NoteOff { key, .. } => s.show_outside_note(key, false),
+            ControllerInput::Transport(button) => match button {
+                TransportButton::Play => {
+                    if !s.is_playing() && !s.is_recording() {
+                        s.play();
+                    }
+                }
+                TransportButton::Stop => s.stop(),
+                TransportButton::Record => s.toggle_record(),
+                TransportButton::Rewind => s.to_start(),
+            },
+            ControllerInput::Controller { .. }
+            | ControllerInput::PitchBend { .. }
+            | ControllerInput::Pressure { .. } => {}
         }
     }
 
@@ -276,6 +447,11 @@ impl Workspace {
         let mut settings = self.settings.clone();
         self.session.store_settings(&mut settings);
         settings.shortcuts = self.keymap.to_settings();
+        settings.midi_buttons = self
+            .midi_buttons
+            .iter()
+            .map(|(command, control)| (command.id().to_owned(), *control))
+            .collect();
         settings
     }
 
@@ -389,6 +565,7 @@ impl Workspace {
     pub fn ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.apply_theme(&ctx);
+        self.follow_midi(&ctx);
         self.session.update();
         self.handle_close(&ctx);
         let mut actions = Vec::new();
@@ -463,6 +640,7 @@ impl Workspace {
         for command in actions {
             self.run(&ctx, command);
         }
+        self.update_midi_table();
         self.update_title(&ctx);
         self.schedule_repaint(&ctx);
     }
@@ -604,6 +782,24 @@ impl Workspace {
             };
             if !sounds.is_empty() {
                 self.session.add_kit_sounds(kit, sounds);
+            }
+            // A MIDI file dropped on an open pattern goes into its track,
+            // which opens the new pattern (decision 0034).
+            let (midi_files, others): (Vec<PathBuf>, Vec<PathBuf>) =
+                others.into_iter().partition(|f| {
+                    crate::session::SongFile::of(f) == Some(crate::session::SongFile::Midi)
+                });
+            let track = self.session.focused_track();
+            let at = self.session.song_position();
+            let mut opened = None;
+            for file in &midi_files {
+                if let Some(pattern) = self.session.import_midi_into(file, track, at) {
+                    opened = Some(pattern);
+                }
+            }
+            if let Some(pattern) = opened {
+                self.session.open_pattern(track, pattern);
+                self.roll.refit();
             }
             if !others.is_empty() {
                 self.import(others);
@@ -808,6 +1004,12 @@ impl Workspace {
 
     /// Runs a command, from a shortcut, a button or the menu.
     pub fn run(&mut self, ctx: &egui::Context, command: Command) {
+        // Escape first stops waiting for a MIDI control (decision 0033).
+        if command == Command::Deselect
+            && (self.button_learning.take().is_some() || self.session.stop_learning_midi())
+        {
+            return;
+        }
         if self.session.view() == View::Song && self.run_in_song(command) {
             return;
         }
@@ -1125,6 +1327,14 @@ impl Workspace {
                 });
                 ui.close();
             }
+            if ui
+                .button(text::MIDI_CONTROLLERS_MENU)
+                .on_hover_text(text::MIDI_CONTROLLERS_HINT)
+                .clicked()
+            {
+                self.open_midi_window();
+                ui.close();
+            }
             if item(ui, text::USER_GUIDE, Command::UserGuide, &self.keymap) {
                 actions.push(Command::UserGuide);
                 ui.close();
@@ -1297,7 +1507,23 @@ impl Workspace {
             Dialog::Shortcuts { capturing, message } => {
                 let (capturing, message, close) = self.shortcuts_window(ctx, capturing, message);
                 keep = !close;
+                if close {
+                    self.button_learning = None;
+                }
                 Dialog::Shortcuts { capturing, message }
+            }
+            Dialog::Midi => {
+                let (close, shortcuts) = self.midi_window(ctx);
+                keep = !close;
+                if shortcuts {
+                    // Buttons are given commands beside the commands' keys.
+                    Dialog::Shortcuts {
+                        capturing: None,
+                        message: None,
+                    }
+                } else {
+                    Dialog::Midi
+                }
             }
             Dialog::Rename { what, mut name } => {
                 let mut done = None;
@@ -1722,6 +1948,142 @@ impl Workspace {
         (search, close)
     }
 
+    /// The MIDI controllers window (decision 0033): the controllers found,
+    /// each with a switch; the song's knobs and faders and what they move;
+    /// the buttons and their commands. Returns whether it closes, and
+    /// whether the shortcuts window is wanted in its place.
+    fn midi_window(&mut self, ctx: &egui::Context) -> (bool, bool) {
+        let mut close = false;
+        let mut shortcuts = false;
+        let links = self.session.midi_links();
+        let mut named: Vec<(daw_model::MidiLink, String)> = links
+            .into_iter()
+            .map(|link| {
+                let name = self.session.link_name(link.target);
+                (link, name)
+            })
+            .collect();
+        named.sort_by_key(|(link, _)| link.control);
+        let response = modal("midi", ctx).show(ctx, |ui| {
+            ui.set_width(560.0);
+            let p = Palette::of(ui.ctx());
+            ui.heading(text::MIDI_CONTROLLERS);
+            ui.label(RichText::new(text::MIDI_WINDOW_INTRO).color(p.text_weak));
+            ui.add_space(10.0);
+            ui.label(RichText::new(text::MIDI_DEVICES).strong());
+            if let Some(problem) = &self.midi_problem {
+                ui.label(RichText::new(problem).small().color(p.record));
+            } else if self.midi_devices.is_empty() {
+                ui.label(RichText::new(text::NO_MIDI_DEVICES).small().weak());
+            }
+            for device in self.midi_devices.clone() {
+                let mut on = !self.settings.midi_off.contains(&device);
+                if ui
+                    .checkbox(&mut on, &device)
+                    .on_hover_text(text::MIDI_DEVICE_HINT)
+                    .changed()
+                {
+                    self.settings.midi_off.retain(|d| *d != device);
+                    if !on {
+                        self.settings.midi_off.push(device.clone());
+                    }
+                }
+            }
+            ui.add_space(10.0);
+            ui.label(RichText::new(text::MIDI_KNOBS).strong());
+            if named.is_empty() {
+                ui.label(RichText::new(text::NO_MIDI_KNOBS).small().weak());
+            }
+            egui::Grid::new("midi-knobs")
+                .num_columns(3)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    for (link, name) in &named {
+                        ui.label(text::midi_control_title(link.control));
+                        ui.label(name);
+                        let forget = ui.small_button(text::FORGET);
+                        forget.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::Role::Button,
+                                true,
+                                text::forget_knob(name),
+                            )
+                        });
+                        if forget.clicked() {
+                            self.session.forget_midi(link.target);
+                        }
+                        ui.end_row();
+                    }
+                });
+            ui.add_space(10.0);
+            ui.label(RichText::new(text::MIDI_BUTTONS).strong());
+            if self.midi_buttons.is_empty() {
+                ui.label(RichText::new(text::NO_MIDI_BUTTONS).small().weak());
+            }
+            let mut forgotten = None;
+            egui::Grid::new("midi-buttons")
+                .num_columns(3)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    for (command, control) in &self.midi_buttons {
+                        ui.label(text::midi_control_title(*control));
+                        ui.label(text::command_name(*command));
+                        if ui.small_button(text::FORGET).clicked() {
+                            forgotten = Some(*command);
+                        }
+                        ui.end_row();
+                    }
+                });
+            if let Some(command) = forgotten {
+                self.midi_buttons.remove(&command);
+            }
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if ui.button(text::GIVE_BUTTONS_COMMANDS).clicked() {
+                    shortcuts = true;
+                }
+                if ui.button(text::CLOSE).clicked() {
+                    close = true;
+                }
+            });
+        });
+        if response.should_close() {
+            close = true;
+        }
+        (close, shortcuts)
+    }
+
+    /// A command's MIDI button in the shortcuts window (decision 0033): the
+    /// button or pad that runs it, Learn and Clear.
+    fn midi_button_cells(&mut self, ui: &mut Ui, command: Command) {
+        let button = self.midi_buttons.get(&command).copied();
+        let shown = if self.button_learning == Some(command) {
+            text::PRESS_A_BUTTON.to_owned()
+        } else {
+            button.map_or_else(|| text::NO_MIDI_BUTTON.to_owned(), text::midi_control_title)
+        };
+        ui.label(RichText::new(shown).small());
+        ui.horizontal(|ui| {
+            let learn = ui
+                .small_button(text::LEARN_BUTTON)
+                .on_hover_text(text::LEARN_BUTTON_HINT);
+            learn.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::Role::Button,
+                    true,
+                    text::learn_button_for(text::command_name(command)),
+                )
+            });
+            if learn.clicked() {
+                self.button_learning = Some(command);
+                self.session.stop_learning_midi();
+            }
+            if button.is_some() && ui.small_button(text::CLEAR_BUTTON).clicked() {
+                self.midi_buttons.remove(&command);
+            }
+        });
+    }
+
     fn shortcuts_window(
         &mut self,
         ctx: &egui::Context,
@@ -1730,18 +2092,19 @@ impl Workspace {
     ) -> (Option<Command>, Option<String>, bool) {
         let mut close = false;
         let response = modal("shortcuts", ctx).show(ctx, |ui| {
-            ui.set_width(680.0);
+            ui.set_width(960.0);
             ui.heading(text::SHORTCUTS);
             ui.label(RichText::new(text::SHORTCUTS_HINT).small().weak());
+            ui.label(RichText::new(text::MIDI_BUTTONS_HINT).small().weak());
             ui.add_space(8.0);
             egui::ScrollArea::vertical()
                 .max_height(420.0)
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     egui::Grid::new("shortcut-table")
-                        .num_columns(3)
+                        .num_columns(5)
                         .spacing([16.0, 6.0])
-                        .min_col_width(150.0)
+                        .min_col_width(110.0)
                         .striped(true)
                         .show(ui, |ui| {
                             for command in Command::ALL {
@@ -1774,6 +2137,7 @@ impl Workspace {
                                         );
                                     }
                                 });
+                                self.midi_button_cells(ui, command);
                                 ui.end_row();
                             }
                         });

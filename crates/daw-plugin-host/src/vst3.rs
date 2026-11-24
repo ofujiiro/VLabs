@@ -51,10 +51,11 @@ use vst3::Steinberg::Vst::{
     Event__type0, IAttributeList, IAttributeListTrait, IAudioProcessor, IAudioProcessorTrait,
     IComponent, IComponentHandler, IComponentHandlerTrait, IComponentTrait, IConnectionPoint,
     IConnectionPointTrait, IEditController, IEditControllerTrait, IEventList, IEventListTrait,
-    IHostApplication, IHostApplicationTrait, IMessage, IMessageTrait, IParamValueQueue,
-    IParamValueQueueTrait, IParameterChanges, IParameterChangesTrait, MediaTypes_, NoteOffEvent,
-    NoteOnEvent, ParameterInfo, ProcessContext, ProcessData, ProcessModes_, ProcessSetup,
-    SpeakerArrangement, String128, SymbolicSampleSizes_, TChar,
+    IHostApplication, IHostApplicationTrait, IMessage, IMessageTrait, IMidiMapping,
+    IMidiMappingTrait, IParamValueQueue, IParamValueQueueTrait, IParameterChanges,
+    IParameterChangesTrait, MediaTypes_, NoteOffEvent, NoteOnEvent, ParameterInfo, ProcessContext,
+    ProcessData, ProcessModes_, ProcessSetup, SpeakerArrangement, String128, SymbolicSampleSizes_,
+    TChar,
 };
 use vst3::Steinberg::{
     FUnknown, IBStream, IBStream_, IBStreamTrait, IPlugFrame, IPlugFrameTrait, IPlugView,
@@ -76,6 +77,39 @@ type ParamQueueIn = rtrb::Producer<(u32, f64)>;
 
 /// Parameters changed in one block, at most (more are dropped).
 const MAX_CHANGED_PARAMS: usize = 64;
+
+/// VST3's numbers for the MIDI controllers a plugin can map to parameters:
+/// the 128 controllers, then channel pressure, then the pitch wheel.
+const MIDI_CONTROLLERS: usize = 130;
+/// VST3's number for channel pressure (aftertouch).
+const AFTERTOUCH: usize = 128;
+/// VST3's number for the pitch wheel.
+const PITCH_BEND: usize = 129;
+
+/// The parameter a VST3 plugin takes each MIDI controller as (decision
+/// 0033), by VST3's controller number.
+type MidiMap = Box<[Option<u32>; MIDI_CONTROLLERS]>;
+
+/// Asks the plugin's controller which parameter each MIDI controller moves
+/// (VST3 has no controller events: a plugin maps them to parameters through
+/// `IMidiMapping`, which plugins made with JUCE do for every controller).
+fn midi_map(controller: &ComPtr<IEditController>) -> MidiMap {
+    let mut map: MidiMap = Box::new([None; MIDI_CONTROLLERS]);
+    let Some(mapping) = controller.cast::<IMidiMapping>() else {
+        return map;
+    };
+    for (number, slot) in map.iter_mut().enumerate() {
+        let mut id = 0;
+        // SAFETY: an interface method of a live object, given a valid
+        // pointer to write the parameter's id to.
+        let found =
+            unsafe { mapping.getMidiControllerAssignment(0, 0, number as i16, &raw mut id) };
+        if found == kResultTrue {
+            *slot = Some(id);
+        }
+    }
+    map
+}
 /// Changes of one parameter in one block, at most.
 const MAX_POINTS: usize = 32;
 /// Edits from the plugin's editor waiting for the audio thread.
@@ -1142,6 +1176,7 @@ pub fn load(info: &PluginInfo, config: AudioConfig) -> Result<(Vst3Main, Vst3Aud
             max_block,
             config,
             (consumer, song_values),
+            midi_map(&controller),
         );
         let main = Vst3Main {
             song_values: song_values_in,
@@ -1411,6 +1446,8 @@ pub struct Vst3Audio {
     edits: rtrb::Consumer<(u32, f64)>,
     song_values: rtrb::Producer<(u32, f64)>,
     context: ProcessContext,
+    /// The parameter each MIDI controller moves, if the plugin says.
+    midi_map: MidiMap,
 }
 
 // SAFETY: the processor and the objects above are created on the main
@@ -1426,6 +1463,7 @@ impl Vst3Audio {
         max_block: usize,
         config: AudioConfig,
         (edits, song_values): (ParamQueueOut, ParamQueueIn),
+        midi_map: MidiMap,
     ) -> Self {
         let channels = |buses: &[usize]| buses.iter().sum::<usize>();
         let mut input_buffers = vec![vec![0.0_f32; max_block]; channels(inputs)];
@@ -1481,6 +1519,7 @@ impl Vst3Audio {
             edits,
             song_values,
             context,
+            midi_map,
         }
     }
 }
@@ -1551,7 +1590,10 @@ impl AudioSide for Vst3Audio {
                             },
                         };
                     }
-                    Event::Param { .. } => continue,
+                    Event::Param { .. }
+                    | Event::PitchBend { .. }
+                    | Event::Controller { .. }
+                    | Event::Pressure { .. } => continue,
                 }
                 list.push(e);
             }
@@ -1562,11 +1604,38 @@ impl AudioSide for Vst3Audio {
             self.changes.add(id, 0, value);
         }
         for event in events {
-            if let Event::Param { frame, id, value } = *event {
-                let value = value.clamp(0.0, 1.0);
-                self.changes
-                    .add(id, frame.min(len as u32 - 1) as i32, value);
-                let _ = self.song_values.push((id, value));
+            let at = |frame: u32| frame.min(len as u32 - 1) as i32;
+            match *event {
+                Event::Param { frame, id, value } => {
+                    let value = value.clamp(0.0, 1.0);
+                    self.changes.add(id, at(frame), value);
+                    let _ = self.song_values.push((id, value));
+                }
+                // A controller's moves, as the parameters the plugin maps
+                // them to (decision 0033).
+                Event::PitchBend { frame, value } => {
+                    if let Some(id) = self.midi_map[PITCH_BEND] {
+                        let value = f64::from(f32::midpoint(value.clamp(-1.0, 1.0), 1.0));
+                        self.changes.add(id, at(frame), value);
+                    }
+                }
+                Event::Controller {
+                    frame,
+                    number,
+                    value,
+                } => {
+                    if let Some(id) = self.midi_map[usize::from(number & 0x7F)] {
+                        self.changes
+                            .add(id, at(frame), f64::from(value.clamp(0.0, 1.0)));
+                    }
+                }
+                Event::Pressure { frame, value } => {
+                    if let Some(id) = self.midi_map[AFTERTOUCH] {
+                        self.changes
+                            .add(id, at(frame), f64::from(value.clamp(0.0, 1.0)));
+                    }
+                }
+                Event::NoteOn { .. } | Event::NoteOff { .. } => {}
             }
         }
         // Input on the first bus.

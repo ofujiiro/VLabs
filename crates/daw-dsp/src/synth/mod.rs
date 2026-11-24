@@ -14,7 +14,7 @@ pub(crate) mod parts;
 use parts::{EnvRates, Envelope, Random, VoiceFilter, wave};
 
 use crate::instrument::InstrumentSettings;
-use crate::{Instrument, key_to_hz};
+use crate::{Control, Instrument, Performance, key_to_hz};
 
 /// The most notes the synth plays at once.
 pub const VOICES: usize = 16;
@@ -29,6 +29,14 @@ const VOICE_GAIN: f32 = 0.3;
 /// The most keys the single voice of mono mode remembers (for going back
 /// to a key still held when the last one is let go).
 const HELD_KEYS: usize = 16;
+
+/// How far the pitch wheel bends, each way, in semitones (General MIDI's
+/// default range; decision 0033).
+pub const BEND_SEMITONES: f32 = 2.0;
+
+/// How much vibrato the modulation wheel (or pressure) adds at the top, in
+/// semitones: 50 cents, General MIDI's default modulation depth.
+pub const WHEEL_VIBRATO: f32 = 0.5;
 
 /// An oscillator's wave.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -250,12 +258,18 @@ pub struct Synth {
     lfo_held: f32,
     lfo_smooth: f32,
     random: Random,
-    /// The volume the tremolo leaves, at the last control update and at
-    /// the one before (the block glides between them).
+    /// The volume the tremolo and the expression pedal leave, at the last
+    /// control update and at the one before (the block glides between
+    /// them).
     tremolo: f32,
     last_tremolo: f32,
     /// Samples left before the next control update.
     until_control: usize,
+    /// Where the pitch wheel, modulation wheel, pressure and expression
+    /// pedal stand (decision 0033).
+    performance: Performance,
+    /// The expression pedal's gain, gliding towards the pedal's.
+    expression: f32,
 }
 
 impl Synth {
@@ -280,9 +294,16 @@ impl Synth {
             tremolo: 1.0,
             last_tremolo: 1.0,
             until_control: 0,
+            performance: Performance::REST,
+            expression: 1.0,
         };
         synth.set_params(&params);
         synth
+    }
+
+    /// Where the controllers stand (decision 0033).
+    pub fn performance(&self) -> Performance {
+        self.performance
     }
 
     /// The settings in use.
@@ -463,7 +484,7 @@ impl Synth {
     }
 
     /// Works out pitches and cutoffs for the next few samples.
-    fn control(&mut self) {
+    fn update(&mut self) {
         let lfo = self.advance_lfo(CONTROL);
         let p = self.params;
         let rate = self.sample_rate;
@@ -473,11 +494,15 @@ impl Synth {
         } else {
             1.0
         };
+        // The wheels (decision 0033): the bend moves every note, the
+        // modulation wheel and pressure deepen the LFO's vibrato.
+        let performance = self.performance;
+        let bend = performance.bend_semitones(BEND_SEMITONES, BEND_SEMITONES);
+        let vibrato = (p.vibrato_cents / 100.0 + performance.vibrato() * WHEEL_VIBRATO) * lfo;
         for voice in self.voices.iter_mut().filter(|v| v.active) {
             voice.pitch += (voice.target - voice.pitch) * glide;
-            let vibrato = p.vibrato_cents / 100.0 * lfo;
             for (step, osc) in voice.step.iter_mut().zip(&p.osc) {
-                let hz = key_to_hz(voice.pitch + osc.pitch + vibrato);
+                let hz = key_to_hz(voice.pitch + osc.pitch + vibrato + bend);
                 *step = f64::from((hz / rate).min(0.49));
             }
             let softness = 1.0 - 0.5 * p.velocity * (1.0 - voice.velocity);
@@ -493,10 +518,13 @@ impl Synth {
         if p.mono && last.active {
             self.last_pitch = Some(last.pitch);
         }
-        // The tremolo glides to its new value over the block.
+        // The tremolo and the expression pedal glide to their new values
+        // over the block (the pedal's gain eases in over a few
+        // milliseconds, so a jump does not click).
+        self.expression += (performance.expression_gain() - self.expression) * 0.25;
         self.until_control = CONTROL;
         self.last_tremolo = self.tremolo;
-        self.tremolo = 1.0 - p.tremolo.clamp(0.0, 1.0) * (0.5 - 0.5 * lfo);
+        self.tremolo = (1.0 - p.tremolo.clamp(0.0, 1.0) * (0.5 - 0.5 * lfo)) * self.expression;
     }
 }
 
@@ -597,7 +625,7 @@ impl Instrument for Synth {
         let mut done = 0;
         while done < len {
             if self.until_control == 0 {
-                self.control();
+                self.update();
             }
             let chunk = self.until_control.min(len - done);
             let out = &mut left[done..done + chunk];
@@ -631,6 +659,13 @@ impl Instrument for Synth {
     fn apply_settings(&mut self, settings: &InstrumentSettings) {
         if let InstrumentSettings::Synth(params) = settings {
             self.set_params(params);
+        }
+    }
+
+    fn control(&mut self, control: Control) {
+        if self.performance.take(control) {
+            // Heard from the next few samples on.
+            self.until_control = 0;
         }
     }
 }

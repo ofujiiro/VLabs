@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use daw_engine::PluginKind;
-use daw_model::{AutomationTarget, ChainPlace, Effect, EffectId, EffectKind, TrackId};
+use daw_model::{AutomationTarget, ChainPlace, Effect, EffectId, EffectKind, LinkTarget, TrackId};
 use egui::{
     Align, Button, CornerRadius, Layout, Rect, RichText, Sense, Stroke, Ui, UiBuilder, pos2, vec2,
 };
@@ -17,7 +17,7 @@ use crate::session::MAX_GAIN;
 use crate::session::Session;
 use crate::text;
 use crate::theme::{Palette, size, track_color};
-use crate::widgets::{Gesture, db_to_gain, gain_to_db};
+use crate::widgets::{Gesture, db_to_gain, gain_to_db, right_pressed};
 use crate::workspace::Intent;
 
 /// The height of the mixer, below its header line.
@@ -204,8 +204,9 @@ fn strip_ui(ui: &mut Ui, session: &mut Session, strip: &StripInfo, intents: &mut
                 // Pan, with its position as text beside it.
                 if let Some(track) = track {
                     let mut pan = strip.pan;
+                    let before = pan;
                     let mut gesture = Gesture::default();
-                    ui.horizontal(|ui| {
+                    let pan_slider = ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         let response = ui
                             .scope(|ui| {
@@ -228,11 +229,24 @@ fn strip_ui(ui: &mut Ui, session: &mut Session, strip: &StripInfo, intents: &mut
                         if response.double_clicked() {
                             pan = 0.0;
                         }
+                        if right_pressed(ui, &response) {
+                            pan = before;
+                        }
                         ui.label(RichText::new(text::pan(pan)).small().color(p.text_weak));
+                        response
                     });
-                    apply(session, gesture, text::EDIT_PAN, |s| {
+                    apply(session, &gesture, text::EDIT_PAN, |s| {
                         s.set_track_pan(track, pan);
                     });
+                    // A MIDI controller's knob can move it (decision 0033).
+                    crate::midi_ui::assign_menu(
+                        &pan_slider.inner,
+                        session,
+                        LinkTarget::Track {
+                            track,
+                            setting: AutomationTarget::Pan,
+                        },
+                    );
                 } else {
                     ui.add_space(20.0);
                 }
@@ -241,6 +255,7 @@ fn strip_ui(ui: &mut Ui, session: &mut Session, strip: &StripInfo, intents: &mut
                     ui.spacing_mut().item_spacing.x = 5.0;
                     ui.add_space(4.0);
                     let mut db = gain_to_db(strip.gain);
+                    let before = db;
                     let mut gesture = Gesture::default();
                     let response = ui
                         .scope(|ui| {
@@ -266,17 +281,27 @@ fn strip_ui(ui: &mut Ui, session: &mut Session, strip: &StripInfo, intents: &mut
                     if response.double_clicked() {
                         db = 0.0;
                     }
+                    if right_pressed(ui, &response) {
+                        db = before;
+                    }
                     let gain = db_to_gain(db).min(MAX_GAIN);
                     match track {
                         Some(track) => {
-                            apply(session, gesture, text::EDIT_VOLUME, |s| {
+                            apply(session, &gesture, text::EDIT_VOLUME, |s| {
                                 s.set_track_gain(track, gain);
                             });
                         }
-                        None => apply(session, gesture, text::EDIT_MASTER_VOLUME, |s| {
+                        None => apply(session, &gesture, text::EDIT_MASTER_VOLUME, |s| {
                             s.set_master_gain(gain);
                         }),
                     }
+                    // A MIDI controller's fader can move it (decision 0033).
+                    let target =
+                        track.map_or(LinkTarget::MasterVolume, |track| LinkTarget::Track {
+                            track,
+                            setting: AutomationTarget::Volume,
+                        });
+                    crate::midi_ui::assign_menu(&response, session, target);
                     meter(ui, strip.level);
                     ui.label(
                         RichText::new(text::db(gain_to_db(strip.gain)))
@@ -489,7 +514,7 @@ fn effect_menu(
 }
 
 /// Applies a slider's change inside a gesture when it is being dragged.
-fn apply(session: &mut Session, gesture: Gesture, label: &str, change: impl FnOnce(&mut Session)) {
+fn apply(session: &mut Session, gesture: &Gesture, label: &str, change: impl FnOnce(&mut Session)) {
     if gesture.started {
         session.begin_gesture(label);
     }

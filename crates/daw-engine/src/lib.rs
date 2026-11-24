@@ -21,6 +21,7 @@ use daw_model::{
 };
 use daw_plugin_host::{AudioConfig, LoadedPlugin};
 
+pub use daw_dsp::Control;
 pub use daw_plugin_host::scan::{ScanProblem, System as PluginSystem};
 pub use daw_plugin_host::{Format as PluginFileFormat, Kind as PluginKind, ParamInfo, PluginInfo};
 pub use library::{SfzReader, SoundLibrary};
@@ -239,6 +240,13 @@ impl MidiSender {
     /// comes up, so a recording sounds the way it was played.
     pub fn sustain(&self, down: bool) {
         self.push(LiveNote::Sustain(down));
+    }
+
+    /// A wheel, pedal or knob moved (decision 0033): the pitch wheel, a
+    /// numbered controller (not the sustain pedal, see [`Self::sustain`]),
+    /// or pressure. The track receiving live input takes it.
+    pub fn control(&self, control: daw_dsp::Control) {
+        self.push(LiveNote::Control(control.sane()));
     }
 
     fn push(&self, note: LiveNote) {

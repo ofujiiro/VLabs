@@ -35,7 +35,7 @@
 
 use std::collections::HashSet;
 
-use daw_model::{MAX_KEY, MeterMap, Note, NoteId, Ticks};
+use daw_model::{ControlKind, MAX_KEY, MeterMap, Note, NoteId, Ticks};
 use egui::{
     Align2, Color32, CornerRadius, CursorIcon, FontId, Mesh, PointerButton, Pos2, Rect, Response,
     RichText, Sense, Shape, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2,
@@ -50,8 +50,12 @@ use crate::theme::{Palette, size};
 const KEYS_WIDTH: f32 = 64.0;
 const RULER_HEIGHT: f32 = 28.0;
 const VELOCITY_HEIGHT: f32 = 72.0;
-/// A voice track's lane is taller: it offers four things to show.
+/// A voice track's lane is taller: it offers four things to show. So is
+/// an instrument's that takes a controller's curves (decision 0033).
 const VOICE_LANE_HEIGHT: f32 = 104.0;
+/// The lane of an instrument whose pattern holds curves of other
+/// controllers too: one more choice.
+const CONTROL_LANE_HEIGHT: f32 = 124.0;
 const VELOCITY_GAP: f32 = 6.0;
 /// How close to a note's right end the pointer must be to resize it.
 const EDGE_GRAB: f32 = 7.0;
@@ -73,7 +77,12 @@ enum LaneKind {
     Breath,
     /// The song's tempo where the pattern plays (decision 0026).
     Tempo,
+    /// A controller's curve (decision 0033).
+    Control(ControlKind),
 }
+
+/// The curves the lane always offers on an instrument that takes them.
+const MAIN_CURVES: [ControlKind; 2] = [ControlKind::PitchBend, daw_model::controls::MODULATION];
 
 /// What a mouse drag is doing.
 #[derive(Clone, Debug, Default)]
@@ -156,6 +165,8 @@ pub struct PianoRoll {
     tempo: TempoLane,
     /// The sung pitch, on a voice track (decision 0028).
     pitch: PitchLine,
+    /// A controller's curve, when the lane shows one (decision 0033).
+    curves: crate::control_lane::ControlLaneView,
     /// The lyric being typed (decision 0027).
     lyric: Option<LyricEdit>,
     /// The notes whose lyric the voicebank does not have, this frame.
@@ -188,6 +199,7 @@ impl Default for PianoRoll {
             lane: LaneKind::Velocity,
             tempo: TempoLane::with_panels_above(),
             pitch: PitchLine::default(),
+            curves: crate::control_lane::ControlLaneView::default(),
             lyric: None,
             missing_lyrics: HashSet::new(),
         }
@@ -249,12 +261,14 @@ impl PianoRoll {
         response
             .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Canvas, true, text::PIANO_ROLL));
         let voice = session.is_voice_track();
+        let curves = Self::curve_choices(session);
         let layout = Layout::new(
             rect,
-            if voice {
-                VOICE_LANE_HEIGHT
-            } else {
-                VELOCITY_HEIGHT
+            match &curves {
+                _ if voice => VOICE_LANE_HEIGHT,
+                Some(others) if !others.is_empty() => CONTROL_LANE_HEIGHT,
+                Some(_) => VOICE_LANE_HEIGHT,
+                None => VELOCITY_HEIGHT,
             },
         );
         self.pattern_end = session.pattern().length;
@@ -300,7 +314,15 @@ impl PianoRoll {
         self.paint_keys(ui, &layout, session);
         self.paint_ruler(ui, &layout, session);
         self.paint_lane(ui, &layout, session);
-        self.lane_switch(ui, &layout, voice);
+        self.lane_switch(ui, &layout, voice, curves.as_deref());
+        if let LaneKind::Control(control) = self.lane_kind(session) {
+            let axis = Axis {
+                left: layout.grid.left(),
+                left_tick: self.left_tick,
+                ticks_per_point: self.ticks_per_point,
+            };
+            self.curves.ui(ui, session, layout.lane, &axis, control);
+        }
         if self.lane_kind(session) == LaneKind::Tempo {
             // The song's tempo where the pattern's start plays.
             let placement = session.placement();
@@ -338,12 +360,33 @@ impl PianoRoll {
     }
 
     /// What the lane shows on the open track: a voice's colour and breath
-    /// only on a voice track (velocity elsewhere).
+    /// only on a voice track, curves only on an instrument that takes
+    /// them, and a curve other than the wheels' only while the pattern has
+    /// it (velocity otherwise).
     fn lane_kind(&self, session: &Session) -> LaneKind {
         match self.lane {
             LaneKind::Colour | LaneKind::Breath if !session.is_voice_track() => LaneKind::Velocity,
+            LaneKind::Control(control)
+                if !session.takes_controls()
+                    || !(MAIN_CURVES.contains(&control)
+                        || session.control_lanes().contains(&control)) =>
+            {
+                LaneKind::Velocity
+            }
             kind => kind,
         }
+    }
+
+    /// The curves of other controllers than the wheels that the pattern in
+    /// focus holds, or `None` if its instrument takes no curves.
+    fn curve_choices(session: &Session) -> Option<Vec<ControlKind>> {
+        session.takes_controls().then(|| {
+            session
+                .control_lanes()
+                .into_iter()
+                .filter(|c| !MAIN_CURVES.contains(c))
+                .collect()
+        })
     }
 
     /// Opens the lyric field of a voice track's note: Enter types the
@@ -459,11 +502,24 @@ impl PianoRoll {
     }
 
     /// The buttons left of the lane: what it shows (on a voice track, also
-    /// each note's colour and breath).
-    fn lane_switch(&mut self, ui: &mut Ui, layout: &Layout, voice: bool) {
+    /// each note's colour and breath; on an instrument that takes them, the
+    /// controllers' curves, decision 0033).
+    fn lane_switch(
+        &mut self,
+        ui: &mut Ui,
+        layout: &Layout,
+        voice: bool,
+        curves: Option<&[ControlKind]>,
+    ) {
         let area = layout.lane_label.shrink2(vec2(3.0, 8.0));
         let shown = match self.lane {
             LaneKind::Colour | LaneKind::Breath if !voice => LaneKind::Velocity,
+            LaneKind::Control(c)
+                if curves
+                    .is_none_or(|others| !MAIN_CURVES.contains(&c) && !others.contains(&c)) =>
+            {
+                LaneKind::Velocity
+            }
             kind => kind,
         };
         let velocity_hint = if voice {
@@ -471,39 +527,56 @@ impl PianoRoll {
         } else {
             text::SHOW_VELOCITY
         };
-        let mut choices = vec![(
+        let mut choices: Vec<(LaneKind, String, String, String)> = vec![(
             LaneKind::Velocity,
-            text::VELOCITY,
-            velocity_hint,
-            text::LANE_VELOCITY,
+            text::VELOCITY.to_owned(),
+            velocity_hint.to_owned(),
+            text::LANE_VELOCITY.to_owned(),
         )];
         if voice {
             choices.push((
                 LaneKind::Colour,
-                text::COLOUR,
-                text::SHOW_COLOUR,
-                text::LANE_COLOUR,
+                text::COLOUR.to_owned(),
+                text::SHOW_COLOUR.to_owned(),
+                text::LANE_COLOUR.to_owned(),
             ));
             choices.push((
                 LaneKind::Breath,
-                text::BREATH,
-                text::SHOW_BREATH,
-                text::LANE_BREATH,
+                text::BREATH.to_owned(),
+                text::SHOW_BREATH.to_owned(),
+                text::LANE_BREATH.to_owned(),
             ));
+        }
+        if let Some(others) = curves {
+            for control in MAIN_CURVES {
+                choices.push(Self::curve_choice(control));
+            }
+            if let Some(&other) = others.first() {
+                // One more choice for the pattern's other curves: the one
+                // shown, or the first.
+                let control = match shown {
+                    LaneKind::Control(c) if others.contains(&c) => c,
+                    _ => other,
+                };
+                choices.push(Self::curve_choice(control));
+            }
         }
         choices.push((
             LaneKind::Tempo,
-            text::TEMPO_LANE,
-            text::SHOW_TEMPO,
-            text::LANE_TEMPO,
+            text::TEMPO_LANE.to_owned(),
+            text::SHOW_TEMPO.to_owned(),
+            text::LANE_TEMPO.to_owned(),
         ));
+        let compact = choices.len() > 2;
+        let others: Vec<ControlKind> = curves.map_or_else(Vec::new, <[ControlKind]>::to_vec);
         ui.scope_builder(UiBuilder::new().max_rect(area), |ui| {
             // One line each: the column is narrow.
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             ui.spacing_mut().button_padding.x = 3.0;
-            ui.spacing_mut().item_spacing.y = if voice { 2.0 } else { 4.0 };
-            if voice {
-                // Four choices: compact, so the last (Tempo) fits the lane.
+            ui.spacing_mut().item_spacing.y = if compact { 2.0 } else { 4.0 };
+            if compact {
+                // Four or five choices: compact, so the last (Tempo) fits
+                // the lane.
                 ui.spacing_mut().interact_size.y = 18.0;
                 ui.spacing_mut().button_padding.y = 1.0;
             }
@@ -514,7 +587,7 @@ impl PianoRoll {
                         .selectable_label(chosen, RichText::new(name).small())
                         .on_hover_text(hint);
                     button.widget_info(|| {
-                        egui::WidgetInfo::selected(egui::Role::Button, true, chosen, label)
+                        egui::WidgetInfo::selected(egui::Role::Button, true, chosen, &label)
                     });
                     if button.clicked() {
                         self.lane = kind;
@@ -522,15 +595,43 @@ impl PianoRoll {
                             self.tempo.close_panel();
                         }
                     }
+                    // The pattern's other curves, from the last curve's
+                    // menu.
+                    if let LaneKind::Control(c) = kind
+                        && others.len() > 1
+                        && others.contains(&c)
+                    {
+                        button.context_menu(|ui| {
+                            for &other in &others {
+                                if ui.button(text::control_name(other)).clicked() {
+                                    self.lane = LaneKind::Control(other);
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
                 }
             });
         });
     }
 
+    /// A curve's button in the lane switch: (kind, name, hint, label).
+    fn curve_choice(control: ControlKind) -> (LaneKind, String, String, String) {
+        (
+            LaneKind::Control(control),
+            text::control_button(control),
+            text::show_curve(control),
+            text::curve_lane(control),
+        )
+    }
+
     /// Whether a drag is in progress (on the notes, the tempo line or the
     /// sung pitch).
     pub fn is_dragging(&self) -> bool {
-        self.note_drag() || self.tempo.is_dragging() || self.pitch.is_dragging()
+        self.note_drag()
+            || self.tempo.is_dragging()
+            || self.pitch.is_dragging()
+            || self.curves.is_dragging()
     }
 
     /// Whether a drag of the editor's own is in progress.
@@ -547,7 +648,10 @@ impl PianoRoll {
     /// Abandons the drag in progress, putting everything back. Returns
     /// whether there was one.
     pub fn cancel_drag(&mut self, session: &mut Session) -> bool {
-        if self.tempo.cancel_drag(session) || self.pitch.cancel_drag(session) {
+        if self.tempo.cancel_drag(session)
+            || self.pitch.cancel_drag(session)
+            || self.curves.cancel_drag(session)
+        {
             return true;
         }
         if !self.note_drag() {
@@ -820,7 +924,11 @@ impl PianoRoll {
             } else if secondary_pressed
                 && !session.pitch_mode()
                 && (grid.contains(pos)
-                    || (layout.lane.contains(pos) && self.lane_kind(session) != LaneKind::Tempo))
+                    || (layout.lane.contains(pos)
+                        && !matches!(
+                            self.lane_kind(session),
+                            LaneKind::Tempo | LaneKind::Control(_)
+                        )))
             {
                 session
                     .document_mut()
@@ -1263,8 +1371,8 @@ impl PianoRoll {
     /// changing its value (and the other selected notes' with it).
     fn press_lane(&mut self, pos: Pos2, layout: &Layout, notes: &[Note], session: &mut Session) {
         let kind = self.lane_kind(session);
-        if kind == LaneKind::Tempo {
-            // The tempo line takes it.
+        if matches!(kind, LaneKind::Tempo | LaneKind::Control(_)) {
+            // The tempo line, or the curve, takes it.
             return;
         }
         let Some(note) = self.stalk_at(notes, layout, pos, session) else {
@@ -1306,7 +1414,7 @@ impl PianoRoll {
         match kind {
             LaneKind::Colour => expression.map_or(0.0, |e| e.colour),
             LaneKind::Breath => expression.map_or(0.0, |e| e.breath),
-            LaneKind::Velocity | LaneKind::Tempo => 0.0,
+            LaneKind::Velocity | LaneKind::Tempo | LaneKind::Control(_) => 0.0,
         }
     }
 
@@ -1873,7 +1981,7 @@ impl PianoRoll {
         let painter = ui.painter_at(lane);
         painter.rect_filled(lane.shrink2(vec2(0.0, 2.0)), CornerRadius::ZERO, p.grid);
         let kind = self.lane_kind(session);
-        if kind == LaneKind::Tempo {
+        if matches!(kind, LaneKind::Tempo | LaneKind::Control(_)) {
             return;
         }
         let notes = &session.pattern().notes;

@@ -49,6 +49,29 @@ pub enum MidiMessage {
         /// The bend.
         value: i16,
     },
+    /// How hard the keys are pressed once down (channel aftertouch).
+    Pressure {
+        /// MIDI channel, 0 to 15.
+        channel: u8,
+        /// The pressure, 0 to 127.
+        value: u8,
+    },
+    /// A transport button: MIDI Machine Control, or the real-time Start,
+    /// Continue and Stop messages.
+    Transport(TransportMessage),
+}
+
+/// What a controller's transport buttons ask for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransportMessage {
+    /// Play (MMC Play or Deferred Play; Start; Continue).
+    Play,
+    /// Stop (MMC Stop, Pause or Record Exit; Stop).
+    Stop,
+    /// Record (MMC Record Strobe).
+    Record,
+    /// Back to the start (MMC Rewind).
+    Rewind,
 }
 
 /// Reads one MIDI message from its bytes.
@@ -82,14 +105,44 @@ pub fn parse(bytes: &[u8]) -> Option<MidiMessage> {
             let value = (i16::from(byte(1)?) << 7 | i16::from(byte(0)?)) - 8192;
             Some(MidiMessage::PitchBend { channel, value })
         }
+        0xD0 => Some(MidiMessage::Pressure {
+            channel,
+            value: byte(0)?,
+        }),
+        0xF0 => system(status, data),
         _ => None,
     }
+}
+
+/// A system message the program understands: transport buttons.
+fn system(status: u8, data: &[u8]) -> Option<MidiMessage> {
+    let transport = match status {
+        0xFA | 0xFB => TransportMessage::Play,
+        0xFC => TransportMessage::Stop,
+        // MIDI Machine Control: F0 7F <device> 06 <command> F7.
+        0xF0 => match data {
+            [0x7F, _device, 0x06, command, ..] => match command {
+                0x02 | 0x03 => TransportMessage::Play,
+                0x01 | 0x07 | 0x08 | 0x09 => TransportMessage::Stop,
+                0x06 => TransportMessage::Record,
+                0x05 => TransportMessage::Rewind,
+                _ => return None,
+            },
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(MidiMessage::Transport(transport))
 }
 
 type Handler = Arc<dyn Fn(MidiMessage) + Send + Sync>;
 
 struct Shared {
     connected: Mutex<Vec<String>>,
+    /// Every input found at the last look, connected or switched off.
+    seen: Mutex<Vec<String>>,
+    /// Inputs switched off by name: not connected (decision 0033).
+    off: Mutex<Vec<String>>,
     problem: Mutex<Option<String>>,
     stop: AtomicBool,
 }
@@ -101,14 +154,18 @@ pub struct MidiInputs {
 }
 
 impl MidiInputs {
-    /// Starts watching for MIDI inputs; every message from any of them is
-    /// passed to `on_message` (on a MIDI thread, not the audio thread).
+    /// Starts watching for MIDI inputs, except those named in `off`;
+    /// every message from any of them is passed to `on_message` (on a MIDI
+    /// thread, not the audio thread).
     pub fn start(
         client_name: &str,
+        off: Vec<String>,
         on_message: impl Fn(MidiMessage) + Send + Sync + 'static,
     ) -> Self {
         let shared = Arc::new(Shared {
             connected: Mutex::new(Vec::new()),
+            seen: Mutex::new(Vec::new()),
+            off: Mutex::new(off),
             problem: Mutex::new(None),
             stop: AtomicBool::new(false),
         });
@@ -129,6 +186,29 @@ impl MidiInputs {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// The names of every input found, connected or switched off, sorted.
+    pub fn seen(&self) -> Vec<String> {
+        self.shared
+            .seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Switches inputs off by name (decision 0033): they are disconnected
+    /// at the next look (within two seconds) and left for other programs;
+    /// the others are connected again.
+    pub fn set_off(&self, names: &[String]) {
+        let mut off = self
+            .shared
+            .off
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if off.as_slice() != names {
+            names.clone_into(&mut off);
+        }
     }
 
     /// Why MIDI is unavailable, if it is.
@@ -200,7 +280,20 @@ fn scan(
             (!skip).then(|| (port.id(), name))
         })
         .collect();
-    // Unplugged keyboards.
+    let mut seen: Vec<String> = ports.iter().map(|(_, name)| name.clone()).collect();
+    seen.sort();
+    seen.dedup();
+    *shared.seen.lock().unwrap_or_else(PoisonError::into_inner) = seen;
+    let off = shared
+        .off
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let ports: Vec<(String, String)> = ports
+        .into_iter()
+        .filter(|(_, name)| !off.contains(name))
+        .collect();
+    // Unplugged keyboards, and keyboards switched off.
     connections.retain(|id, _| ports.iter().any(|(port_id, _)| port_id == id));
     // Newly plugged keyboards.
     for (id, name) in ports {
@@ -286,8 +379,45 @@ mod tests {
                 value: 8191
             })
         );
+        assert_eq!(
+            parse(&[0xD2, 99]),
+            Some(MidiMessage::Pressure {
+                channel: 2,
+                value: 99
+            })
+        );
         assert_eq!(parse(&[0xF8]), None, "clock messages are ignored");
+        assert_eq!(parse(&[0xFE]), None, "active sensing is ignored");
         assert_eq!(parse(&[0x90, 60]), None, "truncated messages are ignored");
         assert_eq!(parse(&[]), None);
+    }
+
+    #[test]
+    fn transport_buttons_are_understood() {
+        use super::TransportMessage::{Play, Record, Rewind, Stop};
+        let transport = |bytes: &[u8]| match parse(bytes) {
+            Some(MidiMessage::Transport(t)) => Some(t),
+            _ => None,
+        };
+        // MIDI Machine Control, to every device (7F) or one.
+        assert_eq!(transport(&[0xF0, 0x7F, 0x7F, 0x06, 0x02, 0xF7]), Some(Play));
+        assert_eq!(transport(&[0xF0, 0x7F, 0x10, 0x06, 0x01, 0xF7]), Some(Stop));
+        assert_eq!(
+            transport(&[0xF0, 0x7F, 0x7F, 0x06, 0x06, 0xF7]),
+            Some(Record)
+        );
+        assert_eq!(
+            transport(&[0xF0, 0x7F, 0x7F, 0x06, 0x05, 0xF7]),
+            Some(Rewind)
+        );
+        assert_eq!(transport(&[0xF0, 0x7F, 0x7F, 0x06, 0x09, 0xF7]), Some(Stop));
+        // Fast forward, and system exclusive messages of other kinds.
+        assert_eq!(transport(&[0xF0, 0x7F, 0x7F, 0x06, 0x04, 0xF7]), None);
+        assert_eq!(transport(&[0xF0, 0x43, 0x10, 0x4C, 0x00, 0xF7]), None);
+        assert_eq!(transport(&[0xF0, 0x7F]), None, "cut short");
+        // Real-time Start, Continue and Stop.
+        assert_eq!(transport(&[0xFA]), Some(Play));
+        assert_eq!(transport(&[0xFB]), Some(Play));
+        assert_eq!(transport(&[0xFC]), Some(Stop));
     }
 }

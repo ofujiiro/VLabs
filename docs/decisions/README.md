@@ -39,6 +39,8 @@ considered instead.
 | [0030](0030-releases.md) | Releases: version 1.0, published on GitHub from a tag | Accepted |
 | [0031](0031-shaping-sounds.md) | Shaping sounds: note shapes for instruments, a sound editor for clips | Accepted |
 | [0032](0032-selecting-and-moving-several.md) | Selecting several tracks or clips, and moving them; the export plays once | Accepted |
+| [0033](0033-midi-controllers.md) | MIDI controllers: wheels, pedals and pads that play, takes that keep them, knobs and buttons given a job | Accepted |
+| [0034](0034-midi-file-into-a-track.md) | A MIDI file dropped on a track plays on that track (no new track) | Accepted |
 
 ## Writing a new record
 

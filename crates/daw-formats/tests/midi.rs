@@ -372,3 +372,286 @@ fn a_voice_s_lyrics_go_out_and_come_back_on_their_notes() {
         [Some("ka"), Some("さ"), None, Some("ka"), Some("さ"), None]
     );
 }
+
+/// The value of a curve at a tick, between its points.
+fn curve_at(points: &[daw_model::ControlPoint], at: Ticks) -> f32 {
+    daw_model::controls::value_at(points, at.0 as f64).unwrap()
+}
+
+#[test]
+fn a_patterns_curves_go_out_as_bends_and_controllers_and_come_back() {
+    use daw_model::{ControlKind, ControlPoint};
+    let mut project = Project::starter("Bent", "Piano");
+    project.master.effects.clear();
+    let (track, pattern) = project.first_pattern().unwrap();
+    let bar = Ticks::WHOLE;
+    project.pattern_mut(pattern).unwrap().length = bar;
+    project.add_note(pattern, note(Ticks::ZERO, bar, 69));
+    let point = |at: Ticks, value: f32| ControlPoint { at, value };
+    let bend = vec![
+        point(Ticks::ZERO, 0.0),
+        point(Ticks::QUARTER, 1.0),
+        point(Ticks::QUARTER * 3, -0.5),
+        point(bar, 0.0),
+    ];
+    let wheel = vec![point(Ticks::ZERO, 0.0), point(bar / 2, 0.8)];
+    let filter = vec![point(Ticks::QUARTER, 0.25)];
+    let pattern_mut = project.pattern_mut(pattern).unwrap();
+    pattern_mut.set_control(ControlKind::PitchBend, bend.clone());
+    pattern_mut.set_control(daw_model::controls::MODULATION, wheel.clone());
+    pattern_mut.set_control(ControlKind::Controller(74), filter);
+    // The starter's clip plays the one-bar pattern once.
+    let clip = project.track(track).unwrap().clips[0].id;
+    project.set_clip_length(clip, bar);
+
+    let file = midi::song_to_midi(&project);
+    let events: Vec<&EventKind> = file.tracks[1].events.iter().map(|e| &e.kind).collect();
+    assert!(
+        events
+            .iter()
+            .any(|k| matches!(k, EventKind::PitchBend { value: 8191, .. })),
+        "the wheel reaches the top"
+    );
+    assert!(
+        events.iter().any(|k| matches!(
+            k,
+            EventKind::Controller {
+                number: 74,
+                value: 32,
+                ..
+            }
+        )),
+        "another controller goes out with its value"
+    );
+    // After the clip, the wheel and the modulation go back to rest.
+    let last_bend = events
+        .iter()
+        .rev()
+        .find_map(|k| match k {
+            EventKind::PitchBend { value, .. } => Some(*value),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(last_bend, 0);
+    let last_wheel = events
+        .iter()
+        .rev()
+        .find_map(|k| match k {
+            EventKind::Controller {
+                number: 1, value, ..
+            } => Some(*value),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(last_wheel, 0, "the modulation rests after the clip");
+
+    // Read back: the curves are where they were, within a MIDI step.
+    let song = midi::import(&midi::write(&file)).unwrap();
+    let imported = &song.tracks[0];
+    let back = |control: ControlKind| {
+        imported
+            .controls
+            .iter()
+            .find(|l| l.control == control)
+            .map(|l| l.points.clone())
+            .unwrap()
+    };
+    let bend_back = back(ControlKind::PitchBend);
+    for at in [
+        Ticks::QUARTER / 2,
+        Ticks::QUARTER,
+        bar / 2,
+        Ticks::QUARTER * 3,
+    ] {
+        let (was, is) = (curve_at(&bend, at), curve_at(&bend_back, at));
+        assert!(
+            (was - is).abs() < 0.02,
+            "the bend at {at:?}: {was} came back {is}"
+        );
+    }
+    assert!(
+        bend_back.len() < 40,
+        "the steps are thinned back into lines: {} points",
+        bend_back.len()
+    );
+    let wheel_back = back(daw_model::controls::MODULATION);
+    let at = bar / 4;
+    assert!((curve_at(&wheel, at) - curve_at(&wheel_back, at)).abs() < 0.02);
+    let filter_back = back(ControlKind::Controller(74));
+    assert!((curve_at(&filter_back, bar / 2) - 32.0 / 127.0).abs() < 1e-3);
+
+    // And into a song: the curves land in the new track's pattern.
+    let project = song.into_project(name, "Imported");
+    let pattern = project.patterns.first().unwrap();
+    assert!(pattern.control(ControlKind::PitchBend).is_some());
+}
+
+#[test]
+fn a_files_sustain_pedal_holds_its_notes() {
+    // Two notes let go while the pedal is down: they sound on until it
+    // comes up (or the key is struck again).
+    let at = |quarters: u64| quarters * 480;
+    let event = |tick: u64, kind: EventKind| midi::Event { tick, kind };
+    let on = |key| EventKind::NoteOn {
+        channel: 0,
+        key,
+        velocity: 100,
+    };
+    let off = |key| EventKind::NoteOff { channel: 0, key };
+    let pedal = |value| EventKind::Controller {
+        channel: 0,
+        number: 64,
+        value,
+    };
+    let file = midi::MidiFile {
+        format: 0,
+        timing: Timing::PerQuarter(480),
+        tracks: vec![midi::Track::new(vec![
+            event(0, pedal(127)),
+            event(0, on(60)),
+            event(at(1), off(60)),
+            event(at(1), on(64)),
+            event(at(2), off(64)),
+            event(at(3), on(64)),
+            event(at(4), off(64)),
+            event(at(6), pedal(0)),
+            event(at(7), on(67)),
+            event(at(8), off(67)),
+        ])],
+    };
+    let song = midi::import(&midi::write(&file)).unwrap();
+    let notes: Vec<(u8, Ticks, Ticks)> = song.tracks[0]
+        .notes
+        .iter()
+        .map(|n| (n.key, n.start, n.end()))
+        .collect();
+    let q = Ticks::QUARTER;
+    assert_eq!(
+        notes,
+        [
+            (60, Ticks::ZERO, q * 6),
+            (64, q, q * 3),
+            (64, q * 3, q * 6),
+            (67, q * 7, q * 8),
+        ],
+        "held to the pedal, a repeated key ends the note before"
+    );
+    assert!(
+        song.tracks[0].controls.is_empty(),
+        "the pedal is not a curve"
+    );
+}
+
+/// A file of a melody (channel 1) and a kick drum (channel 10), a quarter
+/// note each, at 480 ticks per quarter.
+fn melody_and_drums() -> Vec<u8> {
+    let event = |tick: u64, kind: EventKind| midi::Event { tick, kind };
+    let file = midi::MidiFile {
+        format: 0,
+        timing: Timing::PerQuarter(480),
+        tracks: vec![midi::Track::new(vec![
+            event(
+                0,
+                EventKind::NoteOn {
+                    channel: 0,
+                    key: 64,
+                    velocity: 100,
+                },
+            ),
+            event(
+                0,
+                EventKind::NoteOn {
+                    channel: 9,
+                    key: 36,
+                    velocity: 100,
+                },
+            ),
+            event(
+                480,
+                EventKind::NoteOff {
+                    channel: 0,
+                    key: 64,
+                },
+            ),
+            event(
+                480,
+                EventKind::NoteOff {
+                    channel: 9,
+                    key: 36,
+                },
+            ),
+            event(
+                480,
+                EventKind::NoteOn {
+                    channel: 0,
+                    key: 67,
+                    velocity: 100,
+                },
+            ),
+            event(
+                960,
+                EventKind::NoteOff {
+                    channel: 0,
+                    key: 67,
+                },
+            ),
+        ])],
+    };
+    midi::write(&file)
+}
+
+#[test]
+fn a_file_put_into_a_track_plays_there_and_makes_no_new_track() {
+    let song = midi::import(&melody_and_drums()).unwrap();
+    let mut project = Project::starter("P", "Piano");
+    let synth = project.add_track("Lead", Instrument::Synth(SynthPreset::Lead.settings()));
+    // The synth already plays something in bar 2: the file makes room.
+    let old = project.add_pattern_for(synth, "Old", Ticks::WHOLE);
+    project.add_clip(synth, Ticks::WHOLE, Ticks::WHOLE * 2, old);
+    let tracks = project.tracks.len();
+
+    let pattern = song
+        .add_into(&mut project, synth, Ticks::WHOLE, "Tune")
+        .unwrap();
+    assert_eq!(project.tracks.len(), tracks, "no new track");
+    let keys: Vec<u8> = project
+        .pattern(pattern)
+        .unwrap()
+        .notes
+        .iter()
+        .map(|n| n.key)
+        .collect();
+    assert_eq!(keys, [64, 67], "the synth takes the melody, not the drums");
+    let clips = &project.track(synth).unwrap().clips;
+    assert_eq!(clips[0].start, Ticks::WHOLE);
+    assert_eq!(clips[0].pattern(), Some(pattern));
+    assert!(
+        clips
+            .iter()
+            .all(|c| c.pattern() != Some(old) || c.start >= Ticks::WHOLE * 2),
+        "what the synth had there made room"
+    );
+
+    // A drum track takes the file's drums.
+    let (drums, _) = project.add_drums_with_pattern("Drums", "Beat", ACOUSTIC_KIT, 1, 1);
+    let beat = song
+        .add_into(&mut project, drums, Ticks::ZERO, "Beat 2")
+        .unwrap();
+    let keys: Vec<u8> = project
+        .pattern(beat)
+        .unwrap()
+        .notes
+        .iter()
+        .map(|n| n.key)
+        .collect();
+    assert_eq!(keys, [36]);
+
+    // A file without notes adds nothing.
+    let empty = midi::import(&midi::write(&midi::song_to_midi(&Project::empty()))).unwrap();
+    let before = project.clone();
+    assert_eq!(
+        empty.add_into(&mut project, synth, Ticks::ZERO, "Empty"),
+        None
+    );
+    assert_eq!(project, before);
+}

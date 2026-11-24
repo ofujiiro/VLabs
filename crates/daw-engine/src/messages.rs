@@ -94,6 +94,16 @@ pub enum EngineEvent {
         /// Where it ended.
         end: Ticks,
     },
+    /// A controller moved while recording notes (decision 0033): one point
+    /// of its curve.
+    RecordedControl {
+        /// Which controller.
+        control: daw_model::ControlKind,
+        /// Where it was moved to.
+        value: f32,
+        /// When, in the song.
+        at: Ticks,
+    },
     /// Recording ended (the transport stopped).
     RecordingStopped,
     /// The count-in is over: recording sound has started. The take's sound
@@ -132,6 +142,8 @@ pub(crate) enum LiveNote {
     Note { key: u8, velocity: f32 },
     /// The sustain pedal went down (`true`) or came up.
     Sustain(bool),
+    /// A wheel, pedal or knob moved (decision 0033).
+    Control(daw_dsp::Control),
 }
 
 /// No track receives live input.

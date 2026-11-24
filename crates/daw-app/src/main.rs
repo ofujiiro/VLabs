@@ -97,7 +97,6 @@ fn main() {
         max_block: 1024,
     };
     let (mut engine, mut processor) = Engine::new(config, library);
-    let midi_sender = engine.midi_sender();
     // The microphone or interface feeds the engine (decision 0017); it is
     // opened only while recording sound.
     let input = engine
@@ -153,7 +152,6 @@ fn main() {
                     paths,
                     autosaver,
                     settings,
-                    midi_sender,
                 },
             );
             if let Some(file) = file {

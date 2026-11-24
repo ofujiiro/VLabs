@@ -233,6 +233,24 @@ These come from the brief; tests and CI enforce most of them.
   check them in the real program, a song made with the crates (a clip of
   a generated sound, piano chords) opens from the command line:
   `daw-app <song>`; double-click its clip to open the editor.
+- **MIDI controllers (decision 0033):** the development container has no
+  MIDI system (no `/dev/snd/seq`): midir cannot open the sequencer, the
+  log fills with ALSA's "seq_hw" lines and the MIDI window says MIDI is
+  unavailable. Test from the message onwards: `daw_ui::midi::route` is
+  plain data; in interface tests `workspace_mut().midi_router()` gives a
+  `MidiRouter` whose `handle(ControllerInput)` reaches the engine at once
+  and the window at its next frame (`f.tick()`); engine tests use
+  `engine.midi_sender()` (`note_on`, `sustain`, `control`). A slider's MIDI
+  menu opens with `container_context_menu`: never give a slider a click
+  sense (its drag would start late and split into two undo steps), and
+  egui's sliders follow any button, so `widgets::right_pressed` puts the
+  value back on a right-click. In the piano roll's lane, curves are found
+  by `text::curve_lane(..)` (the button), `text::control_curve(..)` (the
+  area) and `text::control_point(.., index)`. The shortcuts window needs
+  `run_steps(8)` after opening before its Learn buttons take clicks. To
+  measure a plugin's bend, compare its pitch with the unbent sound
+  (`reference.rs`'s `shift`): FM patches fool plain pitch finders by an
+  octave.
 - **Panels and popups:** give an `egui::Area` panel fixed column widths and
   no separators that stretch across it. A widget that takes "all the room
   there is" grows the panel to the window's edge, the window nudges it

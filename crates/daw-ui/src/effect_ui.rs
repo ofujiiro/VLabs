@@ -145,6 +145,26 @@ fn editor(ui: &mut Ui, session: &mut Session, id: EffectId, kind: &EffectKind, e
     if gesture.stopped {
         session.end_gesture();
     }
+    // Each setting's slider can be given a MIDI controller's knob
+    // (decision 0033).
+    let place = session.project().effect_place(id).map(|(place, _)| place);
+    for (response, param) in &gesture.sliders {
+        let target = match place {
+            Some(ChainPlace::Track(track)) => daw_model::LinkTarget::Track {
+                track,
+                setting: daw_model::AutomationTarget::Effect {
+                    effect: id,
+                    param: *param,
+                },
+            },
+            Some(ChainPlace::Master) => daw_model::LinkTarget::MasterEffect {
+                effect: id,
+                param: *param,
+            },
+            None => continue,
+        };
+        crate::midi_ui::assign_menu(response, session, target);
+    }
     ui.add_space(8.0);
     ui.separator();
     if ui.button(text::REMOVE_EFFECT).clicked() {
@@ -163,6 +183,10 @@ fn grid(ui: &mut Ui, name: &str, contents: impl FnOnce(&mut Ui)) {
 #[allow(
     clippy::cast_possible_truncation,
     reason = "slider values shown as text"
+)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one row for each of the EQ's settings"
 )]
 fn eq_controls(ui: &mut Ui, gesture: &mut Gesture, eq: &mut EqSettings) {
     eq_curve(ui, eq);
@@ -190,6 +214,7 @@ fn eq_controls(ui: &mut Ui, gesture: &mut Gesture, eq: &mut EqSettings) {
             -15.0..=15.0,
             Scale::linear(text::db),
             "",
+            Some(0),
         );
         slider_row(
             ui,
@@ -199,6 +224,7 @@ fn eq_controls(ui: &mut Ui, gesture: &mut Gesture, eq: &mut EqSettings) {
             40.0..=500.0,
             Scale::log(text::hz),
             "",
+            Some(1),
         );
         heading_row(ui, text::MID);
         slider_row(
@@ -209,6 +235,7 @@ fn eq_controls(ui: &mut Ui, gesture: &mut Gesture, eq: &mut EqSettings) {
             -15.0..=15.0,
             Scale::linear(text::db),
             "",
+            Some(2),
         );
         slider_row(
             ui,
@@ -218,6 +245,7 @@ fn eq_controls(ui: &mut Ui, gesture: &mut Gesture, eq: &mut EqSettings) {
             200.0..=8000.0,
             Scale::log(text::hz),
             "",
+            Some(3),
         );
         slider_row(
             ui,
@@ -227,6 +255,7 @@ fn eq_controls(ui: &mut Ui, gesture: &mut Gesture, eq: &mut EqSettings) {
             0.3..=6.0,
             Scale::log(text::q),
             "",
+            Some(4),
         );
         heading_row(ui, text::HIGH);
         slider_row(
@@ -237,6 +266,7 @@ fn eq_controls(ui: &mut Ui, gesture: &mut Gesture, eq: &mut EqSettings) {
             -15.0..=15.0,
             Scale::linear(text::db),
             "",
+            Some(5),
         );
         slider_row(
             ui,
@@ -246,6 +276,7 @@ fn eq_controls(ui: &mut Ui, gesture: &mut Gesture, eq: &mut EqSettings) {
             1500.0..=16000.0,
             Scale::log(text::hz),
             "",
+            Some(6),
         );
 
         let mut high_cut = eq.high_cut_hz.is_some();
@@ -330,6 +361,7 @@ fn compressor_controls(ui: &mut Ui, gesture: &mut Gesture, c: &mut CompressorSet
             -60.0..=0.0,
             Scale::linear(text::db),
             text::THRESHOLD_HINT,
+            Some(0),
         );
         slider_row(
             ui,
@@ -339,6 +371,7 @@ fn compressor_controls(ui: &mut Ui, gesture: &mut Gesture, c: &mut CompressorSet
             1.0..=20.0,
             Scale::log(text::ratio),
             text::RATIO_HINT,
+            Some(1),
         );
         slider_row(
             ui,
@@ -348,6 +381,7 @@ fn compressor_controls(ui: &mut Ui, gesture: &mut Gesture, c: &mut CompressorSet
             0.1..=100.0,
             Scale::log(text::ms),
             "",
+            Some(2),
         );
         slider_row(
             ui,
@@ -357,6 +391,7 @@ fn compressor_controls(ui: &mut Ui, gesture: &mut Gesture, c: &mut CompressorSet
             10.0..=1000.0,
             Scale::log(text::ms),
             "",
+            Some(3),
         );
         slider_row(
             ui,
@@ -366,6 +401,7 @@ fn compressor_controls(ui: &mut Ui, gesture: &mut Gesture, c: &mut CompressorSet
             0.0..=24.0,
             Scale::linear(text::db),
             "",
+            Some(4),
         );
         slider_row(
             ui,
@@ -375,6 +411,7 @@ fn compressor_controls(ui: &mut Ui, gesture: &mut Gesture, c: &mut CompressorSet
             0.0..=24.0,
             Scale::linear(text::db),
             "",
+            Some(5),
         );
     });
 }
@@ -389,6 +426,7 @@ fn reverb_controls(ui: &mut Ui, gesture: &mut Gesture, r: &mut ReverbSettings) {
             0.0..=1.0,
             Scale::linear(text::percent),
             "",
+            Some(0),
         );
         slider_row(
             ui,
@@ -398,6 +436,7 @@ fn reverb_controls(ui: &mut Ui, gesture: &mut Gesture, r: &mut ReverbSettings) {
             0.0..=1.0,
             Scale::linear(text::percent),
             "",
+            Some(1),
         );
         slider_row(
             ui,
@@ -407,6 +446,7 @@ fn reverb_controls(ui: &mut Ui, gesture: &mut Gesture, r: &mut ReverbSettings) {
             0.0..=1.0,
             Scale::linear(text::percent),
             text::DAMPING_HINT,
+            Some(2),
         );
         slider_row(
             ui,
@@ -416,6 +456,7 @@ fn reverb_controls(ui: &mut Ui, gesture: &mut Gesture, r: &mut ReverbSettings) {
             0.0..=1.0,
             Scale::linear(text::percent),
             "",
+            Some(3),
         );
         slider_row(
             ui,
@@ -425,6 +466,7 @@ fn reverb_controls(ui: &mut Ui, gesture: &mut Gesture, r: &mut ReverbSettings) {
             0.0..=100.0,
             Scale::linear(text::ms),
             "",
+            Some(4),
         );
     });
 }
@@ -465,6 +507,7 @@ fn delay_controls(ui: &mut Ui, gesture: &mut Gesture, d: &mut DelaySettings) {
                     0.01..=2.0,
                     Scale::log(text::seconds),
                     "",
+                    None,
                 );
             }
         }
@@ -476,6 +519,7 @@ fn delay_controls(ui: &mut Ui, gesture: &mut Gesture, d: &mut DelaySettings) {
             0.0..=0.95,
             Scale::linear(text::percent),
             text::REPEATS_HINT,
+            Some(0),
         );
         slider_row(
             ui,
@@ -485,6 +529,7 @@ fn delay_controls(ui: &mut Ui, gesture: &mut Gesture, d: &mut DelaySettings) {
             0.0..=1.0,
             Scale::linear(text::percent),
             "",
+            Some(1),
         );
         slider_row(
             ui,
@@ -494,6 +539,7 @@ fn delay_controls(ui: &mut Ui, gesture: &mut Gesture, d: &mut DelaySettings) {
             1000.0..=20_000.0,
             Scale::log(text::hz),
             text::TONE_HINT,
+            Some(2),
         );
     });
     ui.checkbox(&mut d.ping_pong, text::PING_PONG);
@@ -509,6 +555,7 @@ fn limiter_controls(ui: &mut Ui, gesture: &mut Gesture, l: &mut LimiterSettings)
             0.0..=18.0,
             Scale::linear(text::db),
             text::DRIVE_HINT,
+            Some(0),
         );
         slider_row(
             ui,
@@ -518,6 +565,7 @@ fn limiter_controls(ui: &mut Ui, gesture: &mut Gesture, l: &mut LimiterSettings)
             -12.0..=0.0,
             Scale::linear(text::db),
             text::CEILING_HINT,
+            Some(1),
         );
         slider_row(
             ui,
@@ -527,6 +575,7 @@ fn limiter_controls(ui: &mut Ui, gesture: &mut Gesture, l: &mut LimiterSettings)
             10.0..=1000.0,
             Scale::log(text::ms),
             "",
+            Some(2),
         );
     });
 }

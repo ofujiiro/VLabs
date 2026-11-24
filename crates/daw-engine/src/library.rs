@@ -697,7 +697,10 @@ pub(crate) fn kit_sampler(pads: &[(PadSetting, Arc<AudioBuffer>)], sample_rate: 
         });
         bank.samples.push(sample);
     }
-    Sampler::new(Arc::new(bank), sample_rate)
+    let mut sampler = Sampler::new(Arc::new(bank), sample_rate);
+    // Drums are not bent by the pitch wheel (decision 0033).
+    sampler.set_drum_kit(true);
+    sampler
 }
 
 /// Every pad's settings, indexed by the pad's key.

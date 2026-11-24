@@ -3836,3 +3836,358 @@ fn several_clips_are_selected_and_moved_removed_and_duplicated_together() {
         .sum();
     assert_eq!(total, 4, "the box placed nothing");
 }
+
+#[test]
+fn a_controllers_keys_light_up_and_its_transport_buttons_play_stop_and_record() {
+    use daw_ui::midi::{ControllerInput, TransportButton};
+    let mut f = fixture();
+    let router = f.workspace_mut().midi_router();
+
+    // A key goes to the instrument and lights up on the on-screen keyboard.
+    assert!(router.handle(ControllerInput::NoteOn {
+        channel: 0,
+        key: 64,
+        velocity: 100
+    }));
+    f.tick();
+    assert!(f.session().is_key_lit(64), "the key lights up");
+    router.handle(ControllerInput::NoteOff {
+        channel: 0,
+        key: 64,
+    });
+    f.tick();
+    assert!(!f.session().is_key_lit(64), "and goes out");
+
+    // The wheels go to the instrument only: nothing for the window.
+    assert!(!router.handle(ControllerInput::PitchBend {
+        channel: 0,
+        value: 4000
+    }));
+
+    let button = |f: &mut Fixture, button| {
+        assert!(router.handle(ControllerInput::Transport(button)));
+        f.tick();
+        f.tick();
+    };
+    button(&mut f, TransportButton::Play);
+    assert!(f.session().is_playing(), "Play plays");
+    button(&mut f, TransportButton::Play);
+    assert!(f.session().is_playing(), "a second Play keeps playing");
+    button(&mut f, TransportButton::Stop);
+    assert!(!f.session().is_playing(), "Stop stops");
+    button(&mut f, TransportButton::Record);
+    assert!(f.session().is_recording(), "Record records");
+    button(&mut f, TransportButton::Record);
+    assert!(!f.session().is_recording(), "and stops recording");
+    button(&mut f, TransportButton::Rewind);
+    assert_eq!(
+        f.session().song_position(),
+        Ticks::ZERO,
+        "back to the start"
+    );
+}
+
+#[test]
+fn the_lane_draws_and_edits_the_pitch_wheels_curve() {
+    use daw_model::ControlKind;
+    let bend = ControlKind::PitchBend;
+    let mut f = fixture();
+    // An instrument that takes curves offers them beside velocity.
+    f.harness.get_by_label(&text::curve_lane(bend)).click();
+    f.harness.run_steps(3);
+    let curve = f.harness.get_by_label(&text::control_curve(bend)).rect();
+
+    // A click high in the lane, a little way in: the wheel up there.
+    let spot = egui::pos2(curve.left() + 120.0, curve.top() + 8.0);
+    f.click(spot, Modifiers::NONE);
+    let points = f.session().control_points(bend);
+    assert_eq!(points.len(), 1, "{points:?}");
+    assert!(points[0].value > 0.8, "near the top: {points:?}");
+    assert!(points[0].at > Ticks::ZERO);
+
+    // Dragged down near the middle, the point lands exactly at rest.
+    let point = f
+        .harness
+        .get_by_label(&text::control_point(bend, 0))
+        .rect()
+        .center();
+    let middle = egui::pos2(point.x, curve.center().y + 2.0);
+    f.drag(point, middle, Modifiers::NONE);
+    let points = f.session().control_points(bend);
+    assert_eq!(points.len(), 1);
+    assert_eq!(points[0].value, 0.0, "unbent: {points:?}");
+
+    // A second point lower down, to the right: a bend down.
+    let low = egui::pos2(curve.left() + 240.0, curve.bottom() - 6.0);
+    f.click(low, Modifiers::NONE);
+    let points = f.session().control_points(bend);
+    assert_eq!(points.len(), 2);
+    assert!(points[1].value < -0.8, "{points:?}");
+
+    // Right-click removes a point; undo brings it back.
+    let first = f
+        .harness
+        .get_by_label(&text::control_point(bend, 0))
+        .rect()
+        .center();
+    f.right_click(first);
+    assert_eq!(f.session().control_points(bend).len(), 1);
+    f.workspace_mut().session_mut().undo();
+    f.harness.run_steps(2);
+    assert_eq!(f.session().control_points(bend).len(), 2);
+
+    // The drawn curve is heard: the engine's program bends.
+    assert!(f.session().pattern().control(bend).is_some());
+}
+
+#[test]
+fn drum_tracks_offer_no_curves() {
+    let f = beat();
+    assert!(!f.session().takes_controls(), "drums are not bent");
+    assert!(
+        f.harness
+            .query_by_label(&text::curve_lane(daw_model::ControlKind::PitchBend))
+            .is_none(),
+        "drums are not bent"
+    );
+}
+
+/// A new song with a synth track, its window open.
+fn synth_song() -> (Fixture, daw_model::TrackId) {
+    let mut f = new_song();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(2);
+    f.harness
+        .get_by_label(&format!("+ {}", text::ADD_INSTRUMENT))
+        .click();
+    f.harness.run_steps(3);
+    f.harness
+        .get_by_label_contains(text::ADD_SYNTH_HINT)
+        .click();
+    f.harness.run_steps(3);
+    let synth = f.session().project().tracks.last().unwrap().id;
+    f.harness.get_by_label(text::OPEN_SYNTH).click();
+    f.harness.run_steps(4);
+    (f, synth)
+}
+
+#[test]
+fn a_knob_given_the_synths_cutoff_from_its_slider_moves_it() {
+    use daw_ui::midi::ControllerInput;
+    let (mut f, synth) = synth_song();
+    let router = f.workspace_mut().midi_router();
+    // Right-click the cutoff slider: Assign a MIDI control…
+    let slider = f
+        .harness
+        .get_by_role_and_label(egui::accesskit::Role::Slider, text::CUTOFF)
+        .rect();
+    let untouched = f.session().synth_settings(synth).unwrap();
+    f.right_click(slider.center());
+    assert_eq!(
+        f.session().synth_settings(synth),
+        Some(untouched),
+        "the right-click opens the menu without moving the slider"
+    );
+    f.harness.get_by_label(text::ASSIGN_MIDI_CONTROL).click();
+    f.harness.run_steps(3);
+    assert_eq!(f.session().status(), Some(text::WAITING_FOR_KNOB));
+
+    // The next knob moved gets it: controller 74 on channel 1.
+    let knob = |value| ControllerInput::Controller {
+        channel: 0,
+        number: 74,
+        value,
+    };
+    assert!(router.handle(knob(30)), "the knob goes to the window");
+    f.tick();
+    let control = daw_model::MidiControl {
+        channel: 0,
+        source: daw_model::MidiSource::Controller(74),
+    };
+    let target = daw_model::LinkTarget::Track {
+        track: synth,
+        setting: daw_model::AutomationTarget::Instrument { param: 0 },
+    };
+    assert_eq!(f.session().midi_control_of(target), Some(control));
+    assert!(
+        f.session().status().is_some_and(|s| s.contains("Cutoff")),
+        "{:?}",
+        f.session().status()
+    );
+
+    // Turning it moves the cutoff from bottom to top; a turn is one undo
+    // step.
+    let depth = f.session().document().undo_depth();
+    for value in [0, 40, 90, 127] {
+        router.handle(knob(value));
+        f.harness.run_steps(1);
+    }
+    f.tick();
+    let settings = f.session().synth_settings(synth).unwrap();
+    assert!(
+        (settings.param(0).unwrap() - 1.0).abs() < 1e-4,
+        "at the top"
+    );
+    assert_eq!(
+        f.session().document().undo_depth(),
+        depth + 1,
+        "one turn, one step"
+    );
+    router.handle(knob(0));
+    f.tick();
+    let settings = f.session().synth_settings(synth).unwrap();
+    assert!(settings.param(0).unwrap() < 1e-4, "at the bottom");
+
+    // The slider's menu now says which knob moves it, and forgets it.
+    f.right_click(slider.center());
+    f.harness.get_by_label(&text::moved_by(control));
+    f.harness.get_by_label(text::FORGET_MIDI_CONTROL).click();
+    f.harness.run_steps(3);
+    assert_eq!(f.session().midi_control_of(target), None);
+    // Forgotten, the knob plays the instrument again.
+    assert!(!router.handle(knob(64)), "back to the instrument");
+}
+
+#[test]
+fn escape_stops_waiting_for_a_knob() {
+    use daw_ui::midi::ControllerInput;
+    let (mut f, synth) = synth_song();
+    let router = f.workspace_mut().midi_router();
+    let slider = f
+        .harness
+        .get_by_role_and_label(egui::accesskit::Role::Slider, text::CUTOFF)
+        .rect();
+    f.right_click(slider.center());
+    f.harness.get_by_label(text::ASSIGN_MIDI_CONTROL).click();
+    f.harness.run_steps(3);
+    f.key(Key::Escape, Key::Escape, true, Modifiers::NONE);
+    f.key(Key::Escape, Key::Escape, false, Modifiers::NONE);
+    assert!(f.session().learning_midi().is_none());
+    assert!(!router.handle(ControllerInput::Controller {
+        channel: 0,
+        number: 74,
+        value: 10
+    }));
+    f.tick();
+    let target = daw_model::LinkTarget::Track {
+        track: synth,
+        setting: daw_model::AutomationTarget::Instrument { param: 0 },
+    };
+    assert_eq!(f.session().midi_control_of(target), None);
+}
+
+#[test]
+fn a_fader_moves_a_tracks_volume_and_the_midi_window_lists_and_forgets_it() {
+    use daw_ui::midi::ControllerInput;
+    let mut f = new_song();
+    let router = f.workspace_mut().midi_router();
+    let drums = f.session().project().tracks[0].id;
+    let target = daw_model::LinkTarget::Track {
+        track: drums,
+        setting: daw_model::AutomationTarget::Volume,
+    };
+    // As the fader's menu does it.
+    f.workspace_mut().session_mut().learn_midi(target);
+    f.harness.run_steps(2);
+    let fader = |value| ControllerInput::Controller {
+        channel: 2,
+        number: 7,
+        value,
+    };
+    router.handle(fader(127));
+    f.tick();
+    router.handle(fader(127));
+    f.tick();
+    let gain = f.session().project().track(drums).unwrap().strip.gain;
+    assert!(
+        (gain - 10.0_f32.powf(6.0 / 20.0)).abs() < 1e-3,
+        "+6 dB: {gain}"
+    );
+    router.handle(fader(0));
+    f.tick();
+    assert_eq!(f.session().project().track(drums).unwrap().strip.gain, 0.0);
+
+    // The MIDI window lists it, and forgets it.
+    f.workspace_mut().open_midi_window();
+    f.harness.run_steps(4);
+    f.harness.get_by_label(text::MIDI_CONTROLLERS);
+    f.harness.get_by_label(text::NO_MIDI_DEVICES);
+    let name = format!(
+        "{} · {}",
+        f.session().project().tracks[0].name,
+        text::VOLUME
+    );
+    f.harness.get_by_label(&name);
+    f.harness.get_by_label(&text::forget_knob(&name)).click();
+    f.harness.run_steps(3);
+    assert_eq!(f.session().midi_control_of(target), None);
+    // Undo brings the assignment back.
+    f.workspace_mut().session_mut().undo();
+    assert!(f.session().midi_control_of(target).is_some());
+}
+
+#[test]
+fn a_pad_given_play_stop_in_the_shortcuts_window_plays_and_stops() {
+    use daw_ui::midi::ControllerInput;
+    let mut f = new_song();
+    let router = f.workspace_mut().midi_router();
+    f.harness.get_by_label(text::MENU).click();
+    f.harness.run_steps(2);
+    f.harness.get_by_label(text::SHORTCUTS).click();
+    // The dialog settles into place for a few frames (clicks meanwhile are
+    // lost).
+    f.harness.run_steps(8);
+    let play_stop = text::command_name(daw_ui::Command::PlayStop);
+    f.harness
+        .get_by_label(&text::learn_button_for(play_stop))
+        .click();
+    f.harness.run_steps(3);
+    f.harness.get_by_label(text::PRESS_A_BUTTON);
+    // The pad's press is taken (it plays no note), and gets the command.
+    let pad = |velocity| ControllerInput::NoteOn {
+        channel: 9,
+        key: 40,
+        velocity,
+    };
+    assert!(router.handle(pad(100)));
+    f.tick();
+    router.handle(ControllerInput::NoteOff {
+        channel: 9,
+        key: 40,
+    });
+    f.tick();
+    let shown = text::midi_control_title(daw_model::MidiControl {
+        channel: 9,
+        source: daw_model::MidiSource::Note(40),
+    });
+    f.harness.get_by_label(&shown);
+    f.harness.get_by_label(text::CLOSE).click();
+    f.harness.run_steps(3);
+    assert!(
+        f.workspace()
+            .settings()
+            .midi_buttons
+            .contains_key("play_stop"),
+        "kept in the settings"
+    );
+
+    // Each press plays or stops (a release does nothing).
+    router.handle(pad(90));
+    f.tick();
+    f.tick();
+    assert!(f.session().is_playing());
+    router.handle(ControllerInput::NoteOff {
+        channel: 9,
+        key: 40,
+    });
+    f.tick();
+    assert!(f.session().is_playing(), "the release does nothing");
+    router.handle(pad(90));
+    f.tick();
+    f.tick();
+    assert!(!f.session().is_playing());
+    assert!(
+        !f.session().is_key_lit(40),
+        "a pad with a command plays no note"
+    );
+}

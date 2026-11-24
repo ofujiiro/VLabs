@@ -919,7 +919,7 @@ checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
 
 [[package]]
 name = "daw-app"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "daw-devices",
  "daw-engine",
@@ -939,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "daw-devices"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "cpal",
  "daw-rt",
@@ -949,7 +949,7 @@ dependencies = [
 
 [[package]]
 name = "daw-dsp"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "claxon",
  "daw-rt",
@@ -958,7 +958,7 @@ dependencies = [
 
 [[package]]
 name = "daw-engine"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "daw-dsp",
  "daw-model",
@@ -969,7 +969,7 @@ dependencies = [
 
 [[package]]
 name = "daw-formats"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "claxon",
  "daw-dsp",
@@ -988,11 +988,11 @@ dependencies = [
 
 [[package]]
 name = "daw-ident"
-version = "1.2.0"
+version = "1.3.0"
 
 [[package]]
 name = "daw-model"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1000,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "daw-plugin-host"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "clack-extensions",
  "clack-host",
@@ -1018,11 +1018,11 @@ dependencies = [
 
 [[package]]
 name = "daw-rt"
-version = "1.2.0"
+version = "1.3.0"
 
 [[package]]
 name = "daw-ui"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "daw-dsp",
  "daw-engine",
@@ -2151,7 +2151,7 @@ checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
 
 [[package]]
 name = "make-drums"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "claxon",
  "daw-dsp",
@@ -2160,7 +2160,7 @@ dependencies = [
 
 [[package]]
 name = "make-piano"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "claxon",
  "daw-dsp",
@@ -3567,7 +3567,7 @@ dependencies = [
 
 [[package]]
 name = "spike-audio-latency"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "cpal",
  "daw-rt",
@@ -3577,7 +3577,7 @@ dependencies = [
 
 [[package]]
 name = "spike-piano-roll"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "eframe",
  "egui",
@@ -3585,7 +3585,7 @@ dependencies = [
 
 [[package]]
 name = "spike-plugin-host"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "clack-extensions",
  "clack-host",
@@ -4823,7 +4823,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "daw-ident",
 ]
