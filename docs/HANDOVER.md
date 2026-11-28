@@ -270,6 +270,19 @@ commit too.
   installer and zip were built and packed on Windows by the workflow but
   not run (no Windows here).
 
+## Clips off the beat (November 28, 2026), not yet merged or tried by the owner
+
+On the branch `claude/inspiring-pasteur-piy3x5`, decision 0035 (the
+owner: "untick an option so that a pattern or a sound can be put off the
+beat"). `Session::snap_clips` / `set_snap_clips`, `Settings::snap_clips`
+(default on); `transport::song_tools` shows the box **Snap to bars and
+beats** in the song's location line; `SongView::land` (with
+`lands_freely`, `shortest`) is the one rule for where clips land: snapping
+on is decision 0017's behaviour unchanged, off places freely and Alt
+brings the beats back. Tests: `interface.rs`
+`unticking_snap_puts_clips_off_the_beat`, `session.rs`
+`snapping_clips_is_remembered_between_sessions`. No version change yet.
+
 ## Built on November 24, 2026 as 1.3.0, not yet merged or tried by the owner
 
 On the branch `claude/zen-noether-qvaw3z` (the owner's request: "add MIDI

@@ -409,7 +409,7 @@ impl SongView {
                     .map(|r| r.track);
                 (
                     track,
-                    Self::snap_nearest(session, self.x_to_tick(layout, pos.x), true),
+                    Self::snap_edge(session, self.x_to_tick(layout, pos.x), false, true),
                 )
             }
             None => (None, session.song_position()),
@@ -508,14 +508,46 @@ impl SongView {
         meter.grid_round(at, unit)
     }
 
-    /// Where a dragged clip edge lands: on bars for patterns (beats with
-    /// Alt), on beats for sound (exactly where the pointer is with Alt).
-    fn snap_edge(session: &Session, at: Ticks, alt: bool, audio: bool) -> Ticks {
-        match (audio, alt) {
-            (true, true) => at.max(Ticks::ZERO),
-            (true, false) => Self::snap_nearest(session, at, true),
-            (false, fine) => Self::snap_nearest(session, at, fine),
+    /// Where a clip lands under the pointer (decisions 0017 and 0035).
+    /// With snapping on: patterns on bars (beats with Alt), sound on beats
+    /// (exactly where the pointer is with Alt). With snapping off, both go
+    /// exactly where the pointer is, and Alt brings back the beats.
+    /// `floor` takes the line before the pointer, else the nearest one.
+    fn land(session: &Session, at: Ticks, alt: bool, audio: bool, floor: bool) -> Ticks {
+        let fine = match (session.snap_clips(), audio, alt) {
+            (true, false, fine) => fine,
+            (true, true, false) | (false, _, true) => true,
+            (true, true, true) | (false, _, false) => return at.max(Ticks::ZERO),
+        };
+        if floor {
+            Self::snap(session, at, fine)
+        } else {
+            Self::snap_nearest(session, at, fine)
         }
+    }
+
+    /// Whether a clip edge dragged now goes exactly where the pointer is.
+    fn lands_freely(session: &Session, alt: bool, audio: bool) -> bool {
+        if session.snap_clips() {
+            audio && alt
+        } else {
+            !alt
+        }
+    }
+
+    /// The shortest a clip can be dragged to: a beat while edges snap,
+    /// else one tick for sound and a 1/64 note for a pattern.
+    fn shortest(session: &Session, clip: &Clip, alt: bool) -> Ticks {
+        match (Self::lands_freely(session, alt, clip.is_audio()), clip.is_audio()) {
+            (true, true) => Ticks(1),
+            (true, false) => Ticks::note_value(1, 64),
+            (false, _) => session.project().meter.signature_at(clip.start).beat_length(),
+        }
+    }
+
+    /// Where a dragged clip edge lands.
+    fn snap_edge(session: &Session, at: Ticks, alt: bool, audio: bool) -> Ticks {
+        Self::land(session, at, alt, audio, false)
     }
 
     /// Where an audio clip's fade handles are on screen: at the end of its
@@ -834,7 +866,7 @@ impl SongView {
                 session.locate_song(at);
             } else if let Some(row) = layout.row_at(pos.y) {
                 let track = row.track;
-                let at = Self::snap(session, self.x_to_tick(layout, pos.x), alt);
+                let at = Self::land(session, self.x_to_tick(layout, pos.x), alt, false, true);
                 session.begin_gesture(text::EDIT_PLACE_PATTERN);
                 if let Some(clip) = session.place_pattern(track, at) {
                     self.drag = Drag::Move {
@@ -877,7 +909,7 @@ impl SongView {
                 // patterns to place there.
                 self.menu_clip = None;
                 self.menu_at = pos;
-                let at = Self::snap(session, self.x_to_tick(layout, pos.x), alt);
+                let at = Self::land(session, self.x_to_tick(layout, pos.x), alt, false, true);
                 self.menu_empty = Some((row.track, at));
                 session.focus_track(row.track);
             } else {
@@ -908,7 +940,7 @@ impl SongView {
                         session.move_clip_to_track(clip, row.track);
                     }
                     let start =
-                        Self::snap_nearest(session, self.x_to_tick(layout, pos.x) - grab, alt);
+                        Self::snap_edge(session, self.x_to_tick(layout, pos.x) - grab, alt, false);
                     if !overlaps(session, clip, start, None) {
                         session.move_clip(clip, start);
                     }
@@ -929,7 +961,7 @@ impl SongView {
                 let moved = moved || pos.distance(origin) > DRAG_THRESHOLD;
                 if moved && let Some(&(_, lead)) = self.group.iter().find(|(c, _)| *c == clip) {
                     let start =
-                        Self::snap_nearest(session, self.x_to_tick(layout, pos.x) - grab, alt);
+                        Self::snap_edge(session, self.x_to_tick(layout, pos.x) - grab, alt, false);
                     // None earlier than the song's start.
                     let earliest = self.group.iter().map(|(_, s)| *s).min().unwrap_or(lead);
                     let by = (start - lead).max(Ticks::ZERO - earliest);
@@ -958,11 +990,7 @@ impl SongView {
                     let start = c.start;
                     let x = self.x_to_tick(layout, pos.x);
                     let end = Self::snap_edge(session, x, alt, c.is_audio());
-                    let shortest = if c.is_audio() && alt {
-                        Ticks(1)
-                    } else {
-                        session.project().meter.signature_at(start).beat_length()
-                    };
+                    let shortest = Self::shortest(session, &c, alt);
                     let length = (end - start).max(shortest);
                     if !overlaps(session, clip, start, Some(length)) {
                         session.resize_clip(clip, length);
@@ -973,11 +1001,7 @@ impl SongView {
                 if let Some((_, c)) = session.project().clip(clip).map(|(t, c)| (t, *c)) {
                     let end = c.end();
                     let x = self.x_to_tick(layout, pos.x);
-                    let shortest = if c.is_audio() && alt {
-                        Ticks(1)
-                    } else {
-                        session.project().meter.signature_at(c.start).beat_length()
-                    };
+                    let shortest = Self::shortest(session, &c, alt);
                     let start = Self::snap_edge(session, x, alt, c.is_audio()).min(end - shortest);
                     if !overlaps(session, clip, start, Some(end - start)) {
                         session.trim_clip_start(clip, start);

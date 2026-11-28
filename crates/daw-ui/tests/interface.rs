@@ -3838,6 +3838,63 @@ fn several_clips_are_selected_and_moved_removed_and_duplicated_together() {
 }
 
 #[test]
+fn unticking_snap_puts_clips_off_the_beat() {
+    let mut f = new_song();
+    f.harness.get_by_label(text::UNTITLED).click();
+    f.harness.run_steps(3);
+    let clip = f.session().project().tracks[0].clips[0].id;
+    let start = |f: &Fixture| f.session().project().clip(clip).unwrap().1.start;
+    let resized = |f: &Fixture| f.session().project().clip(clip).unwrap().1.length;
+    assert!(f.session().snap_clips(), "on at first");
+    // Measured once: the view keeps its zoom while the song grows.
+    let x0 = f.song_x(Ticks::ZERO);
+    let bar = f.song_x(Ticks::WHOLE) - x0;
+    let row = f.row_top(0) + 34.0;
+    let middle = |at: f32| Pos2::new(x0 + bar * at, row);
+    let near = |a: Ticks, b: Ticks| (a.0 - b.0).abs() < Ticks::WHOLE.0 / 20;
+
+    // Snapping on: moved by 0.4 of a bar, the beat goes back to its bar.
+    f.drag(middle(1.0), middle(1.4), Modifiers::NONE);
+    assert_eq!(start(&f), Ticks::ZERO);
+
+    // Unticked: it goes exactly where it is let go, off the beat.
+    f.harness.get_by_label(text::SNAP_CLIPS).click();
+    f.harness.run_steps(2);
+    assert!(!f.session().snap_clips());
+    f.drag(middle(1.0), middle(1.4), Modifiers::NONE);
+    let off = start(&f);
+    assert!(near(off, Ticks::WHOLE * 2 / 5), "{off:?}");
+    assert_ne!(off.0 % Ticks::QUARTER.0, 0, "off the beat: {off:?}");
+    assert_eq!(
+        f.session().document().undo_label(),
+        Some(text::EDIT_MOVE_CLIP)
+    );
+
+    // Its end goes anywhere too.
+    let length = resized(&f);
+    let end = x0 + bar * (off.0 as f32 / Ticks::WHOLE.0 as f32) + bar * 4.0 - 2.0;
+    f.drag(
+        Pos2::new(end, row),
+        Pos2::new(end - bar * 0.3, row),
+        Modifiers::NONE,
+    );
+    let shorter = resized(&f);
+    assert!(near(length - shorter, Ticks::WHOLE * 3 / 10), "{shorter:?}");
+
+    // Alt brings the beats back while dragging.
+    f.hold(Modifiers::ALT);
+    f.drag(middle(1.4), middle(1.7), Modifiers::ALT);
+    f.hold(Modifiers::NONE);
+    assert_eq!(start(&f), Ticks::QUARTER * 3, "the nearest beat");
+
+    // Ticked again, it lands on bars.
+    f.harness.get_by_label(text::SNAP_CLIPS).click();
+    f.harness.run_steps(2);
+    f.drag(middle(1.75), middle(2.1), Modifiers::NONE);
+    assert_eq!(start(&f), Ticks::WHOLE);
+}
+
+#[test]
 fn a_controllers_keys_light_up_and_its_transport_buttons_play_stop_and_record() {
     use daw_ui::midi::{ControllerInput, TransportButton};
     let mut f = fixture();

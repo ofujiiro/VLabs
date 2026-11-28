@@ -280,6 +280,7 @@ pub struct Session {
     metronome_volume: f32,
     count_in_bars: u32,
     snap_recording: bool,
+    snap_clips: bool,
     take: Option<Take>,
     takes: u64,
     recording_held: HashMap<u8, (Ticks, f32)>,
@@ -391,6 +392,7 @@ impl Session {
             metronome_volume: 0.8,
             count_in_bars: 1,
             snap_recording: false,
+            snap_clips: true,
             take: None,
             takes: FIRST_TAKE,
             recording_held: HashMap::new(),
@@ -438,6 +440,7 @@ impl Session {
         self.metronome_volume = settings.metronome_volume;
         self.count_in_bars = settings.count_in_bars;
         self.snap_recording = settings.snap_recording;
+        self.snap_clips = settings.snap_clips;
         self.keyboard_base = clamp_base(settings.keyboard_base);
         self.keyboard_velocity = settings.keyboard_velocity;
         self.send_metronome();
@@ -450,6 +453,7 @@ impl Session {
         settings.metronome_volume = self.metronome_volume;
         settings.count_in_bars = self.count_in_bars;
         settings.snap_recording = self.snap_recording;
+        settings.snap_clips = self.snap_clips;
         settings.keyboard_base = self.keyboard_base;
         settings.keyboard_velocity = self.keyboard_velocity;
     }
@@ -1112,6 +1116,17 @@ impl Session {
     /// Recorded notes snap to the grid, or not.
     pub fn set_snap_recording(&mut self, on: bool) {
         self.snap_recording = on;
+    }
+
+    /// Whether clips placed, moved and resized in the song land on bars
+    /// and beats (decision 0035).
+    pub fn snap_clips(&self) -> bool {
+        self.snap_clips
+    }
+
+    /// Clips land on bars and beats, or exactly where they are put.
+    pub fn set_snap_clips(&mut self, on: bool) {
+        self.snap_clips = on;
     }
 
     /// Makes the pattern a number of bars long (at least long enough for

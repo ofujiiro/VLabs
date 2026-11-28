@@ -584,13 +584,27 @@ pub fn location_bar(
             {
                 actions.push(Command::ToggleKeyboard);
             }
+            ui.add_space(12.0);
             if session.view() == View::Song {
+                song_tools(ui, session);
                 return;
             }
-            ui.add_space(12.0);
             pattern_tools(ui, session, keymap, intents);
         });
     });
+}
+
+/// The settings of the song view: whether clips land on bars and beats
+/// (decision 0035).
+fn song_tools(ui: &mut Ui, session: &mut Session) {
+    let mut snap = session.snap_clips();
+    if ui
+        .checkbox(&mut snap, text::SNAP_CLIPS)
+        .on_hover_text(text::SNAP_CLIPS_HINT)
+        .changed()
+    {
+        session.set_snap_clips(snap);
+    }
 }
 
 /// The settings of the open pattern, laid out from the right (decision

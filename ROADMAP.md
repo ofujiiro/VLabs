@@ -1174,6 +1174,33 @@ automatically creates a piano)." Part of 1.3.
   track's row in the song instead. Import… (Ctrl+I) still makes new
   tracks.
 
+## Clips off the beat (the owner's request, November 2026)
+
+Decision 0035. "Make it so one can untick an option so that a pattern or a
+sound can be put off the beat."
+
+- [x] **Snap to bars and beats**, a box on the right of the song's
+      location line, ticked by default and remembered between sessions
+- [x] Unticked, patterns placed, clips moved (alone or together), ends
+      repeated or trimmed, splits and sounds dropped go exactly where the
+      pointer is; Alt brings the beats back
+- [x] Checked: an interface test (a move snaps back to its bar, then, the
+      box unticked, lands 0.4 bar in; an end shortened by 0.3 bar; Alt
+      lands on the nearest beat; ticked again, on bars) and a session test
+      (the choice remembered, old settings files keep snapping)
+
+### Clips off the beat: things to try
+
+1. In the song, untick **Snap to bars and beats** (right of the line under
+   the transport).
+2. Drag the beat's clip a little to the right: it stays exactly where you
+   let go, between beats. Play: the drums come in late.
+3. Drag a sound's start or end, or click an empty spot to place a pattern:
+   they too go where you click.
+4. Hold **Alt** while dragging: the clip lands on beats again.
+5. Tick the box again: clips land on bars as before. Close and reopen
+   VLabs: the box is as you left it.
+
 ## Later (not in v1, not designed out)
 
 VST2 (clean-room headers and a licensing check first), a 32-bit plugin

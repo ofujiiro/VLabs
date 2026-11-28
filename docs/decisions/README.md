@@ -41,6 +41,7 @@ considered instead.
 | [0032](0032-selecting-and-moving-several.md) | Selecting several tracks or clips, and moving them; the export plays once | Accepted |
 | [0033](0033-midi-controllers.md) | MIDI controllers: wheels, pedals and pads that play, takes that keep them, knobs and buttons given a job | Accepted |
 | [0034](0034-midi-file-into-a-track.md) | A MIDI file dropped on a track plays on that track (no new track) | Accepted |
+| [0035](0035-clips-off-the-beat.md) | Clips off the beat: a switch for snapping in the song | Accepted |
 
 ## Writing a new record
 

@@ -70,6 +70,11 @@ places patterns along time.
 - **Right-click a clip** to open its pattern, split it, duplicate it, remove
   it, or make it play another of the track's patterns instead.
 - Drag a clip to move it; drag its right end to make it repeat longer.
+- Clips land on bars (patterns) and beats (sounds). To put a pattern or a
+  sound **off the beat**, untick **Snap to bars and beats** on the right of
+  the line under the transport: clips then go exactly where you let go.
+  Holding <kbd>Alt</kbd> while dragging does the opposite of the box
+  (beats when it is unticked). VLabs remembers your choice.
 - In a pattern, the menu of the location line makes new patterns, copies
   (duplicates) and renames them.
 

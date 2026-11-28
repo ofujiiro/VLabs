@@ -288,6 +288,23 @@ fn recorded_notes_can_snap_to_the_grid() {
 }
 
 #[test]
+fn snapping_clips_is_remembered_between_sessions() {
+    let (mut s, _processor) = session();
+    assert!(s.snap_clips(), "clips snap by default");
+    s.set_snap_clips(false);
+    let mut settings = daw_ui::Settings::default();
+    assert!(settings.snap_clips);
+    s.store_settings(&mut settings);
+    assert!(!settings.snap_clips);
+    let (mut other, _processor) = session();
+    other.apply_settings(&settings);
+    assert!(!other.snap_clips());
+    // Settings written before the option existed keep snapping.
+    let old: daw_ui::Settings = serde_json::from_str("{}").unwrap();
+    assert!(old.snap_clips);
+}
+
+#[test]
 fn the_count_in_comes_before_recording() {
     let (mut s, mut processor) = session();
     s.set_count_in_bars(1);

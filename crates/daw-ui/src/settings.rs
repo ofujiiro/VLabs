@@ -58,6 +58,9 @@ pub struct Settings {
     pub count_in_bars: u32,
     /// Move recorded notes onto the grid.
     pub snap_recording: bool,
+    /// Clips in the song land on bars and beats; off, anywhere (decision
+    /// 0035).
+    pub snap_clips: bool,
     /// The note the computer keyboard's lowest key (Z) plays.
     pub keyboard_base: u8,
     /// How hard computer-keyboard notes play, 0 to 1.
@@ -94,6 +97,7 @@ impl Default for Settings {
             metronome_volume: 0.8,
             count_in_bars: 1,
             snap_recording: false,
+            snap_clips: true,
             keyboard_base: 48,
             keyboard_velocity: 0.8,
             show_keyboard: true,

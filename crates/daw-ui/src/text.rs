@@ -151,6 +151,8 @@ pub fn command_name(command: crate::keys::Command) -> &'static str {
 pub const ABOUT: &str = "About";
 pub const SNAP: &str = "Snap";
 pub const SNAP_HINT: &str = "Notes snap to this grid. Hold Alt while dragging to place freely.";
+pub const SNAP_CLIPS: &str = "Snap to bars and beats";
+pub const SNAP_CLIPS_HINT: &str = "Patterns land on bars and sounds on beats. Untick to put them anywhere, off the beat. Holding Alt while dragging does the opposite.";
 pub const NOTE_LENGTH: &str = "New notes";
 pub const KEYBOARD: &str = "Keyboard";
 pub const ON_SCREEN_KEYBOARD: &str = "On-screen keyboard";
