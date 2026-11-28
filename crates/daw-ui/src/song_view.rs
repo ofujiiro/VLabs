@@ -538,10 +538,17 @@ impl SongView {
     /// The shortest a clip can be dragged to: a beat while edges snap,
     /// else one tick for sound and a 1/64 note for a pattern.
     fn shortest(session: &Session, clip: &Clip, alt: bool) -> Ticks {
-        match (Self::lands_freely(session, alt, clip.is_audio()), clip.is_audio()) {
+        match (
+            Self::lands_freely(session, alt, clip.is_audio()),
+            clip.is_audio(),
+        ) {
             (true, true) => Ticks(1),
             (true, false) => Ticks::note_value(1, 64),
-            (false, _) => session.project().meter.signature_at(clip.start).beat_length(),
+            (false, _) => session
+                .project()
+                .meter
+                .signature_at(clip.start)
+                .beat_length(),
         }
     }
 
